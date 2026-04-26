@@ -567,15 +567,6 @@ HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation,
   char lfUnderline, char lfStrikeOut, char lfCharSet, char lfOutPrecision, char lfClipPrecision,
          char lfQuality, char lfPitchAndFamily, const char *lfFaceName)
 {
-#ifdef SWELL_TARGET_SDL
-  if (g_swell_ui_scale != 256)
-  {
-    if (lfHeight > 0) lfHeight = SWELL_UI_SCALE(lfHeight);
-    else if (lfHeight < 0) lfHeight = -SWELL_UI_SCALE(-lfHeight);
-    if (lfWidth > 0) lfWidth = SWELL_UI_SCALE(lfWidth);
-    else if (lfWidth < 0) lfWidth = -SWELL_UI_SCALE(-lfWidth);
-  }
-#endif
   return swell_CreateFontImpl(lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight, lfItalic,
                               lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision, lfClipPrecision,
                               lfQuality, lfPitchAndFamily, lfFaceName);
