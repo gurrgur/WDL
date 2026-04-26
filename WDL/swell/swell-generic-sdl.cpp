@@ -553,9 +553,18 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
 #ifdef SDL_VIDEO_DRIVER_X11
         swell_sdl_x11_set_metadata(hwnd, window);
 #endif
-        st->prepainted_before_show = swell_sdl_paint_initial(hwnd);
-        if (st->prepainted_before_show) st->prepaint_ticks = SDL_GetTicks();
+        const bool is_menu = swell_sdl_is_menu_window(hwnd);
+        if (!is_menu)
+        {
+          st->prepainted_before_show = swell_sdl_paint_initial(hwnd);
+          if (st->prepainted_before_show) st->prepaint_ticks = SDL_GetTicks();
+        }
         SDL_ShowWindow(window);
+        if (is_menu)
+        {
+          swell_sdl_mark_dirty(hwnd, NULL);
+          swell_sdl_flush_paints();
+        }
         if (hwnd->m_israised) SDL_SetWindowAlwaysOnTop(window, SDL_TRUE);
         if (wantfocus) swell_oswindow_focus(hwnd);
       }
