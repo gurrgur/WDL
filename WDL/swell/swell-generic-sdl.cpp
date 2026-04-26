@@ -8,6 +8,7 @@
 
 #include <SDL.h>
 #include <SDL_syswm.h>
+#include <SDL2/SDL_image.h>
 
 #ifdef SDL_VIDEO_DRIVER_X11
 #include <X11/Xlib.h>
@@ -1542,9 +1543,70 @@ BOOL SWELL_SetCursorPos(int X, int Y)
   return TRUE;
 }
 
+static void swell_sdl_get_hotspot_from_cur_file(const char *fn, POINT *pt)
+{
+  pt->x = 0;
+  pt->y = 0;
+  
+  FILE *fp = WDL_fopenA(fn, "rb");
+  if (!fp) return;
+  
+  unsigned char buf[32];
+  // Check CUR file header: reserved(2)=0, type(2)=2 (CUR), count(2)=1
+  if (fread(buf, 1, 6, fp) == 6 && 
+      !buf[0] && !buf[1] &&        // reserved (must be 0)
+      buf[2] == 2 && buf[3] == 0 && // type = 2 (CUR)
+      buf[4] == 1 && buf[5] == 0)   // count = 1
+  {
+    // Read the first entry header
+    // Offset 0: width (1 byte)
+    // Offset 1: height (1 byte) 
+    // Offset 2: color count (1 byte)
+    // Offset 3: reserved (1 byte)
+    // Offset 4-5: hotspot x (2 bytes, little endian)
+    // Offset 6-7: hotspot y (2 bytes, little endian)
+    // Offset 8-11: size of image data (4 bytes)
+    // Offset 12-15: offset to image data (4 bytes)
+    if (fread(buf, 1, 16, fp) == 16)
+    {
+      pt->x = buf[4] | (buf[5] << 8);
+      pt->y = buf[6] | (buf[7] << 8);
+    }
+  }
+  fclose(fp);
+}
+
+static SDL_Surface *swell_sdl_surface_from_image(HICON img)
+{
+    if (!img) return NULL;
+
+    BITMAP bm;
+    if (!GetObject(img, sizeof(bm), &bm) || !bm.bmBits || bm.bmWidth <= 0 || bm.bmHeight <= 0)
+        return NULL;
+
+    // LICE pixel format is ARGB8888; this matches the program-icon code.
+    return SDL_CreateRGBSurfaceWithFormatFrom(
+        bm.bmBits, bm.bmWidth, bm.bmHeight,
+        32, bm.bmWidthBytes, SDL_PIXELFORMAT_ARGB8888);
+}
+
 HCURSOR SWELL_LoadCursorFromFile(const char *fn)
 {
-  return NULL;
+    SDL_Surface *surf = IMG_Load(fn);
+    if (!surf) return NULL;
+
+    POINT hotspot = {0,0};
+    if (strstr(fn, ".cur") || strstr(fn, ".CUR"))
+        swell_sdl_get_hotspot_from_cur_file(fn, &hotspot);
+
+    // Convert to 32-bit ARGB format if needed
+    SDL_Surface *conv = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_ARGB8888, 0);
+    SDL_FreeSurface(surf);
+    if (!conv) return NULL;
+
+    SDL_Cursor *cursor = SDL_CreateColorCursor(conv, hotspot.x, hotspot.y);
+    SDL_FreeSurface(conv);
+    return (HCURSOR)cursor;
 }
 
 static SWELL_CursorResourceIndex *SWELL_curmodule_cursorresource_head;
@@ -1561,21 +1623,47 @@ HCURSOR SWELL_LoadCursor(const char *_idx)
   else if (_idx == IDC_HAND) id = SDL_SYSTEM_CURSOR_HAND;
   else if (_idx == IDC_IBEAM) id = SDL_SYSTEM_CURSOR_IBEAM;
   else if (_idx == IDC_UPARROW) id = SDL_SYSTEM_CURSOR_ARROW;
-  else if (_idx != IDC_ARROW)
+  else if (_idx == IDC_ARROW) id = SDL_SYSTEM_CURSOR_ARROW;
+  else
   {
-    SWELL_CursorResourceIndex *p = SWELL_curmodule_cursorresource_head;
-    while (p)
-    {
-      if (p->resid == _idx)
+      SWELL_CursorResourceIndex *p = SWELL_curmodule_cursorresource_head;
+      while (p)
       {
-        if (p->cachedCursor) return p->cachedCursor;
-        break;
-      }
-      p = p->_next;
-    }
-  }
+          if (p->resid == _idx)
+          {
+              if (p->cachedCursor) return p->cachedCursor;
 
+              // Build the path to the cursor file
+              char buf[1024];
+              GetModuleFileName(NULL, buf, sizeof(buf));
+              WDL_remove_filepart(buf);
+              snprintf_append(buf, sizeof(buf), "/Resources/%s.cur", p->resname);
+
+              HCURSOR curs = SWELL_LoadCursorFromFile(buf);
+              if (!curs) {   // fallback to PNG
+                  strcpy(buf + strlen(buf) - 3, "png");
+                  curs = SWELL_LoadCursorFromFile(buf);
+              }
+              if (curs) {
+                  p->cachedCursor = curs;
+                  return curs;
+              }
+              break;
+          }
+          p = p->_next;
+      }
+  }
   return swell_sdl_system_cursor(id);
+}
+
+void SWELL_DestroyCursor(HCURSOR curs)
+{
+  if (curs)
+  {
+    // Only free non-system cursors
+    // We need to check if it's a system cursor - one way is to track custom ones
+    SDL_FreeCursor((SDL_Cursor *)curs);
+  }
 }
 
 void SWELL_Register_Cursor_Resource(const char *idx, const char *name, int hotspot_x, int hotspot_y)
