@@ -1080,7 +1080,7 @@ void GetTempPath(int bufsz, char *buf)
 const char *g_swell_appname;
 char *g_swell_defini;
 const char *g_swell_fontpangram;
-#ifdef SWELL_TARGET_GDK
+#if defined(SWELL_TARGET_GDK) || defined(SWELL_TARGET_SDL)
 bool swell_gdk_set_fullscreen(HWND, int);
 #endif
 
@@ -1115,7 +1115,7 @@ void *SWELL_ExtendedAPI(const char *key, void *v)
     }
     #endif
 
-    #ifdef SWELL_TARGET_GDK
+    #if defined(SWELL_TARGET_GDK) || defined(SWELL_TARGET_SDL)
       if (g_swell_defini)
       {
         void swell_load_color_theme(const char *fn);

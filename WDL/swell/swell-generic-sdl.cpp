@@ -329,6 +329,42 @@ void SWELL_initargs(int *argc, char ***argv)
   swell_sdl_initwindowsys();
 }
 
+void swell_scaling_init(bool no_auto_hidpi)
+{
+  if (no_auto_hidpi || g_swell_ui_scale != 256) return;
+  if (!swell_sdl_initwindowsys()) return;
+
+  const char *env_scale = getenv("SWELL_UI_SCALE");
+  if (!env_scale || !*env_scale) env_scale = getenv("QT_SCALE_FACTOR");
+  if (!env_scale || !*env_scale) env_scale = getenv("ELM_SCALE");
+  if (env_scale && *env_scale)
+  {
+    const double sc = atof(env_scale);
+    if (sc > 1.0 && sc < 8.0)
+    {
+      g_swell_ui_scale = (int)(sc * 256.0 + 0.5);
+      return;
+    }
+  }
+
+  int display = 0;
+  HWND hwnd = SWELL_topwindows;
+  while (hwnd && !hwnd->m_oswindow) hwnd = hwnd->m_next;
+  if (hwnd && hwnd->m_oswindow)
+  {
+    const int idx = SDL_GetWindowDisplayIndex(hwnd->m_oswindow);
+    if (idx >= 0) display = idx;
+  }
+
+  float ddpi = 0.0f;
+  if (SDL_GetDisplayDPI(display, &ddpi, NULL, NULL) == 0 && ddpi > 100.0f && ddpi < 768.0f)
+  {
+    int sc = (int)(ddpi * 256.0f / 96.0f + 0.5f);
+    if (sc > 256 && sc < 2048)
+      g_swell_ui_scale = sc;
+  }
+}
+
 void swell_oswindow_updatetoscreen(HWND hwnd, RECT *rect)
 {
   swell_sdl_mark_dirty(hwnd, rect);
