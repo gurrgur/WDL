@@ -1590,21 +1590,53 @@ static SDL_Surface *swell_sdl_surface_from_image(HICON img)
         32, bm.bmWidthBytes, SDL_PIXELFORMAT_ARGB8888);
 }
 
-HCURSOR SWELL_LoadCursorFromFile(const char *fn)
-{
-    SDL_Surface *surf = IMG_Load(fn);
+static SDL_Surface* swell_sdl_scale_surface(SDL_Surface* src, float scale) {
+    if (scale == 1.0f) return src;
+
+    int new_w = (int)(src->w * scale);
+    int new_h = (int)(src->h * scale);
+    if (new_w < 1) new_w = 1;
+    if (new_h < 1) new_h = 1;
+
+    SDL_Surface* dst = SDL_CreateRGBSurfaceWithFormat(0, new_w, new_h, 32,
+                                                       SDL_PIXELFORMAT_ARGB8888);
+    if (!dst) return NULL;
+
+    if (SDL_BlitScaled(src, NULL, dst, NULL) != 0) {
+        SDL_FreeSurface(dst);
+        return NULL;
+    }
+    return dst;
+}
+
+HCURSOR SWELL_LoadCursorFromFile(const char *fn) {
+    if (!swell_sdl_initwindowsys()) return NULL;
+
+    // 1. Load with SDL_image
+    SDL_Surface* surf = IMG_Load(fn);
     if (!surf) return NULL;
 
+    // 2. Scale according to global UI scale
+    float scale = g_swell_ui_scale / 256.0f;
+    SDL_Surface* scaled_surf = swell_sdl_scale_surface(surf, scale);
+    if (scaled_surf != surf) SDL_FreeSurface(surf);
+    if (!scaled_surf) return NULL;
+
+    // 3. Convert to optimal format for cursor (ARGB8888)
+    SDL_Surface* conv = SDL_ConvertSurfaceFormat(scaled_surf,
+                                                  SDL_PIXELFORMAT_ARGB8888, 0);
+    SDL_FreeSurface(scaled_surf);
+    if (!conv) return NULL;
+
+    // 4. Hotspot scaling
     POINT hotspot = {0,0};
     if (strstr(fn, ".cur") || strstr(fn, ".CUR"))
         swell_sdl_get_hotspot_from_cur_file(fn, &hotspot);
+    hotspot.x = (int)(hotspot.x * scale);
+    hotspot.y = (int)(hotspot.y * scale);
 
-    // Convert to 32-bit ARGB format if needed
-    SDL_Surface *conv = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_ARGB8888, 0);
-    SDL_FreeSurface(surf);
-    if (!conv) return NULL;
-
-    SDL_Cursor *cursor = SDL_CreateColorCursor(conv, hotspot.x, hotspot.y);
+    // 5. Create cursor
+    SDL_Cursor* cursor = SDL_CreateColorCursor(conv, hotspot.x, hotspot.y);
     SDL_FreeSurface(conv);
     return (HCURSOR)cursor;
 }
