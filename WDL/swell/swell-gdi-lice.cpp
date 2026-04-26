@@ -393,7 +393,7 @@ HGDIOBJ GetStockObject(int wh)
   return 0;
 }
 
-HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation, int lfWeight, char lfItalic, 
+static HFONT swell_CreateFontImpl(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation, int lfWeight, char lfItalic,
   char lfUnderline, char lfStrikeOut, char lfCharSet, char lfOutPrecision, char lfClipPrecision, 
          char lfQuality, char lfPitchAndFamily, const char *lfFaceName)
 {
@@ -561,6 +561,24 @@ HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation,
 #endif
  
   return font;
+}
+
+HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation, int lfWeight, char lfItalic,
+  char lfUnderline, char lfStrikeOut, char lfCharSet, char lfOutPrecision, char lfClipPrecision,
+         char lfQuality, char lfPitchAndFamily, const char *lfFaceName)
+{
+#ifdef SWELL_TARGET_SDL
+  if (g_swell_ui_scale != 256)
+  {
+    if (lfHeight > 0) lfHeight = SWELL_UI_SCALE(lfHeight);
+    else if (lfHeight < 0) lfHeight = -SWELL_UI_SCALE(-lfHeight);
+    if (lfWidth > 0) lfWidth = SWELL_UI_SCALE(lfWidth);
+    else if (lfWidth < 0) lfWidth = -SWELL_UI_SCALE(-lfWidth);
+  }
+#endif
+  return swell_CreateFontImpl(lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight, lfItalic,
+                              lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision, lfClipPrecision,
+                              lfQuality, lfPitchAndFamily, lfFaceName);
 }
 
 
@@ -927,9 +945,15 @@ void SWELL_SetPixel(HDC ctx, int x, int y, int c)
 HFONT SWELL_GetDefaultFont()
 {
   static HFONT def;
-  if (!def)
+  static int def_size;
+  static const char *def_face;
+  const int want_size = -wdl_abs(g_swell_ctheme.default_font_size);
+  if (!def || def_size != want_size || def_face != g_swell_deffont_face)
   {
-    def = CreateFont(-wdl_abs(g_swell_ctheme.default_font_size),0,0,0,FW_NORMAL,0,0,0,0,0,0,0,0,g_swell_deffont_face);
+    if (def) DeleteObject(def);
+    def = swell_CreateFontImpl(want_size,0,0,0,FW_NORMAL,0,0,0,0,0,0,0,0,g_swell_deffont_face);
+    def_size = want_size;
+    def_face = g_swell_deffont_face;
   }
   return def;
 }

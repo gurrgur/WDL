@@ -114,6 +114,15 @@ ifdef USESDL
   LINKEXTRA += $(shell $(PKG_CONFIG) --libs sdl2)
   SWELL_OBJS += swell-generic-sdl.o
   OBJS += $(LICE_OBJS)
+
+  ifndef NOFREETYPE
+    CFLAGS += -DSWELL_FREETYPE $(shell $(PKG_CONFIG) --cflags freetype2)
+    LINKEXTRA += $(shell $(PKG_CONFIG) --libs freetype2)
+    ifndef NOFONTCONFIG
+      CFLAGS += -DSWELL_FONTCONFIG
+      LINKEXTRA += -lfontconfig
+    endif
+  endif
 else ifndef NOGDK
   ifdef GDK2
     CFLAGS += -DSWELL_TARGET_GDK=2 $(shell $(PKG_CONFIG) --cflags gdk-2.0)
