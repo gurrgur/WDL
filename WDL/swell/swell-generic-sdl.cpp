@@ -166,7 +166,8 @@ static Uint32 swell_sdl_window_flags(HWND hwnd)
 {
   Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_HIDDEN;
   if (hwnd->m_style & WS_THICKFRAME) flags |= SDL_WINDOW_RESIZABLE;
-  if (!(hwnd->m_style & WS_CAPTION)) flags |= SDL_WINDOW_BORDERLESS | SDL_WINDOW_TOOLTIP;
+  if (!(hwnd->m_style & WS_CAPTION)) flags |= SDL_WINDOW_BORDERLESS;
+  if (!(hwnd->m_style & WS_CAPTION) && hwnd->m_style == WS_CHILD) flags |= SDL_WINDOW_TOOLTIP;
   if (hwnd->m_style == WS_CHILD || swell_sdl_wants_dialog_treatment(hwnd)) flags |= SDL_WINDOW_SKIP_TASKBAR;
   if (hwnd->m_oswindow_fullscreen) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
   return flags;
