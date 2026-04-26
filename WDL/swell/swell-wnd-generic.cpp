@@ -7670,8 +7670,15 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CONTEXTMENU:
     case WM_MOUSEWHEEL:
     case WM_MOUSEHWHEEL:
-    case WM_SETCURSOR:
         return hwnd->m_parent ? SendMessage(hwnd->m_parent,msg,wParam,lParam) : 0;
+
+    case WM_SETCURSOR:
+      if (hwnd->m_classname && !strcmp(hwnd->m_classname,"Edit"))
+      {
+        SetCursor(SWELL_LoadCursor(IDC_IBEAM));
+        return 1;
+      }
+      return hwnd->m_parent ? SendMessage(hwnd->m_parent,msg,wParam,lParam) : 0;
 
     case WM_SETFONT:
       hwnd->m_font = (HFONT)wParam;
@@ -8727,6 +8734,14 @@ LRESULT SWELL_SendMouseMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       return -1; // if somehow WM_NCHITTEST destroyed us, bail
     }
 
+    if (msg==WM_MOUSEMOVE || msg==WM_LBUTTONUP || msg==WM_RBUTTONUP || msg==WM_MBUTTONUP)
+    {
+      if (!hwnd->m_wndproc(hwnd,WM_SETCURSOR,(WPARAM)hwnd,htc | (msg<<16)))
+        SetCursor(SWELL_LoadCursor(IDC_ARROW));
+      if (hwnd->m_hashaddestroy||!hwnd->m_wndproc)
+        return -1;
+    }
+
     if (htc!=HTCLIENT || swell_window_wants_all_input() == hwnd)
     {
       if (msg==WM_MOUSEMOVE) return hwnd->m_wndproc(hwnd,WM_NCMOUSEMOVE,htc,p);
@@ -8746,14 +8761,6 @@ LRESULT SWELL_SendMouseMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
 
   LRESULT ret=hwnd->m_wndproc(hwnd,msg,wParam,lParam);
-
-  if (msg==WM_LBUTTONUP || msg==WM_RBUTTONUP || msg==WM_MOUSEMOVE || msg==WM_MBUTTONUP)
-  {
-    if (!GetCapture() && (hwnd->m_hashaddestroy || !hwnd->m_wndproc || !hwnd->m_wndproc(hwnd,WM_SETCURSOR,(WPARAM)hwnd,htc | (msg<<16))))
-    {
-      SetCursor(SWELL_LoadCursor(IDC_ARROW));
-    }
-  }
 
   return ret;
 }
