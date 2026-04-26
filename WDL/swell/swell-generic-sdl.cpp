@@ -34,6 +34,8 @@ struct swell_sdl_window_state
   int texh;
   bool invalidated;
   bool dirty_valid;
+  bool prepainted_before_show;
+  Uint32 prepaint_ticks;
   RECT dirty;
 };
 
@@ -372,12 +374,15 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
 #endif
 }
 
-static void swell_sdl_paint_initial(HWND hwnd)
+static bool swell_sdl_paint_initial(HWND hwnd)
 {
 #ifdef SWELL_LICE_GDI
   swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
-  if (!st || !st->renderer) return;
+  if (!st || !st->renderer) return false;
   swell_sdl_paint(hwnd, NULL);
+  return st->texture != NULL;
+#else
+  return false;
 #endif
 }
 
@@ -548,7 +553,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
 #ifdef SDL_VIDEO_DRIVER_X11
         swell_sdl_x11_set_metadata(hwnd, window);
 #endif
-        swell_sdl_paint_initial(hwnd);
+        st->prepainted_before_show = swell_sdl_paint_initial(hwnd);
+        if (st->prepainted_before_show) st->prepaint_ticks = SDL_GetTicks();
         SDL_ShowWindow(window);
         if (hwnd->m_israised) SDL_SetWindowAlwaysOnTop(window, SDL_TRUE);
         if (wantfocus) swell_oswindow_focus(hwnd);
@@ -788,7 +794,15 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
     break;
     case SDL_WINDOWEVENT_EXPOSED:
     case SDL_WINDOWEVENT_SHOWN:
+    {
+      swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
+      if (st && st->prepainted_before_show)
+      {
+        if (SDL_GetTicks() - st->prepaint_ticks < 100) break;
+        st->prepainted_before_show = false;
+      }
       swell_sdl_mark_dirty(hwnd, NULL);
+    }
     break;
   }
 }
