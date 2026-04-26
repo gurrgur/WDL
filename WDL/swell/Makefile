@@ -108,7 +108,13 @@ LICE_OBJS = lice.o  lice_arc.o lice_colorspace.o lice_line.o lice_text.o \
 
 OBJS = $(SWELL_OBJS)
 
-ifndef NOGDK
+ifdef USESDL
+  NOGDK=1
+  CFLAGS += -DSWELL_TARGET_SDL -DSWELL_LICE_GDI $(shell $(PKG_CONFIG) --cflags sdl2)
+  LINKEXTRA += $(shell $(PKG_CONFIG) --libs sdl2)
+  SWELL_OBJS += swell-generic-sdl.o
+  OBJS += $(LICE_OBJS)
+else ifndef NOGDK
   ifdef GDK2
     CFLAGS += -DSWELL_TARGET_GDK=2 $(shell $(PKG_CONFIG) --cflags gdk-2.0)
     ifndef PRELOAD_GDK

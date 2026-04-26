@@ -880,7 +880,10 @@ struct HTREEITEM__
 LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 
-#ifdef SWELL_TARGET_GDK
+#ifdef SWELL_TARGET_SDL
+struct SDL_Window;
+typedef SDL_Window *SWELL_OSWINDOW;
+#elif defined(SWELL_TARGET_GDK)
 typedef GdkWindow *SWELL_OSWINDOW;
 #else
 typedef void *SWELL_OSWINDOW; // maps to the HWND__ itself on visible, non-GDK, top level windows

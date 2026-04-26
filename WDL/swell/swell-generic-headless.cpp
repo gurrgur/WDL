@@ -25,7 +25,7 @@
 
 #include "swell.h"
 
-#ifndef SWELL_TARGET_GDK
+#if !defined(SWELL_TARGET_GDK) && !defined(SWELL_TARGET_SDL)
 
 #include "swell-internal.h"
 #include "swell-dlggen.h"
