@@ -154,12 +154,19 @@ static bool swell_sdl_initwindowsys()
   return s_sdl_active;
 }
 
+static bool swell_sdl_wants_dialog_treatment(HWND hwnd)
+{
+  if (!hwnd) return false;
+  if (DialogBoxIsActive() == hwnd) return true;
+  return hwnd->m_owner && !(hwnd->m_style & WS_THICKFRAME);
+}
+
 static Uint32 swell_sdl_window_flags(HWND hwnd)
 {
   Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_HIDDEN;
   if (hwnd->m_style & WS_THICKFRAME) flags |= SDL_WINDOW_RESIZABLE;
   if (!(hwnd->m_style & WS_CAPTION)) flags |= SDL_WINDOW_BORDERLESS;
-  if (hwnd->m_owner || hwnd->m_style == WS_CHILD) flags |= SDL_WINDOW_SKIP_TASKBAR;
+  if (hwnd->m_style == WS_CHILD || swell_sdl_wants_dialog_treatment(hwnd)) flags |= SDL_WINDOW_SKIP_TASKBAR;
   if (hwnd->m_oswindow_fullscreen) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
   return flags;
 }
@@ -226,7 +233,8 @@ static void swell_sdl_x11_set_metadata(HWND hwnd, SDL_Window *window)
     XSetClassHint(display, xid, &class_hint);
   }
 
-  HWND owner = swell_sdl_x11_owner_hwnd(hwnd);
+  const bool is_menu = swell_sdl_is_menu_window(hwnd);
+  HWND owner = (is_menu || swell_sdl_wants_dialog_treatment(hwnd)) ? swell_sdl_x11_owner_hwnd(hwnd) : NULL;
   Display *owner_display = NULL;
   Window owner_xid = 0;
   if (owner && swell_sdl_get_x11_window(owner->m_oswindow, &owner_display, &owner_xid) &&
@@ -237,10 +245,12 @@ static void swell_sdl_x11_set_metadata(HWND hwnd, SDL_Window *window)
 
   Atom wm_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
   Atom wm_type_value = 0;
-  if (swell_sdl_is_menu_window(hwnd))
+  if (is_menu)
     wm_type_value = XInternAtom(display, "_NET_WM_WINDOW_TYPE_POPUP_MENU", False);
-  else if (hwnd && hwnd->m_owner)
+  else if (DialogBoxIsActive() == hwnd)
     wm_type_value = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DIALOG", False);
+  else if (hwnd && (hwnd->m_style & WS_CAPTION))
+    wm_type_value = XInternAtom(display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
   if (wm_type && wm_type_value)
     XChangeProperty(display, xid, wm_type, XA_ATOM, 32, PropModeReplace, (unsigned char *)&wm_type_value, 1);
 
