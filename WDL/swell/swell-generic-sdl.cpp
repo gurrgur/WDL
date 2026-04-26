@@ -12,6 +12,7 @@
 #ifdef SDL_VIDEO_DRIVER_X11
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Xatom.h>
 #include <GL/glx.h>
 #endif
 
@@ -42,6 +43,8 @@ static SDL_Event s_cur_evt;
 static DWORD s_last_message_pos;
 static int s_sdl_paint_depth;
 static bool s_sdl_paint_event_pending;
+static HICON s_sdl_program_icon;
+static SDL_Surface *s_sdl_program_icon_surface;
 
 static void swell_sdl_queue_paint_event()
 {
@@ -57,6 +60,23 @@ static int swell_sdl_max_int(int a, int b)
 {
   return a > b ? a : b;
 }
+
+#ifdef SDL_VIDEO_DRIVER_X11
+static bool swell_sdl_get_x11_window(SDL_Window *window, Display **display, Window *xid)
+{
+  if (display) *display = NULL;
+  if (xid) *xid = 0;
+  const char *driver = SDL_GetCurrentVideoDriver();
+  if (!window || !driver || strcmp(driver, "x11")) return false;
+
+  SDL_SysWMinfo info;
+  SDL_VERSION(&info.version);
+  if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_X11) return false;
+  if (display) *display = info.info.x11.display;
+  if (xid) *xid = info.info.x11.window;
+  return info.info.x11.display && info.info.x11.window;
+}
+#endif
 
 static swell_sdl_window_state *swell_sdl_state_from_hwnd(HWND hwnd)
 {
@@ -87,6 +107,31 @@ static HWND swell_sdl_hwnd_from_id(Uint32 window_id)
 
 LRESULT SWELL_SendMouseMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+static void swell_sdl_load_program_icon()
+{
+  if (s_sdl_program_icon_surface) return;
+
+  char buf[1024];
+  GetModuleFileName(NULL, buf, sizeof(buf));
+  WDL_remove_filepart(buf);
+  lstrcatn(buf, "/Resources/main.png", sizeof(buf));
+  s_sdl_program_icon = LoadNamedImage(buf, true);
+  if (!s_sdl_program_icon)
+  {
+    strcpy(buf+strlen(buf)-3, "ico");
+    s_sdl_program_icon = LoadNamedImage(buf, true);
+  }
+
+  BITMAP bm;
+  memset(&bm, 0, sizeof(bm));
+  if (s_sdl_program_icon && GetObject(s_sdl_program_icon, sizeof(bm), &bm) &&
+      bm.bmBits && bm.bmWidth > 0 && bm.bmHeight > 0)
+  {
+    s_sdl_program_icon_surface = SDL_CreateRGBSurfaceWithFormatFrom(
+      bm.bmBits, bm.bmWidth, bm.bmHeight, 32, bm.bmWidthBytes, SDL_PIXELFORMAT_ARGB8888);
+  }
+}
+
 static bool swell_sdl_initwindowsys()
 {
   if (s_sdl_active) return true;
@@ -96,9 +141,12 @@ static bool swell_sdl_initwindowsys()
     // choose their screen position. Prefer X11 so menus can be placed.
     SDL_SetHintWithPriority(SDL_HINT_VIDEODRIVER, "x11,wayland", SDL_HINT_DEFAULT);
   }
+  if (g_swell_appname && *g_swell_appname)
+    SDL_SetHintWithPriority(SDL_HINT_APP_NAME, g_swell_appname, SDL_HINT_OVERRIDE);
   if (SDL_WasInit(SDL_INIT_VIDEO) || !SDL_InitSubSystem(SDL_INIT_VIDEO))
   {
     s_sdl_active = true;
+    swell_sdl_load_program_icon();
     SDL_StartTextInput();
   }
   return s_sdl_active;
@@ -106,9 +154,10 @@ static bool swell_sdl_initwindowsys()
 
 static Uint32 swell_sdl_window_flags(HWND hwnd)
 {
-  Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI;
+  Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_HIDDEN;
   if (hwnd->m_style & WS_THICKFRAME) flags |= SDL_WINDOW_RESIZABLE;
   if (!(hwnd->m_style & WS_CAPTION)) flags |= SDL_WINDOW_BORDERLESS;
+  if (hwnd->m_owner || hwnd->m_style == WS_CHILD) flags |= SDL_WINDOW_SKIP_TASKBAR;
   if (hwnd->m_oswindow_fullscreen) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
   return flags;
 }
@@ -147,6 +196,55 @@ private:
   char m_old_type[128];
   char m_old_or[16];
 };
+
+#ifdef SDL_VIDEO_DRIVER_X11
+static HWND swell_sdl_x11_owner_hwnd(HWND hwnd)
+{
+  HWND own = hwnd ? hwnd->m_owner : NULL;
+  while (own)
+  {
+    while (own && own->m_parent && !own->m_oswindow) own = own->m_parent;
+    if (own && own->m_oswindow) return own;
+    own = own ? own->m_owner : NULL;
+  }
+  return NULL;
+}
+
+static void swell_sdl_x11_set_metadata(HWND hwnd, SDL_Window *window)
+{
+  Display *display = NULL;
+  Window xid = 0;
+  if (!swell_sdl_get_x11_window(window, &display, &xid)) return;
+
+  if (g_swell_appname && *g_swell_appname)
+  {
+    XClassHint class_hint;
+    class_hint.res_name = (char *)g_swell_appname;
+    class_hint.res_class = (char *)g_swell_appname;
+    XSetClassHint(display, xid, &class_hint);
+  }
+
+  HWND owner = swell_sdl_x11_owner_hwnd(hwnd);
+  Display *owner_display = NULL;
+  Window owner_xid = 0;
+  if (owner && swell_sdl_get_x11_window(owner->m_oswindow, &owner_display, &owner_xid) &&
+      owner_display == display && owner_xid)
+  {
+    XSetTransientForHint(display, xid, owner_xid);
+  }
+
+  Atom wm_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+  Atom wm_type_value = 0;
+  if (swell_sdl_is_menu_window(hwnd))
+    wm_type_value = XInternAtom(display, "_NET_WM_WINDOW_TYPE_POPUP_MENU", False);
+  else if (hwnd && hwnd->m_owner)
+    wm_type_value = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DIALOG", False);
+  if (wm_type && wm_type_value)
+    XChangeProperty(display, xid, wm_type, XA_ATOM, 32, PropModeReplace, (unsigned char *)&wm_type_value, 1);
+
+  XFlush(display);
+}
+#endif
 
 static void swell_sdl_update_position_from_window(HWND hwnd)
 {
@@ -271,6 +369,15 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
   SDL_RenderPresent(st->renderer);
   s_sdl_paint_depth--;
   if (st->invalidated) swell_sdl_queue_paint_event();
+#endif
+}
+
+static void swell_sdl_paint_initial(HWND hwnd)
+{
+#ifdef SWELL_LICE_GDI
+  swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
+  if (!st || !st->renderer) return;
+  swell_sdl_paint(hwnd, NULL);
 #endif
 }
 
@@ -437,10 +544,14 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
         s_sdl_windows.Add(st);
         hwnd->m_oswindow = window;
         swell_sdl_update_position_from_window(hwnd);
+        if (s_sdl_program_icon_surface) SDL_SetWindowIcon(window, s_sdl_program_icon_surface);
+#ifdef SDL_VIDEO_DRIVER_X11
+        swell_sdl_x11_set_metadata(hwnd, window);
+#endif
+        swell_sdl_paint_initial(hwnd);
         SDL_ShowWindow(window);
         if (hwnd->m_israised) SDL_SetWindowAlwaysOnTop(window, SDL_TRUE);
         if (wantfocus) swell_oswindow_focus(hwnd);
-        swell_sdl_mark_dirty(hwnd, NULL);
       }
     }
   }
@@ -1038,21 +1149,6 @@ swell_sdl_bridge_state::~swell_sdl_bridge_state()
     XDestroyWindow(display, native_w);
     XFlush(display);
   }
-}
-
-static bool swell_sdl_get_x11_window(SDL_Window *window, Display **display, Window *xid)
-{
-  if (display) *display = NULL;
-  if (xid) *xid = 0;
-  const char *driver = SDL_GetCurrentVideoDriver();
-  if (!window || !driver || strcmp(driver, "x11")) return false;
-
-  SDL_SysWMinfo info;
-  SDL_VERSION(&info.version);
-  if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_X11) return false;
-  if (display) *display = info.info.x11.display;
-  if (xid) *xid = info.info.x11.window;
-  return info.info.x11.display && info.info.x11.window;
 }
 
 static Display *swell_sdl_get_any_x11_display()
