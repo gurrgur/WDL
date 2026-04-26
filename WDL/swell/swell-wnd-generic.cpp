@@ -1891,7 +1891,15 @@ static bool editGetCharPos(HDC hdc, const char *str, int singleline_len, int cha
     else
     {
       lb = *use_cache++;
-      if (WDL_NOT_NORMALLY(lb < 1)) break;
+      use_cache_len--;
+      if (lb < 1)
+      {
+        es->cache_linelen_w=es->cache_linelen_strlen=0;
+        use_cache = NULL;
+        use_cache_len = 0;
+        lb = swell_getLineLength(str,&pskip,word_wrap,hdc);
+        if (lb+pskip < 1) break;
+      }
     }
     if (bytepos < lb+pskip)
     { 
@@ -1963,7 +1971,15 @@ static int editHitTest(HDC hdc, const char *str, int singleline_len, int xpos, i
     else
     {
       lb = *use_cache++;
-      if (WDL_NOT_NORMALLY(lb < 1)) return bytepos;
+      use_cache_len--;
+      if (lb < 1)
+      {
+        es->cache_linelen_w=es->cache_linelen_strlen=0;
+        use_cache = NULL;
+        use_cache_len = 0;
+        lb = swell_getLineLength(buf,&pskip,word_wrap,hdc);
+        if (lb+pskip < 1) return bytepos;
+      }
     }
 
     if (ypos < line_h) return bytepos + editHitTestLine(hdc,buf,lb, xpos,ypos);
@@ -2868,13 +2884,21 @@ again:
                 if (!use_cache && allow_cache)
                 {
                   int s = lb+pskip;
-                  es->cache_linelen_bytes.Add(&s,1);
+                  if (s > 0) es->cache_linelen_bytes.Add(&s,1);
                 }
               }
               else
               {
                 lb = *use_cache;
-                if (WDL_NOT_NORMALLY(lb < 1)) break; 
+                if (lb < 1)
+                {
+                  es->cache_linelen_w=es->cache_linelen_strlen=0;
+                  es->cache_linelen_bytes.Resize(0,false);
+                  use_cache = NULL;
+                  use_cache_len = 0;
+                  lb = swell_getLineLength(buf,&pskip,wwrap,ps.hdc);
+                  if (lb+pskip < 1) break;
+                }
               }
 
               if (use_cache)
