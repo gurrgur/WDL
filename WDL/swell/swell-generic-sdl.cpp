@@ -45,6 +45,7 @@ static SDL_Event s_cur_evt;
 static DWORD s_last_message_pos;
 static int s_sdl_paint_depth;
 static bool s_sdl_paint_event_pending;
+static bool s_sdl_processing_events;
 static HICON s_sdl_program_icon;
 static SDL_Surface *s_sdl_program_icon_surface;
 
@@ -404,6 +405,7 @@ static void swell_sdl_mark_dirty(HWND hwnd, const RECT *r)
   if (!r)
   {
     st->dirty_valid = false;
+    if (!s_sdl_processing_events) swell_sdl_queue_paint_event();
     return;
   }
   if (!st->dirty_valid)
@@ -418,7 +420,7 @@ static void swell_sdl_mark_dirty(HWND hwnd, const RECT *r)
     if (r->right > st->dirty.right) st->dirty.right = r->right;
     if (r->bottom > st->dirty.bottom) st->dirty.bottom = r->bottom;
   }
-  swell_sdl_queue_paint_event();
+  if (!s_sdl_processing_events) swell_sdl_queue_paint_event();
 }
 
 static void swell_sdl_flush_paints()
@@ -430,6 +432,16 @@ static void swell_sdl_flush_paints()
     if (st && st->invalidated)
       swell_sdl_paint(st->hwnd, st->dirty_valid ? &st->dirty : NULL);
   }
+}
+
+static bool swell_sdl_has_dirty_windows()
+{
+  for (int x = 0; x < s_sdl_windows.GetSize(); x ++)
+  {
+    swell_sdl_window_state *st = s_sdl_windows.Get(x);
+    if (st && st->invalidated) return true;
+  }
+  return false;
 }
 
 void swell_oswindow_destroy(HWND hwnd)
@@ -1021,11 +1033,15 @@ void SWELL_RunEvents()
 {
   if (!swell_sdl_initwindowsys()) return;
   SDL_Event evt;
+  s_sdl_processing_events = true;
   while (SDL_PollEvent(&evt))
   {
     swell_sdl_coalesce_motion(&evt);
     swell_sdl_on_event(&evt);
+    if (evt.type == SDL_MOUSEMOTION && swell_sdl_has_dirty_windows())
+      swell_sdl_flush_paints();
   }
+  s_sdl_processing_events = false;
 
   swell_sdl_flush_paints();
 }
