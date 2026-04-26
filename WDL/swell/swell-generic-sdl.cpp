@@ -25,12 +25,15 @@ struct swell_sdl_window_state
   int texw;
   int texh;
   bool invalidated;
+  bool dirty_valid;
+  RECT dirty;
 };
 
 static WDL_PtrList<swell_sdl_window_state> s_sdl_windows;
 static bool s_sdl_active;
 static SDL_Event s_cur_evt;
 static DWORD s_last_message_pos;
+static int s_sdl_paint_depth;
 
 static int swell_sdl_max_int(int a, int b)
 {
@@ -69,6 +72,12 @@ LRESULT SWELL_SendMouseMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 static bool swell_sdl_initwindowsys()
 {
   if (s_sdl_active) return true;
+  if (!SDL_WasInit(SDL_INIT_VIDEO) && !getenv("SDL_VIDEODRIVER"))
+  {
+    // SDL2/Wayland does not allow SWELL's generic popup-menu toplevels to
+    // choose their screen position. Prefer X11 so menus can be placed.
+    SDL_SetHintWithPriority(SDL_HINT_VIDEODRIVER, "x11,wayland", SDL_HINT_DEFAULT);
+  }
   if (SDL_WasInit(SDL_INIT_VIDEO) || !SDL_InitSubSystem(SDL_INIT_VIDEO))
   {
     s_sdl_active = true;
@@ -85,6 +94,41 @@ static Uint32 swell_sdl_window_flags(HWND hwnd)
   if (hwnd->m_oswindow_fullscreen) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
   return flags;
 }
+
+static bool swell_sdl_is_menu_window(HWND hwnd)
+{
+  return hwnd && hwnd->m_classname && !strcmp(hwnd->m_classname, "__SWELL_MENU");
+}
+
+class swell_sdl_x11_menu_hints
+{
+public:
+  swell_sdl_x11_menu_hints(bool want)
+  {
+    m_active = want && SDL_GetCurrentVideoDriver() && !strcmp(SDL_GetCurrentVideoDriver(), "x11");
+    if (!m_active) return;
+
+    const char *old_type = SDL_GetHint(SDL_HINT_X11_WINDOW_TYPE);
+    const char *old_or = SDL_GetHint(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT);
+    lstrcpyn_safe(m_old_type, old_type ? old_type : "", sizeof(m_old_type));
+    lstrcpyn_safe(m_old_or, old_or ? old_or : "", sizeof(m_old_or));
+
+    SDL_SetHintWithPriority(SDL_HINT_X11_WINDOW_TYPE, "_NET_WM_WINDOW_TYPE_POPUP_MENU", SDL_HINT_OVERRIDE);
+    SDL_SetHintWithPriority(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT, "1", SDL_HINT_OVERRIDE);
+  }
+
+  ~swell_sdl_x11_menu_hints()
+  {
+    if (!m_active) return;
+    SDL_SetHintWithPriority(SDL_HINT_X11_WINDOW_TYPE, m_old_type, SDL_HINT_OVERRIDE);
+    SDL_SetHintWithPriority(SDL_HINT_X11_FORCE_OVERRIDE_REDIRECT, m_old_or[0] ? m_old_or : "0", SDL_HINT_OVERRIDE);
+  }
+
+private:
+  bool m_active;
+  char m_old_type[128];
+  char m_old_or[16];
+};
 
 static void swell_sdl_update_position_from_window(HWND hwnd)
 {
@@ -104,12 +148,22 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
 #ifdef SWELL_LICE_GDI
   swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
   if (!st || !hwnd || !hwnd->m_oswindow || !st->renderer) return;
+  if (s_sdl_paint_depth)
+  {
+    st->invalidated = true;
+    return;
+  }
+  s_sdl_paint_depth++;
 
   RECT cr;
   cr.left = cr.top = 0;
   cr.right = hwnd->m_position.right - hwnd->m_position.left;
   cr.bottom = hwnd->m_position.bottom - hwnd->m_position.top;
-  if (cr.right <= 0 || cr.bottom <= 0) return;
+  if (cr.right <= 0 || cr.bottom <= 0)
+  {
+    s_sdl_paint_depth--;
+    return;
+  }
 
   if (!hwnd->m_backingstore) hwnd->m_backingstore = new LICE_SysBitmap;
   bool forceref = hwnd->m_backingstore->resize(cr.right, cr.bottom);
@@ -136,7 +190,11 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
     st->texw = cr.right;
     st->texh = cr.bottom;
   }
-  if (!st->texture) return;
+  if (!st->texture)
+  {
+    s_sdl_paint_depth--;
+    return;
+  }
 
   LICE_IBitmap *bm = hwnd->m_backingstore;
   SDL_UpdateTexture(st->texture, NULL, bm->getBits(), bm->getRowSpan() * (int)sizeof(LICE_pixel));
@@ -144,7 +202,43 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
   SDL_RenderCopy(st->renderer, st->texture, NULL, NULL);
   SDL_RenderPresent(st->renderer);
   st->invalidated = false;
+  st->dirty_valid = false;
+  s_sdl_paint_depth--;
 #endif
+}
+
+static void swell_sdl_mark_dirty(HWND hwnd, const RECT *r)
+{
+  swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
+  if (!st) return;
+  st->invalidated = true;
+  if (!r)
+  {
+    st->dirty_valid = false;
+    return;
+  }
+  if (!st->dirty_valid)
+  {
+    st->dirty = *r;
+    st->dirty_valid = true;
+  }
+  else
+  {
+    if (r->left < st->dirty.left) st->dirty.left = r->left;
+    if (r->top < st->dirty.top) st->dirty.top = r->top;
+    if (r->right > st->dirty.right) st->dirty.right = r->right;
+    if (r->bottom > st->dirty.bottom) st->dirty.bottom = r->bottom;
+  }
+}
+
+static void swell_sdl_flush_paints()
+{
+  for (int x = 0; x < s_sdl_windows.GetSize(); x ++)
+  {
+    swell_sdl_window_state *st = s_sdl_windows.Get(x);
+    if (st && st->invalidated)
+      swell_sdl_paint(st->hwnd, st->dirty_valid ? &st->dirty : NULL);
+  }
 }
 
 void swell_oswindow_destroy(HWND hwnd)
@@ -200,7 +294,7 @@ void SWELL_initargs(int *argc, char ***argv)
 
 void swell_oswindow_updatetoscreen(HWND hwnd, RECT *rect)
 {
-  swell_sdl_paint(hwnd, rect);
+  swell_sdl_mark_dirty(hwnd, rect);
 }
 
 void swell_oswindow_manage(HWND hwnd, bool wantfocus)
@@ -224,6 +318,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
       RECT r = hwnd->m_position;
       const int w = swell_sdl_max_int(1, r.right-r.left);
       const int h = swell_sdl_max_int(1, r.bottom-r.top);
+      swell_sdl_x11_menu_hints menu_hints(swell_sdl_is_menu_window(hwnd));
       SDL_Window *window = SDL_CreateWindow(hwnd->m_title.Get(), r.left, r.top, w, h, swell_sdl_window_flags(hwnd));
       if (window)
       {
@@ -239,7 +334,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
         SDL_ShowWindow(window);
         if (hwnd->m_israised) SDL_SetWindowAlwaysOnTop(window, SDL_TRUE);
         if (wantfocus) swell_oswindow_focus(hwnd);
-        swell_sdl_paint(hwnd, NULL);
+        swell_sdl_mark_dirty(hwnd, NULL);
       }
     }
   }
@@ -307,7 +402,6 @@ bool GetWindowRect(HWND hwnd, RECT *r)
   if (!hwnd) return false;
   if (hwnd->m_oswindow)
   {
-    swell_sdl_update_position_from_window(hwnd);
     *r = hwnd->m_position;
     return true;
   }
@@ -337,16 +431,18 @@ void swell_oswindow_postresize(HWND hwnd, RECT f)
 
 void UpdateWindow(HWND hwnd)
 {
-  if (hwnd) swell_sdl_paint(hwnd, NULL);
+  if (hwnd)
+  {
+    swell_sdl_mark_dirty(hwnd, NULL);
+    swell_sdl_flush_paints();
+  }
 }
 
 void swell_oswindow_invalidate(HWND hwnd, const RECT *r)
 {
   while (hwnd && !hwnd->m_oswindow) hwnd = hwnd->m_parent;
   if (!hwnd) return;
-  swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
-  if (st) st->invalidated = true;
-  swell_sdl_paint(hwnd, r);
+  swell_sdl_mark_dirty(hwnd, r);
 }
 
 static int swell_sdl_mods()
@@ -418,7 +514,7 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
       hwnd->m_position.right = hwnd->m_position.left + we->data1;
       hwnd->m_position.bottom = hwnd->m_position.top + we->data2;
       SendMessage(hwnd, WM_SIZE, hwnd->m_is_maximized ? SIZE_MAXIMIZED : SIZE_RESTORED, 0);
-      swell_sdl_paint(hwnd, NULL);
+      swell_sdl_mark_dirty(hwnd, NULL);
     break;
     case SDL_WINDOWEVENT_MAXIMIZED:
       hwnd->m_is_maximized = true;
@@ -430,7 +526,7 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
     break;
     case SDL_WINDOWEVENT_EXPOSED:
     case SDL_WINDOWEVENT_SHOWN:
-      swell_sdl_paint(hwnd, NULL);
+      swell_sdl_mark_dirty(hwnd, NULL);
     break;
   }
 }
@@ -438,15 +534,23 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
 static POINT swell_sdl_screen_point(Uint32 window_id, int x, int y)
 {
   POINT pt = { x, y };
-  SDL_Window *window = SDL_GetWindowFromID(window_id);
-  if (window)
-  {
-    int wx = 0, wy = 0;
-    SDL_GetWindowPosition(window, &wx, &wy);
-    pt.x += wx;
-    pt.y += wy;
-  }
+  int gx = 0, gy = 0;
+  SDL_GetGlobalMouseState(&gx, &gy);
+  pt.x = gx;
+  pt.y = gy;
   return pt;
+}
+
+static void swell_sdl_calibrate_window_from_mouse(HWND hwnd, int local_x, int local_y, POINT screen_pt)
+{
+  if (!hwnd || !hwnd->m_oswindow) return;
+  const int w = hwnd->m_position.right - hwnd->m_position.left;
+  const int h = hwnd->m_position.bottom - hwnd->m_position.top;
+  hwnd->m_position.left = screen_pt.x - local_x;
+  hwnd->m_position.top = screen_pt.y - local_y;
+  hwnd->m_position.right = hwnd->m_position.left + w;
+  hwnd->m_position.bottom = hwnd->m_position.top + h;
+  hwnd->m_has_had_position = true;
 }
 
 static HWND swell_sdl_mouse_target(HWND hwnd, int x, int y)
@@ -482,6 +586,7 @@ static void swell_sdl_on_event(const SDL_Event *evt)
     {
       HWND hwnd = swell_sdl_hwnd_from_id(evt->motion.windowID);
       POINT screen_pt = swell_sdl_screen_point(evt->motion.windowID, evt->motion.x, evt->motion.y);
+      swell_sdl_calibrate_window_from_mouse(hwnd, evt->motion.x, evt->motion.y, screen_pt);
       hwnd = swell_sdl_mouse_target(hwnd, evt->motion.x, evt->motion.y);
       swell_sdl_send_mouse(hwnd, WM_MOUSEMOVE, 0, screen_pt);
     }
@@ -490,8 +595,9 @@ static void swell_sdl_on_event(const SDL_Event *evt)
     case SDL_MOUSEBUTTONUP:
     {
       HWND top_hwnd = swell_sdl_hwnd_from_id(evt->button.windowID);
-      HWND hwnd = swell_sdl_mouse_target(top_hwnd, evt->button.x, evt->button.y);
       POINT screen_pt = swell_sdl_screen_point(evt->button.windowID, evt->button.x, evt->button.y);
+      swell_sdl_calibrate_window_from_mouse(top_hwnd, evt->button.x, evt->button.y, screen_pt);
+      HWND hwnd = swell_sdl_mouse_target(top_hwnd, evt->button.x, evt->button.y);
       if (hwnd)
       {
         UINT msg = 0;
@@ -531,6 +637,7 @@ static void swell_sdl_on_event(const SDL_Event *evt)
       POINT local_pt;
       SDL_GetMouseState(&local_pt.x, &local_pt.y);
       POINT screen_pt = swell_sdl_screen_point(evt->wheel.windowID, local_pt.x, local_pt.y);
+      swell_sdl_calibrate_window_from_mouse(hwnd, local_pt.x, local_pt.y, screen_pt);
       hwnd = swell_sdl_mouse_target(hwnd, local_pt.x, local_pt.y);
       if (hwnd)
       {
@@ -560,18 +667,33 @@ static void swell_sdl_on_event(const SDL_Event *evt)
   }
 }
 
+static void swell_sdl_coalesce_motion(SDL_Event *evt)
+{
+  if (evt->type != SDL_MOUSEMOTION) return;
+
+  for (;;)
+  {
+    SDL_Event next;
+    if (SDL_PeepEvents(&next, 1, SDL_PEEKEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT) != 1)
+      return;
+    if (next.type != SDL_MOUSEMOTION || next.motion.windowID != evt->motion.windowID)
+      return;
+
+    SDL_PollEvent(evt);
+  }
+}
+
 void SWELL_RunEvents()
 {
   if (!swell_sdl_initwindowsys()) return;
   SDL_Event evt;
   while (SDL_PollEvent(&evt))
-    swell_sdl_on_event(&evt);
-
-  for (int x = 0; x < s_sdl_windows.GetSize(); x ++)
   {
-    swell_sdl_window_state *st = s_sdl_windows.Get(x);
-    if (st && st->invalidated) swell_sdl_paint(st->hwnd, NULL);
+    swell_sdl_coalesce_motion(&evt);
+    swell_sdl_on_event(&evt);
   }
+
+  swell_sdl_flush_paints();
 }
 
 static WDL_IntKeyedArray<HANDLE> s_clip_recs(GlobalFree);
