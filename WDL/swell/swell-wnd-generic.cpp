@@ -5756,6 +5756,7 @@ static LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
           nm.itemNew.hItem = tvs->m_sel;
           nm.itemNew.lParam = tvs->m_sel ? tvs->m_sel->m_param : 0;
           SendMessage(GetParent(hwnd),WM_NOTIFY,nm.hdr.idFrom,(LPARAM)&nm);
+          UpdateWindow(hwnd);
         }
         else if (flag&2) InvalidateRect(hwnd,NULL,FALSE);
 
@@ -5821,6 +5822,7 @@ static LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
               nm.itemNew.hItem = hit;
               nm.itemNew.lParam = hit ? hit->m_param : 0;
               SendMessage(GetParent(hwnd),WM_NOTIFY,nm.hdr.idFrom,(LPARAM)&nm);
+              UpdateWindow(hwnd);
             }
           }
         }
@@ -8148,6 +8150,7 @@ void TreeView_SelectItem(HWND hwnd, HTREEITEM item)
   }
   tvs->ensureItemVisible(hwnd,tvs->m_sel);
   InvalidateRect(hwnd,NULL,FALSE);
+  UpdateWindow(hwnd);
 }
 
 BOOL TreeView_GetItem(HWND hwnd, LPTVITEM pitem)
@@ -8206,6 +8209,7 @@ BOOL TreeView_SetItem(HWND hwnd, LPTVITEM pitem)
   }
 
   InvalidateRect(hwnd,NULL,FALSE);
+  if (pitem->stateMask & pitem->state & TVIS_SELECTED) UpdateWindow(hwnd);
     
   return TRUE;
 }
