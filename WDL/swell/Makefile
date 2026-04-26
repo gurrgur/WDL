@@ -111,7 +111,7 @@ OBJS = $(SWELL_OBJS)
 ifdef USESDL
   NOGDK=1
   CFLAGS += -DSWELL_TARGET_SDL -DSWELL_LICE_GDI $(shell $(PKG_CONFIG) --cflags sdl2)
-  LINKEXTRA += $(shell $(PKG_CONFIG) --libs sdl2)
+  LINKEXTRA += $(shell $(PKG_CONFIG) --libs sdl2) -lX11 -lGL
   SWELL_OBJS += swell-generic-sdl.o
   OBJS += $(LICE_OBJS)
 

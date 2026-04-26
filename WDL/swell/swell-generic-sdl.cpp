@@ -7,6 +7,13 @@
 #ifndef SWELL_PROVIDED_BY_APP
 
 #include <SDL.h>
+#include <SDL_syswm.h>
+
+#ifdef SDL_VIDEO_DRIVER_X11
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <GL/glx.h>
+#endif
 
 #include "swell.h"
 
@@ -34,6 +41,17 @@ static bool s_sdl_active;
 static SDL_Event s_cur_evt;
 static DWORD s_last_message_pos;
 static int s_sdl_paint_depth;
+static bool s_sdl_paint_event_pending;
+
+static void swell_sdl_queue_paint_event()
+{
+  if (!s_sdl_active || s_sdl_paint_event_pending) return;
+  SDL_Event evt;
+  memset(&evt, 0, sizeof(evt));
+  evt.type = SDL_USEREVENT;
+  evt.user.code = 'SWLP';
+  if (SDL_PushEvent(&evt) >= 0) s_sdl_paint_event_pending = true;
+}
 
 static int swell_sdl_max_int(int a, int b)
 {
@@ -211,6 +229,16 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
   if (r.top < 0) r.top = 0;
   if (r.right > cr.right) r.right = cr.right;
   if (r.bottom > cr.bottom) r.bottom = cr.bottom;
+  if (r.left >= r.right || r.top >= r.bottom)
+  {
+    st->invalidated = false;
+    st->dirty_valid = false;
+    s_sdl_paint_depth--;
+    return;
+  }
+
+  st->invalidated = false;
+  st->dirty_valid = false;
 
   LICE_SubBitmap subbm(hwnd->m_backingstore, r.left, r.top, r.right-r.left, r.bottom-r.top);
   if (subbm.getWidth() > 0 && subbm.getHeight() > 0)
@@ -234,13 +262,15 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
   }
 
   LICE_IBitmap *bm = hwnd->m_backingstore;
-  SDL_UpdateTexture(st->texture, NULL, bm->getBits(), bm->getRowSpan() * (int)sizeof(LICE_pixel));
-  SDL_RenderClear(st->renderer);
+  const int pitch = bm->getRowSpan() * (int)sizeof(LICE_pixel);
+  SDL_Rect sr = { r.left, r.top, r.right-r.left, r.bottom-r.top };
+  const unsigned char *bits = (const unsigned char *)bm->getBits();
+  bits += r.top * pitch + r.left * (int)sizeof(LICE_pixel);
+  SDL_UpdateTexture(st->texture, &sr, bits, pitch);
   SDL_RenderCopy(st->renderer, st->texture, NULL, NULL);
   SDL_RenderPresent(st->renderer);
-  st->invalidated = false;
-  st->dirty_valid = false;
   s_sdl_paint_depth--;
+  if (st->invalidated) swell_sdl_queue_paint_event();
 #endif
 }
 
@@ -266,10 +296,12 @@ static void swell_sdl_mark_dirty(HWND hwnd, const RECT *r)
     if (r->right > st->dirty.right) st->dirty.right = r->right;
     if (r->bottom > st->dirty.bottom) st->dirty.bottom = r->bottom;
   }
+  swell_sdl_queue_paint_event();
 }
 
 static void swell_sdl_flush_paints()
 {
+  s_sdl_paint_event_pending = false;
   for (int x = 0; x < s_sdl_windows.GetSize(); x ++)
   {
     swell_sdl_window_state *st = s_sdl_windows.Get(x);
@@ -400,7 +432,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
         memset(st, 0, sizeof(*st));
         st->hwnd = hwnd;
         st->window = window;
-        st->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        st->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
         if (!st->renderer) st->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
         s_sdl_windows.Add(st);
         hwnd->m_oswindow = window;
@@ -507,6 +539,8 @@ void UpdateWindow(HWND hwnd)
 {
   if (hwnd)
   {
+    while (hwnd && !hwnd->m_oswindow) hwnd = hwnd->m_parent;
+    if (!hwnd) return;
     swell_sdl_mark_dirty(hwnd, NULL);
     swell_sdl_flush_paints();
   }
@@ -544,6 +578,14 @@ static int swell_sdl_vkey(SDL_Keycode key)
   if (key >= SDLK_F1 && key <= SDLK_F12) return VK_F1 + (key - SDLK_F1);
   switch (key)
   {
+    case SDLK_LCTRL:
+    case SDLK_RCTRL: return VK_CONTROL;
+    case SDLK_LALT:
+    case SDLK_RALT: return VK_MENU;
+    case SDLK_LSHIFT:
+    case SDLK_RSHIFT: return VK_SHIFT;
+    case SDLK_LGUI:
+    case SDLK_RGUI: return VK_LWIN;
     case SDLK_RETURN: return VK_RETURN;
     case SDLK_ESCAPE: return VK_ESCAPE;
     case SDLK_BACKSPACE: return VK_BACK;
@@ -623,11 +665,15 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
     break;
     case SDL_WINDOWEVENT_MAXIMIZED:
       hwnd->m_is_maximized = true;
+      swell_sdl_update_position_from_window(hwnd);
       SendMessage(hwnd, WM_SIZE, SIZE_MAXIMIZED, 0);
+      swell_sdl_mark_dirty(hwnd, NULL);
     break;
     case SDL_WINDOWEVENT_RESTORED:
       hwnd->m_is_maximized = false;
+      swell_sdl_update_position_from_window(hwnd);
       SendMessage(hwnd, WM_SIZE, SIZE_RESTORED, 0);
+      swell_sdl_mark_dirty(hwnd, NULL);
     break;
     case SDL_WINDOWEVENT_EXPOSED:
     case SDL_WINDOWEVENT_SHOWN:
@@ -918,6 +964,18 @@ void GetCursorPos(POINT *pt)
 
 WORD GetAsyncKeyState(int key)
 {
+  const SDL_Keymod mod = SDL_GetModState();
+  const Uint32 mouse = SDL_GetMouseState(NULL, NULL);
+
+  if (key == VK_LBUTTON) return (mouse & SDL_BUTTON(SDL_BUTTON_LEFT)) ? 0x8000 : 0;
+  if (key == VK_MBUTTON) return (mouse & SDL_BUTTON(SDL_BUTTON_MIDDLE)) ? 0x8000 : 0;
+  if (key == VK_RBUTTON) return (mouse & SDL_BUTTON(SDL_BUTTON_RIGHT)) ? 0x8000 : 0;
+
+  if (key == VK_CONTROL) return (mod & KMOD_CTRL) ? 0x8000 : 0;
+  if (key == VK_MENU) return (mod & KMOD_ALT) ? 0x8000 : 0;
+  if (key == VK_SHIFT) return (mod & KMOD_SHIFT) ? 0x8000 : 0;
+  if (key == VK_LWIN) return (mod & KMOD_GUI) ? 0x8000 : 0;
+
   return 0;
 }
 
@@ -926,9 +984,358 @@ DWORD GetMessagePos()
   return s_last_message_pos;
 }
 
+#ifdef SDL_VIDEO_DRIVER_X11
+
+static const char * const bridge_class_name = "__swell_xbridgewndclass";
+
+struct swell_sdl_bridge_state
+{
+  swell_sdl_bridge_state(bool needrep, Display *disp, Window native, Window curpar, HWND child);
+  ~swell_sdl_bridge_state();
+
+  Display *display;
+  Window native_w;
+  Window cur_parent_xid;
+  HWND hwnd_child;
+  bool lastvis;
+  bool need_reparent;
+  RECT lastrect;
+  GLXContext gl_ctx;
+};
+
+static WDL_PtrList<swell_sdl_bridge_state> s_sdl_bridge_windows;
+static swell_sdl_bridge_state *s_last_gl_ctx;
+
+swell_sdl_bridge_state::swell_sdl_bridge_state(bool needrep, Display *disp, Window native, Window curpar, HWND child)
+{
+  display = disp;
+  native_w = native;
+  cur_parent_xid = curpar;
+  hwnd_child = child;
+  lastvis = false;
+  need_reparent = needrep;
+  gl_ctx = NULL;
+  memset(&lastrect, 0, sizeof(lastrect));
+  s_sdl_bridge_windows.Add(this);
+}
+
+swell_sdl_bridge_state::~swell_sdl_bridge_state()
+{
+  s_sdl_bridge_windows.DeletePtr(this);
+  if (gl_ctx)
+  {
+    if (s_last_gl_ctx == this)
+    {
+      glXMakeCurrent(display, None, NULL);
+      s_last_gl_ctx = NULL;
+    }
+    glXDestroyContext(display, gl_ctx);
+    gl_ctx = NULL;
+  }
+  if (display && native_w)
+  {
+    if (!need_reparent) XReparentWindow(display, native_w, DefaultRootWindow(display), 0, 0);
+    XDestroyWindow(display, native_w);
+    XFlush(display);
+  }
+}
+
+static bool swell_sdl_get_x11_window(SDL_Window *window, Display **display, Window *xid)
+{
+  if (display) *display = NULL;
+  if (xid) *xid = 0;
+  const char *driver = SDL_GetCurrentVideoDriver();
+  if (!window || !driver || strcmp(driver, "x11")) return false;
+
+  SDL_SysWMinfo info;
+  SDL_VERSION(&info.version);
+  if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_X11) return false;
+  if (display) *display = info.info.x11.display;
+  if (xid) *xid = info.info.x11.window;
+  return info.info.x11.display && info.info.x11.window;
+}
+
+static Display *swell_sdl_get_any_x11_display()
+{
+  for (int x = 0; x < s_sdl_windows.GetSize(); x ++)
+  {
+    swell_sdl_window_state *st = s_sdl_windows.Get(x);
+    Display *display = NULL;
+    if (st && swell_sdl_get_x11_window(st->window, &display, NULL) && display) return display;
+  }
+  return NULL;
+}
+
+static void swell_sdl_xbridge_fit_child(swell_sdl_bridge_state *bs, HWND hwnd, bool apply_hints);
+
+static void swell_sdl_xbridge_resize_child(swell_sdl_bridge_state *bs, HWND hwnd)
+{
+  swell_sdl_xbridge_fit_child(bs, hwnd, true);
+}
+
+static void swell_sdl_xbridge_map_children(swell_sdl_bridge_state *bs)
+{
+  if (!bs || !bs->display || !bs->native_w) return;
+
+  Window root, par, *list = NULL;
+  unsigned int nlist = 0;
+  if (!XQueryTree(bs->display, bs->native_w, &root, &par, &list, &nlist)) return;
+  if (list)
+  {
+    for (unsigned int x = 0; x < nlist; x ++)
+      XMapWindow(bs->display, list[x]);
+    if (nlist) XFlush(bs->display);
+    XFree(list);
+  }
+}
+
+static void swell_sdl_xbridge_fit_child(swell_sdl_bridge_state *bs, HWND hwnd, bool apply_hints)
+{
+  if (!bs || !bs->display || !bs->native_w) return;
+
+  RECT r;
+  GetClientRect(hwnd, &r);
+  if (r.right <= 0 || r.bottom <= 0) return;
+
+  Window root, par, *list = NULL;
+  unsigned int nlist = 0;
+  if (!XQueryTree(bs->display, bs->native_w, &root, &par, &list, &nlist)) return;
+  if (!list || !nlist)
+  {
+    if (list) XFree(list);
+    return;
+  }
+
+  if (apply_hints)
+  {
+    XSizeHints *hints = XAllocSizeHints();
+    if (hints)
+    {
+      memset(hints, 0, sizeof(*hints));
+      long hints_ret = 0;
+      XGetWMNormalHints(bs->display, list[0], hints, &hints_ret);
+      if (hints->flags & PMinSize)
+      {
+        if (r.right < hints->min_width) r.right = hints->min_width;
+        if (r.bottom < hints->min_height) r.bottom = hints->min_height;
+      }
+      if (hints->flags & PMaxSize)
+      {
+        if (hints->max_width > 0 && r.right > hints->max_width) r.right = hints->max_width;
+        if (hints->max_height > 0 && r.bottom > hints->max_height) r.bottom = hints->max_height;
+      }
+      XFree(hints);
+    }
+  }
+
+  XMapWindow(bs->display, list[0]);
+  XMoveResizeWindow(bs->display, list[0], 0, 0, r.right, r.bottom);
+  XFlush(bs->display);
+  XFree(list);
+}
+
+static bool swell_sdl_xbridge_parent(HWND viewpar, Display **display, Window *parent_xid, HWND *parent_hwnd)
+{
+  if (display) *display = NULL;
+  if (parent_xid) *parent_xid = 0;
+  if (parent_hwnd) *parent_hwnd = NULL;
+
+  HWND hpar = viewpar;
+  while (hpar)
+  {
+    if (hpar->m_oswindow)
+    {
+      Display *disp = NULL;
+      Window xid = 0;
+      if (!swell_sdl_get_x11_window(hpar->m_oswindow, &disp, &xid)) return false;
+      if (display) *display = disp;
+      if (parent_xid) *parent_xid = xid;
+      if (parent_hwnd) *parent_hwnd = hpar;
+      return disp && xid;
+    }
+    hpar = hpar->m_parent;
+  }
+
+  Display *disp = swell_sdl_get_any_x11_display();
+  if (!disp) return false;
+  if (display) *display = disp;
+  if (parent_xid) *parent_xid = DefaultRootWindow(disp);
+  return true;
+}
+
+static LRESULT swell_sdl_xbridge_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+  switch (uMsg)
+  {
+    case WM_DESTROY:
+      if (hwnd && hwnd->m_private_data)
+      {
+        swell_sdl_bridge_state *bs = (swell_sdl_bridge_state *)hwnd->m_private_data;
+        hwnd->m_private_data = 0;
+        delete bs;
+      }
+    break;
+
+    case WM_TIMER:
+      if (wParam == 1010)
+      {
+        swell_sdl_xbridge_resize_child((swell_sdl_bridge_state *)hwnd->m_private_data, hwnd);
+        KillTimer(hwnd, wParam);
+      }
+      if (wParam != 1) break;
+    case WM_MOVE:
+    case WM_SIZE:
+      if (hwnd && hwnd->m_private_data)
+      {
+        swell_sdl_bridge_state *bs = (swell_sdl_bridge_state *)hwnd->m_private_data;
+        HWND h = hwnd->m_parent;
+        RECT tr = hwnd->m_position;
+
+        while (h)
+        {
+          RECT cr = h->m_position;
+          if (h->m_oswindow)
+          {
+            cr.right -= cr.left;
+            cr.bottom -= cr.top;
+            cr.left = cr.top = 0;
+          }
+
+          if (h->m_wndproc)
+          {
+            NCCALCSIZE_PARAMS p = {{ cr }};
+            h->m_wndproc(h, WM_NCCALCSIZE, 0, (LPARAM)&p);
+            cr = p.rgrc[0];
+          }
+
+          tr.left += cr.left;
+          tr.top += cr.top;
+          tr.right += cr.left;
+          tr.bottom += cr.top;
+
+          if (tr.left < cr.left) tr.left = cr.left;
+          if (tr.top < cr.top) tr.top = cr.top;
+          if (tr.right > cr.right) tr.right = cr.right;
+          if (tr.bottom > cr.bottom) tr.bottom = cr.bottom;
+
+          if (h->m_oswindow) break;
+          h = h->m_parent;
+        }
+
+        Display *display = NULL;
+        Window parent_xid = 0;
+        HWND parent_hwnd = NULL;
+        if (!swell_sdl_xbridge_parent(h ? h : hwnd->m_parent, &display, &parent_xid, &parent_hwnd))
+          break;
+
+        if (display != bs->display)
+          break;
+
+        if (parent_xid != bs->cur_parent_xid)
+          bs->need_reparent = true;
+
+        const bool vis = IsWindowVisible(hwnd) && tr.right > tr.left && tr.bottom > tr.top;
+        if (uMsg == WM_TIMER && wParam == 1 && vis)
+          swell_sdl_xbridge_fit_child(bs, hwnd, false);
+
+        if (bs->need_reparent || vis != bs->lastvis || (vis && memcmp(&tr, &bs->lastrect, sizeof(RECT))))
+        {
+          if (bs->lastvis && !vis)
+          {
+            XUnmapWindow(bs->display, bs->native_w);
+            bs->lastvis = false;
+          }
+
+          if (bs->need_reparent)
+          {
+            XReparentWindow(bs->display, bs->native_w, parent_xid, tr.left, tr.top);
+            XResizeWindow(bs->display, bs->native_w, tr.right-tr.left, tr.bottom-tr.top);
+            bs->lastrect = tr;
+            bs->cur_parent_xid = parent_xid;
+            bs->need_reparent = false;
+          }
+          else if (memcmp(&tr, &bs->lastrect, sizeof(RECT)))
+          {
+            bs->lastrect = tr;
+            XMoveResizeWindow(bs->display, bs->native_w, tr.left, tr.top, tr.right-tr.left, tr.bottom-tr.top);
+          }
+
+          if (vis && !bs->lastvis)
+          {
+            XMapRaised(bs->display, bs->native_w);
+            swell_sdl_xbridge_fit_child(bs, hwnd, false);
+            bs->lastvis = true;
+          }
+          XFlush(bs->display);
+        }
+      }
+    break;
+
+    case WM_USER+1000:
+      if (hwnd && hwnd->m_private_data && wParam && lParam)
+      {
+        swell_sdl_bridge_state *bs = (swell_sdl_bridge_state *)hwnd->m_private_data;
+        if (bs->display && bs->native_w)
+        {
+          Window root, par, *list = NULL;
+          unsigned int nlist = 0;
+          if (XQueryTree(bs->display, bs->native_w, &root, &par, &list, &nlist))
+          {
+            if (!list || !nlist)
+            {
+              if (list) XFree(list);
+              return 0;
+            }
+
+            XWindowAttributes attr;
+            memset(&attr, 0, sizeof(attr));
+            if (XGetWindowAttributes(bs->display, list[0], &attr) && attr.width && attr.height)
+            {
+              *((int *)(INT_PTR)wParam) = attr.width;
+              *((int *)(INT_PTR)lParam) = attr.height;
+            }
+            XFree(list);
+          }
+        }
+      }
+    break;
+  }
+  return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
+#endif
+
 HWND SWELL_CreateXBridgeWindow(HWND viewpar, void **wref, const RECT *r)
 {
   if (wref) *wref = NULL;
+#ifdef SDL_VIDEO_DRIVER_X11
+  if (!wref || !r || !swell_sdl_initwindowsys()) return NULL;
+
+  Display *display = NULL;
+  Window parent_xid = 0;
+  HWND parent_hwnd = NULL;
+  if (!swell_sdl_xbridge_parent(viewpar, &display, &parent_xid, &parent_hwnd)) return NULL;
+
+  const bool need_reparent = parent_hwnd == NULL;
+  const int w = swell_sdl_max_int(1, r->right-r->left);
+  const int h = swell_sdl_max_int(1, r->bottom-r->top);
+  Window native_w = XCreateWindow(display, parent_xid, 0, 0, w, h, 0,
+                                  CopyFromParent, InputOutput, CopyFromParent, 0, NULL);
+  if (!native_w) return NULL;
+
+  HWND hwnd = new HWND__(viewpar, 0, r, NULL, true, swell_sdl_xbridge_proc);
+  swell_sdl_bridge_state *bs = new swell_sdl_bridge_state(need_reparent, display, native_w, parent_xid, hwnd);
+  hwnd->m_classname = bridge_class_name;
+  hwnd->m_private_data = (INT_PTR)bs;
+
+  *wref = (void *)native_w;
+  XSelectInput(display, native_w, StructureNotifyMask | SubstructureNotifyMask);
+  XSync(display, False);
+
+  SetTimer(hwnd, 1, 100, NULL);
+  if (!need_reparent) SendMessage(hwnd, WM_SIZE, SIZE_RESTORED, 0);
+  return hwnd;
+#endif
   return NULL;
 }
 
@@ -947,9 +1354,19 @@ void SWELL_FinishDragDrop()
 static HCURSOR s_last_cursor;
 static int s_cursor_vis_cnt;
 
+static HCURSOR swell_sdl_system_cursor(SDL_SystemCursor id)
+{
+  static SDL_Cursor *cursors[SDL_NUM_SYSTEM_CURSORS];
+  const int idx = (int)id;
+  if (idx < 0 || idx >= (int)SDL_NUM_SYSTEM_CURSORS) return NULL;
+  if (!cursors[idx]) cursors[idx] = SDL_CreateSystemCursor(id);
+  return (HCURSOR)cursors[idx];
+}
+
 void SWELL_SetCursor(HCURSOR curs)
 {
   s_last_cursor = curs;
+  SDL_SetCursor((SDL_Cursor *)curs);
 }
 
 HCURSOR SWELL_GetCursor()
@@ -989,7 +1406,31 @@ static SWELL_CursorResourceIndex *SWELL_curmodule_cursorresource_head;
 
 HCURSOR SWELL_LoadCursor(const char *_idx)
 {
-  return NULL;
+  SDL_SystemCursor id = SDL_SYSTEM_CURSOR_ARROW;
+  if (_idx == IDC_NO) id = SDL_SYSTEM_CURSOR_NO;
+  else if (_idx == IDC_SIZENWSE) id = SDL_SYSTEM_CURSOR_SIZENWSE;
+  else if (_idx == IDC_SIZENESW) id = SDL_SYSTEM_CURSOR_SIZENESW;
+  else if (_idx == IDC_SIZEALL) id = SDL_SYSTEM_CURSOR_SIZEALL;
+  else if (_idx == IDC_SIZEWE) id = SDL_SYSTEM_CURSOR_SIZEWE;
+  else if (_idx == IDC_SIZENS) id = SDL_SYSTEM_CURSOR_SIZENS;
+  else if (_idx == IDC_HAND) id = SDL_SYSTEM_CURSOR_HAND;
+  else if (_idx == IDC_IBEAM) id = SDL_SYSTEM_CURSOR_IBEAM;
+  else if (_idx == IDC_UPARROW) id = SDL_SYSTEM_CURSOR_ARROW;
+  else if (_idx != IDC_ARROW)
+  {
+    SWELL_CursorResourceIndex *p = SWELL_curmodule_cursorresource_head;
+    while (p)
+    {
+      if (p->resid == _idx)
+      {
+        if (p->cachedCursor) return p->cachedCursor;
+        break;
+      }
+      p = p->_next;
+    }
+  }
+
+  return swell_sdl_system_cursor(id);
 }
 
 void SWELL_Register_Cursor_Resource(const char *idx, const char *name, int hotspot_x, int hotspot_y)
@@ -1027,16 +1468,70 @@ void *SWELL_GetOSEvent(const char *type)
 
 void SWELL_SetViewGL(HWND h, char wantGL)
 {
+#ifdef SDL_VIDEO_DRIVER_X11
+  if (h && h->m_classname == bridge_class_name && h->m_private_data)
+  {
+    swell_sdl_bridge_state *bs = (swell_sdl_bridge_state *)h->m_private_data;
+    if (wantGL && !bs->gl_ctx)
+    {
+      static GLint att[] = { GLX_RGBA, None };
+      XVisualInfo *vi = glXChooseVisual(bs->display, 0, att);
+      if (vi)
+      {
+        bs->gl_ctx = glXCreateContext(bs->display, vi, NULL, 1);
+        XFree(vi);
+      }
+    }
+    else if (!wantGL && bs->gl_ctx)
+    {
+      if (s_last_gl_ctx == bs)
+      {
+        glXMakeCurrent(bs->display, None, NULL);
+        s_last_gl_ctx = NULL;
+      }
+      glXDestroyContext(bs->display, bs->gl_ctx);
+      bs->gl_ctx = NULL;
+    }
+  }
+#endif
 }
 
 bool SWELL_GetViewGL(HWND h)
 {
+#ifdef SDL_VIDEO_DRIVER_X11
+  return h && h->m_classname == bridge_class_name && h->m_private_data &&
+    ((swell_sdl_bridge_state *)h->m_private_data)->gl_ctx != NULL;
+#endif
   return false;
 }
 
 bool SWELL_SetGLContextToView(HWND h)
 {
+#ifdef SDL_VIDEO_DRIVER_X11
+  if (h)
+  {
+    if (h->m_classname == bridge_class_name && h->m_private_data)
+    {
+      swell_sdl_bridge_state *bs = (swell_sdl_bridge_state *)h->m_private_data;
+      if (bs->gl_ctx)
+      {
+        glXMakeCurrent(bs->display, bs->native_w, bs->gl_ctx);
+        s_last_gl_ctx = bs;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (s_last_gl_ctx)
+  {
+    glXMakeCurrent(s_last_gl_ctx->display, None, NULL);
+    s_last_gl_ctx = NULL;
+  }
+  return true;
+#else
   return false;
+#endif
 }
 
 #endif

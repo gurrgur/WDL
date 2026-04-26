@@ -5900,7 +5900,7 @@ forceMouseMove:
             HGDIOBJ oldbr = SelectObject(ps.hdc,br);
 
             r.left -= tvs->m_last_row_height;
-            tvs->doDrawItem(&tvs->m_root,ps.hdc,&r, GetFocus()==hwnd);
+            tvs->doDrawItem(&tvs->m_root,ps.hdc,&r, fast_has_focus(hwnd));
 
             SelectObject(ps.hdc,oldbr);
             SelectObject(ps.hdc,oldpen);
@@ -6383,6 +6383,7 @@ void ListView_SetExtendedListViewStyleEx(HWND h, int flag, int mask)
   listViewState *lvs = h ? (listViewState *)h->m_private_data : NULL;
   if (WDL_NOT_NORMALLY(!lvs)) return;
   lvs->m_extended_style = (lvs->m_extended_style & ~mask) | (flag&mask);
+  InvalidateRect(h,NULL,FALSE);
 }
 
 void SWELL_SetListViewFastClickMask(HWND hList, int mask)
@@ -6398,6 +6399,7 @@ void ListView_SetImageList(HWND h, HIMAGELIST imagelist, int which)
   if (WDL_NOT_NORMALLY(!lvs)) return;
   lvs->m_status_imagelist= (WDL_PtrList<HGDIOBJ__> *)imagelist;
   lvs->m_status_imagelist_type = which;
+  InvalidateRect(h,NULL,FALSE);
 }
 
 int ListView_GetColumnWidth(HWND h, int pos)
@@ -6426,6 +6428,7 @@ void ListView_InsertColumn(HWND h, int pos, const LVCOLUMN *lvc)
   col.col_index = pos;
 
   lvs->m_cols.Insert(col,pos);
+  InvalidateRect(h,NULL,FALSE);
 }
 
 void ListView_GetColumn(HWND h, int pos, LVCOLUMN *lvc)
@@ -6456,6 +6459,7 @@ void ListView_SetColumn(HWND h, int pos, const LVCOLUMN *lvc)
     col->name = lvc->pszText ? strdup(lvc->pszText) : NULL;
   }
   if (lvc->mask & LVCF_FMT) col->fmt = lvc->fmt;
+  InvalidateRect(h,NULL,FALSE);
 }
 
 void ListView_GetItemText(HWND hwnd, int item, int subitem, char *text, int textmax)
@@ -6823,6 +6827,7 @@ void ListView_SetItemCount(HWND h, int cnt)
   lvs->m_owner_data_size = cnt > 0 ? cnt : 0;
   if (lvs->m_owner_multisel_state.GetSize() > lvs->m_owner_data_size) lvs->m_owner_multisel_state.Resize(lvs->m_owner_data_size);
   if (lvs->m_selitem >= lvs->m_owner_data_size) lvs->m_selitem = -1;
+  InvalidateRect(h,NULL,FALSE);
 }
 
 void ListView_EnsureVisible(HWND h, int i, BOOL pok)
