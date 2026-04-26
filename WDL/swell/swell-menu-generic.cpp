@@ -1230,7 +1230,12 @@ static LRESULT WINAPI submenuWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
               m = m2;
             }
           }
-          int mode = 3; // 4 was old-style super-fast menus
+          int mode =
+#ifdef SWELL_TARGET_SDL
+            4;
+#else
+            3; // 4 was old-style super-fast menus
+#endif
           SendMessage(hwnd,WM_USER+100,mode,GET_Y_LPARAM(lParam));
         }
         else menu->sel_vis = -1;
@@ -1320,7 +1325,13 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos, int resvd, HWND h
   {
     void SWELL_RunMessageLoop();
     SWELL_RunMessageLoop();
-    Sleep(10);
+    if (m_trackingRet<0 && m_trackingMenus.GetSize()) Sleep(
+#ifdef SWELL_TARGET_SDL
+      1
+#else
+      10
+#endif
+    );
   }
 
   int x=m_trackingMenus.GetSize()-1;
