@@ -143,6 +143,43 @@ static void swell_sdl_update_position_from_window(HWND hwnd)
   hwnd->m_has_had_position = true;
 }
 
+static HWND swell_sdl_top_owner(HWND hwnd)
+{
+  HWND own = hwnd ? hwnd->m_owner : NULL;
+  while (own && own->m_parent && !own->m_oswindow) own = own->m_parent;
+  while (own && own->m_owner && !own->m_oswindow)
+  {
+    own = own->m_owner;
+    while (own && own->m_parent && !own->m_oswindow) own = own->m_parent;
+  }
+  return own;
+}
+
+static void swell_sdl_position_if_unset(HWND hwnd, RECT *r)
+{
+  if (!hwnd || hwnd->m_has_had_position || !(hwnd->m_style & WS_CAPTION)) return;
+  if (swell_sdl_is_menu_window(hwnd)) return;
+  if (r->left || r->top) return;
+
+  RECT base;
+  HWND own = swell_sdl_top_owner(hwnd);
+  if (own && own->m_oswindow)
+    base = own->m_position;
+  else
+    SWELL_GetViewPort(&base, NULL, true);
+
+  const int w = r->right - r->left;
+  const int h = r->bottom - r->top;
+  r->left = base.left + ((base.right - base.left) - w) / 2;
+  r->top = base.top + ((base.bottom - base.top) - h) / 2;
+  if (r->left < base.left) r->left = base.left;
+  if (r->top < base.top) r->top = base.top;
+  r->right = r->left + w;
+  r->bottom = r->top + h;
+  hwnd->m_position = *r;
+  hwnd->m_has_had_position = true;
+}
+
 static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
 {
 #ifdef SWELL_LICE_GDI
@@ -316,6 +353,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
     else if (swell_sdl_initwindowsys())
     {
       RECT r = hwnd->m_position;
+      swell_sdl_position_if_unset(hwnd, &r);
       const int w = swell_sdl_max_int(1, r.right-r.left);
       const int h = swell_sdl_max_int(1, r.bottom-r.top);
       swell_sdl_x11_menu_hints menu_hints(swell_sdl_is_menu_window(hwnd));
@@ -455,6 +493,14 @@ static int swell_sdl_mods()
   return rv;
 }
 
+static HWND swell_sdl_event_target(HWND hwnd)
+{
+  HWND foc = GetFocusIncludeMenus();
+  if (foc && hwnd && IsChild(hwnd, foc)) return foc;
+  if (foc && foc->m_oswindow && !(foc->m_style&WS_CAPTION)) return foc;
+  return hwnd;
+}
+
 static int swell_sdl_vkey(SDL_Keycode key)
 {
   if (key >= SDLK_a && key <= SDLK_z) return 'A' + (key - SDLK_a);
@@ -466,6 +512,7 @@ static int swell_sdl_vkey(SDL_Keycode key)
     case SDLK_ESCAPE: return VK_ESCAPE;
     case SDLK_BACKSPACE: return VK_BACK;
     case SDLK_TAB: return VK_TAB;
+    case SDLK_SPACE: return VK_SPACE;
     case SDLK_HOME: return VK_HOME;
     case SDLK_END: return VK_END;
     case SDLK_UP: return VK_UP;
@@ -480,6 +527,25 @@ static int swell_sdl_vkey(SDL_Keycode key)
   return 0;
 }
 
+static int swell_sdl_key_modifiers(const SDL_KeyboardEvent *key, int vk)
+{
+  int modifiers = swell_sdl_mods();
+  if (vk) modifiers |= FVIRTKEY;
+  if (key->keysym.sym >= SDLK_a && key->keysym.sym <= SDLK_z)
+    swell_is_likely_capslock = (modifiers&FSHIFT)!=0;
+  return modifiers;
+}
+
+static void swell_sdl_send_key(HWND hwnd, UINT msgtype, WPARAM wParam, LPARAM lParam)
+{
+  if (!hwnd) return;
+  MSG msg = { hwnd, msgtype, wParam, lParam, };
+  INT_PTR extra_flags = 0;
+  if (DialogBoxIsActive()) extra_flags |= 1;
+  if (SWELLAppMain(SWELLAPP_PROCESSMESSAGE, (INT_PTR)&msg, extra_flags) <= 0)
+    SendMessage(hwnd, msg.message, msg.wParam, msg.lParam);
+}
+
 static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
 {
   HWND hwnd = swell_sdl_hwnd_from_id(we->windowID);
@@ -488,7 +554,10 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
   switch (we->event)
   {
     case SDL_WINDOWEVENT_CLOSE:
-      SendMessage(hwnd, WM_CLOSE, 0, 0);
+      if (hwnd && IsWindowEnabled(hwnd) &&
+          !DestroyPopupMenus() &&
+          !SendMessage(hwnd, WM_CLOSE, 0, 0))
+        SendMessage(hwnd, WM_COMMAND, IDCANCEL, 0);
     break;
     case SDL_WINDOWEVENT_FOCUS_GAINED:
       SWELL_focused_oswindow = hwnd->m_oswindow;
@@ -652,16 +721,55 @@ static void swell_sdl_on_event(const SDL_Event *evt)
     case SDL_KEYUP:
     {
       HWND hwnd = swell_sdl_hwnd_from_id(evt->key.windowID);
+      hwnd = swell_sdl_event_target(hwnd);
       const int vk = swell_sdl_vkey(evt->key.keysym.sym);
       if (hwnd && vk)
-        SendMessage(hwnd, evt->type == SDL_KEYDOWN ? WM_KEYDOWN : WM_KEYUP, vk, 0);
+      {
+        UINT msg = evt->type == SDL_KEYDOWN ? WM_KEYDOWN : WM_KEYUP;
+        int modifiers = swell_sdl_key_modifiers(&evt->key, vk);
+        if (evt->key.keysym.sym == SDLK_LALT || evt->key.keysym.sym == SDLK_RALT ||
+            evt->key.keysym.sym == SDLK_LCTRL || evt->key.keysym.sym == SDLK_RCTRL ||
+            evt->key.keysym.sym == SDLK_LSHIFT || evt->key.keysym.sym == SDLK_RSHIFT ||
+            evt->key.keysym.sym == SDLK_LGUI || evt->key.keysym.sym == SDLK_RGUI)
+        {
+          msg = evt->type == SDL_KEYDOWN ? WM_SYSKEYDOWN : WM_SYSKEYUP;
+        }
+        swell_sdl_send_key(hwnd, msg, vk, modifiers);
+      }
     }
     break;
     case SDL_TEXTINPUT:
     {
       HWND hwnd = swell_sdl_hwnd_from_id(evt->text.windowID);
+      hwnd = swell_sdl_event_target(hwnd);
       if (hwnd && evt->text.text[0])
-        SendMessage(hwnd, WM_CHAR, (unsigned char)evt->text.text[0], 0);
+      {
+        const unsigned char *p = (const unsigned char *)evt->text.text;
+        while (*p)
+        {
+          unsigned int c = 0;
+          if (*p < 0x80)
+            c = *p++;
+          else if ((*p & 0xe0) == 0xc0 && p[1])
+          {
+            c = ((*p & 0x1f) << 6) | (p[1] & 0x3f);
+            p += 2;
+          }
+          else if ((*p & 0xf0) == 0xe0 && p[1] && p[2])
+          {
+            c = ((*p & 0x0f) << 12) | ((p[1] & 0x3f) << 6) | (p[2] & 0x3f);
+            p += 3;
+          }
+          else if ((*p & 0xf8) == 0xf0 && p[1] && p[2] && p[3])
+          {
+            c = ((*p & 0x07) << 18) | ((p[1] & 0x3f) << 12) | ((p[2] & 0x3f) << 6) | (p[3] & 0x3f);
+            p += 4;
+          }
+          else p++;
+
+          if (c) swell_sdl_send_key(hwnd, WM_CHAR, c, 0);
+        }
+      }
     }
     break;
   }
