@@ -12,10 +12,12 @@
 
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColorType.h"
+#include "include/core/SkImage.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPixmap.h"
 #include "include/core/SkRect.h"
+#include "include/core/SkSamplingOptions.h"
 #include "include/core/SkSurface.h"
 
 #include "swell.h"
@@ -212,6 +214,34 @@ bool SWELL_SkiaDrawEllipse(LICE_IBitmap *bitmap, int l, int t, int r, int b,
     oval.inset(inset, inset);
     canvas->drawOval(oval, paint);
   }
+  return true;
+}
+
+bool SWELL_SkiaDrawBitmap(LICE_IBitmap *dst, LICE_IBitmap *src,
+                          int x, int y, int w, int h,
+                          int sx, int sy, int sw, int sh,
+                          bool use_alpha, float opacity, bool filter)
+{
+  SkCanvas *canvas = (SkCanvas *)SWELL_GetSkiaCanvasFromBitmap(dst);
+  if (!canvas || !src || !src->getBits() || w <= 0 || h <= 0 || sw <= 0 || sh <= 0) return false;
+
+  const SkAlphaType alpha_type = use_alpha ? kUnpremul_SkAlphaType : kOpaque_SkAlphaType;
+  SkImageInfo info = SkImageInfo::Make(src->getWidth(), src->getHeight(), kBGRA_8888_SkColorType, alpha_type);
+  SkPixmap pixmap(info, src->getBits(), (size_t)src->getRowSpan() * 4);
+  sk_sp<SkImage> image = SkImages::RasterFromPixmapCopy(pixmap);
+  if (!image) return false;
+
+  if (opacity < 0.0f) opacity = 0.0f;
+  else if (opacity > 1.0f) opacity = 1.0f;
+
+  SkPaint paint;
+  paint.setAlphaf(opacity);
+  paint.setBlendMode(use_alpha || opacity < 1.0f ? SkBlendMode::kSrcOver : SkBlendMode::kSrc);
+  const SkSamplingOptions sampling(filter ? SkFilterMode::kLinear : SkFilterMode::kNearest);
+  canvas->drawImageRect(image,
+                        SkRect::MakeXYWH((SkScalar)sx, (SkScalar)sy, (SkScalar)sw, (SkScalar)sh),
+                        SkRect::MakeXYWH((SkScalar)x, (SkScalar)y, (SkScalar)w, (SkScalar)h),
+                        sampling, &paint, SkCanvas::kStrict_SrcRectConstraint);
   return true;
 }
 

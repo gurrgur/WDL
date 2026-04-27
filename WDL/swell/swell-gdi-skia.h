@@ -28,6 +28,10 @@ bool SWELL_SkiaDrawEllipse(LICE_IBitmap *bitmap, int l, int t, int r, int b,
                            bool do_fill, unsigned int fill_color, float fill_alpha,
                            bool do_stroke, unsigned int stroke_color, float stroke_alpha,
                            int stroke_width);
+bool SWELL_SkiaDrawBitmap(LICE_IBitmap *dst, LICE_IBitmap *src,
+                          int x, int y, int w, int h,
+                          int sx, int sy, int sw, int sh,
+                          bool use_alpha, float opacity, bool filter);
 #endif
 
 #endif

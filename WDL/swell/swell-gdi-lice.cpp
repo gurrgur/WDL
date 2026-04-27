@@ -1387,6 +1387,15 @@ void DrawImageInRect(HDC hdcOut, HICON in, const RECT *r)
 
   const int x = r->left, y=r->top, w=r->right-x, h=r->bottom-y;
   LICE_IBitmap *src=(LICE_IBitmap *)in->typedata;
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawBitmap(out->surface,src,
+      x+out->surface_offs.x,y+out->surface_offs.y,w,h,
+      0,0,src->getWidth(),src->getHeight(),true,1.0f,true))
+  {
+    swell_DirtyContext(out,x,y,x+w,y+h);
+    return;
+  }
+#endif
   LICE_ScaledBlit(out->surface,src,
             x+out->surface_offs.x,y+out->surface_offs.y,w,h,
             0,0, src->getWidth(),src->getHeight(),
@@ -1432,6 +1441,16 @@ void BitBltAlpha(HDC hdcOut, int x, int y, int w, int h, HDC hdcIn, int xin, int
   HDC__ *out = (HDC__ *)hdcOut;
   if (!HDC_VALID(out) || !HDC_VALID(in)) return;
   if (!in->surface || !out->surface) return;
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawBitmap(out->surface,in->surface,
+      x+out->surface_offs.x,y+out->surface_offs.y,w,h,
+      xin+in->surface_offs.x,yin+in->surface_offs.y,w,h,
+      useAlphaChannel,opacity,false))
+  {
+    swell_DirtyContext(out,x,y,x+w,y+h);
+    return;
+  }
+#endif
   LICE_Blit(out->surface,in->surface,
             x+out->surface_offs.x,y+out->surface_offs.y,
             xin+in->surface_offs.x,yin+in->surface_offs.y,w,h,
@@ -1445,6 +1464,16 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h, HDC hdcIn, int xin, int yin,
   HDC__ *out = (HDC__ *)hdcOut;
   if (!HDC_VALID(out) || !HDC_VALID(in)) return;
   if (!in->surface || !out->surface) return;
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawBitmap(out->surface,in->surface,
+      x+out->surface_offs.x,y+out->surface_offs.y,w,h,
+      xin+in->surface_offs.x,yin+in->surface_offs.y,w,h,
+      mode == (int)SRCCOPY_USEALPHACHAN,1.0f,false))
+  {
+    swell_DirtyContext(out,x,y,x+w,y+h);
+    return;
+  }
+#endif
   LICE_Blit(out->surface,in->surface,
             x+out->surface_offs.x,y+out->surface_offs.y,
             xin+in->surface_offs.x,yin+in->surface_offs.y,w,h,
@@ -1459,6 +1488,15 @@ void StretchBltFromMem(HDC hdcOut, int x, int y, int w, int h, const void *bits,
   if (!out->surface) return;
 
   LICE_WrapperBitmap srcbm((LICE_pixel*)bits,srcw,srch,srcspan,false);
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawBitmap(out->surface,&srcbm,
+      x+out->surface_offs.x,y+out->surface_offs.y,w,h,
+      0,0,srcw,srch,false,1.0f,true))
+  {
+    swell_DirtyContext(out,x,y,x+w,y+h);
+    return;
+  }
+#endif
   LICE_ScaledBlit(out->surface,&srcbm,
             x+out->surface_offs.x,y+out->surface_offs.y,w,h,
             0,0,srcw,srch,
@@ -1472,6 +1510,16 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h, HDC hdcIn, int xin, int 
   HDC__ *out = (HDC__ *)hdcOut;
   if (!HDC_VALID(out) || !HDC_VALID(in)) return;
   if (!in->surface || !out->surface) return;
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawBitmap(out->surface,in->surface,
+      x+out->surface_offs.x,y+out->surface_offs.y,w,h,
+      xin+in->surface_offs.x,yin+in->surface_offs.y,srcw,srch,
+      mode == (int)SRCCOPY_USEALPHACHAN,1.0f,true))
+  {
+    swell_DirtyContext(out,x,y,x+w,y+h);
+    return;
+  }
+#endif
   LICE_ScaledBlit(out->surface,in->surface,
             x+out->surface_offs.x,y+out->surface_offs.y,w,h,
             xin+in->surface_offs.x,yin+in->surface_offs.y,srcw,srch,
