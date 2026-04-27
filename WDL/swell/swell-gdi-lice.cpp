@@ -755,18 +755,28 @@ void Ellipse(HDC ctx, int l, int t, int r, int b)
 {
   HDC__ *c=(HDC__ *)ctx;
   if (!HDC_VALID(c) || !c->surface) return;
-  
+
   swell_DirtyContext(ctx,l,t,r,b);
-  
+
+  const bool wantBrush = HGDIOBJ_VALID(c->curbrush,TYPE_BRUSH) && c->curbrush->wid >= 0;
+  const bool wantPen = HGDIOBJ_VALID(c->curpen,TYPE_PEN) && c->curpen->wid >= 0;
+
   l += c->surface_offs.x;
   t += c->surface_offs.y;
   r += c->surface_offs.x;
   b += c->surface_offs.y;
 
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawEllipse(c->surface,l,t,r,b,
+      wantBrush,wantBrush ? c->curbrush->color : 0,wantBrush ? c->curbrush->alpha : 1.0f,
+      wantPen,wantPen ? c->curpen->color : 0,wantPen ? c->curpen->alpha : 1.0f,
+      wantPen ? c->curpen->wid : 1))
+    return;
+#endif
+
   int rad = wdl_min(r-l, b-t)/2; // todo: actual ellipse, for now just circles
 
-  bool wantPen = HGDIOBJ_VALID(c->curpen,TYPE_PEN) && c->curpen->wid >= 0;
-  if (HGDIOBJ_VALID(c->curbrush,TYPE_BRUSH) && c->curbrush->wid >= 0)
+  if (wantBrush)
   {
     int use_rad = rad;
     if (use_rad > 0) LICE_FillCircle(c->surface,l+use_rad,t+use_rad,use_rad,c->curbrush->color,c->curbrush->alpha,LICE_BLIT_MODE_COPY,!wantPen);
@@ -790,6 +800,17 @@ void Rectangle(HDC ctx, int l, int t, int r, int b)
   t += c->surface_offs.y;
   r += c->surface_offs.x;
   b += c->surface_offs.y;
+
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_GetSkiaCanvasFromBitmap(c->surface))
+  {
+    if (HGDIOBJ_VALID(c->curbrush,TYPE_BRUSH) && c->curbrush->wid >= 0)
+      SWELL_SkiaFillRect(c->surface,l,t,r-l,b-t,c->curbrush->color,c->curbrush->alpha);
+    if (HGDIOBJ_VALID(c->curpen,TYPE_PEN) && c->curpen->wid >= 0 && r>l+1 && b>t+1)
+      SWELL_SkiaStrokeRect(c->surface,l,t,r-l,b-t,c->curpen->color,c->curpen->alpha,c->curpen->wid);
+    return;
+  }
+#endif
 
   if (HGDIOBJ_VALID(c->curbrush,TYPE_BRUSH) && c->curbrush->wid >= 0)
   {
@@ -904,7 +925,11 @@ void SWELL_LineTo(HDC ctx, int x, int y)
   int dx=c->surface_offs.x;
   int dy=c->surface_offs.y;
   int lx = (int)c->lastpos_x, ly = (int) c->lastpos_y;
-  if (c->surface) 
+#ifdef SWELL_SKIA_GDI
+  if (!SWELL_SkiaDrawLine(c->surface,(float)(x+dx),(float)(y+dy),(float)(lx+dx),(float)(ly+dy),
+      c->curpen->color,c->curpen->alpha,c->curpen->wid))
+#endif
+  if (c->surface)
     LICE_Line(c->surface,x+dx,y+dy,lx+dx,ly+dy,c->curpen->color,c->curpen->alpha,LICE_BLIT_MODE_COPY,false);
   
   c->lastpos_x=fx;

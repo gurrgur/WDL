@@ -22,6 +22,12 @@ enum
 LICE_IBitmap *SWELL_CreateSkiaRasterBitmap(int w, int h);
 void *SWELL_GetSkiaCanvasFromBitmap(LICE_IBitmap *bitmap);
 bool SWELL_SkiaFillRect(LICE_IBitmap *bitmap, int x, int y, int w, int h, unsigned int lice_color, float alpha);
+bool SWELL_SkiaStrokeRect(LICE_IBitmap *bitmap, int x, int y, int w, int h, unsigned int lice_color, float alpha, int stroke_width);
+bool SWELL_SkiaDrawLine(LICE_IBitmap *bitmap, float x1, float y1, float x2, float y2, unsigned int lice_color, float alpha, int stroke_width);
+bool SWELL_SkiaDrawEllipse(LICE_IBitmap *bitmap, int l, int t, int r, int b,
+                           bool do_fill, unsigned int fill_color, float fill_alpha,
+                           bool do_stroke, unsigned int stroke_color, float stroke_alpha,
+                           int stroke_width);
 #endif
 
 #endif

@@ -130,10 +130,9 @@ void *SWELL_GetSkiaCanvasFromBitmap(LICE_IBitmap *bitmap)
 
 static SkColor swell_skia_color_from_lice(unsigned int c, float alpha)
 {
-  int a = LICE_GETA(c);
   if (alpha < 0.0f) alpha = 0.0f;
   else if (alpha > 1.0f) alpha = 1.0f;
-  a = (int)(a * alpha + 0.5f);
+  const int a = (int)(255.0f * alpha + 0.5f);
   return SkColorSetARGB(a, LICE_GETR(c), LICE_GETG(c), LICE_GETB(c));
 }
 
@@ -142,12 +141,77 @@ bool SWELL_SkiaFillRect(LICE_IBitmap *bitmap, int x, int y, int w, int h, unsign
   SkCanvas *canvas = (SkCanvas *)SWELL_GetSkiaCanvasFromBitmap(bitmap);
   if (!canvas || w <= 0 || h <= 0) return false;
 
-  // SkPaint paint;
-  // paint.setAntiAlias(false);
-  // paint.setStyle(SkPaint::kFill_Style);
-  // paint.setColor(swell_skia_color_from_lice(lice_color, alpha));
-  // paint.setBlendMode(SkBlendMode::kSrc);
-  // canvas->drawRect(SkRect::MakeXYWH((SkScalar)x, (SkScalar)y, (SkScalar)w, (SkScalar)h), paint);
+  SkPaint paint;
+  paint.setAntiAlias(false);
+  paint.setStyle(SkPaint::kFill_Style);
+  paint.setColor(swell_skia_color_from_lice(lice_color, alpha));
+  paint.setBlendMode(SkBlendMode::kSrc);
+  canvas->drawRect(SkRect::MakeXYWH((SkScalar)x, (SkScalar)y, (SkScalar)w, (SkScalar)h), paint);
+  return true;
+}
+
+static void swell_skia_setup_stroke(SkPaint *paint, unsigned int lice_color, float alpha, int stroke_width)
+{
+  paint->setAntiAlias(false);
+  paint->setStyle(SkPaint::kStroke_Style);
+  paint->setColor(swell_skia_color_from_lice(lice_color, alpha));
+  paint->setBlendMode(SkBlendMode::kSrc);
+  paint->setStrokeWidth((SkScalar)(stroke_width > 0 ? stroke_width : 1));
+}
+
+bool SWELL_SkiaStrokeRect(LICE_IBitmap *bitmap, int x, int y, int w, int h, unsigned int lice_color, float alpha, int stroke_width)
+{
+  SkCanvas *canvas = (SkCanvas *)SWELL_GetSkiaCanvasFromBitmap(bitmap);
+  if (!canvas || w <= 0 || h <= 0) return false;
+
+  SkPaint paint;
+  swell_skia_setup_stroke(&paint, lice_color, alpha, stroke_width);
+  const SkScalar inset = paint.getStrokeWidth() * 0.5f;
+  canvas->drawRect(SkRect::MakeLTRB((SkScalar)x + inset,
+                                    (SkScalar)y + inset,
+                                    (SkScalar)(x + w) - inset,
+                                    (SkScalar)(y + h) - inset), paint);
+  return true;
+}
+
+bool SWELL_SkiaDrawLine(LICE_IBitmap *bitmap, float x1, float y1, float x2, float y2, unsigned int lice_color, float alpha, int stroke_width)
+{
+  SkCanvas *canvas = (SkCanvas *)SWELL_GetSkiaCanvasFromBitmap(bitmap);
+  if (!canvas) return false;
+
+  SkPaint paint;
+  swell_skia_setup_stroke(&paint, lice_color, alpha, stroke_width);
+  canvas->drawLine((SkScalar)x1, (SkScalar)y1, (SkScalar)x2, (SkScalar)y2, paint);
+  return true;
+}
+
+bool SWELL_SkiaDrawEllipse(LICE_IBitmap *bitmap, int l, int t, int r, int b,
+                           bool do_fill, unsigned int fill_color, float fill_alpha,
+                           bool do_stroke, unsigned int stroke_color, float stroke_alpha,
+                           int stroke_width)
+{
+  SkCanvas *canvas = (SkCanvas *)SWELL_GetSkiaCanvasFromBitmap(bitmap);
+  if (!canvas || r <= l || b <= t || (!do_fill && !do_stroke)) return false;
+
+  SkRect oval = SkRect::MakeLTRB((SkScalar)l, (SkScalar)t, (SkScalar)r, (SkScalar)b);
+  if (do_fill)
+  {
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setStyle(SkPaint::kFill_Style);
+    paint.setColor(swell_skia_color_from_lice(fill_color, fill_alpha));
+    paint.setBlendMode(SkBlendMode::kSrc);
+    canvas->drawOval(oval, paint);
+  }
+  if (do_stroke)
+  {
+    SkPaint paint;
+    swell_skia_setup_stroke(&paint, stroke_color, stroke_alpha, stroke_width);
+    paint.setAntiAlias(true);
+    const SkScalar inset = paint.getStrokeWidth() * 0.5f;
+    oval.inset(inset, inset);
+    canvas->drawOval(oval, paint);
+  }
   return true;
 }
 
