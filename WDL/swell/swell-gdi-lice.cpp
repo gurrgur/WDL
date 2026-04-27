@@ -41,6 +41,10 @@
 #include FT_FREETYPE_H
 #include FT_GLYPH_H
 
+#ifndef SWELL_FREETYPE_LOAD_FLAGS
+#define SWELL_FREETYPE_LOAD_FLAGS 0
+#endif
+
 #ifdef SWELL_FONTCONFIG
 #include <fontconfig/fontconfig.h>
 #else
@@ -1043,7 +1047,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
         if (font)
         {
 #ifdef SWELL_FREETYPE
-          if (c != '\t' && !FT_Load_Char(face, c, FT_LOAD_DEFAULT) && face->glyph)
+          if (c != '\t' && !FT_Load_Char(face, c, SWELL_FREETYPE_LOAD_FLAGS) && face->glyph)
           {
             // measure character
             FT_GlyphSlot g = face->glyph;
@@ -1171,7 +1175,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
       if (font)
       {
 #ifdef SWELL_FREETYPE
-        if (c != '\t' && !FT_Load_Char(face, c, FT_LOAD_RENDER) && face->glyph)
+        if (c != '\t' && !FT_Load_Char(face, c, FT_LOAD_RENDER | SWELL_FREETYPE_LOAD_FLAGS) && face->glyph)
         {
           FT_GlyphSlot g = face->glyph;
           const int ha = g->metrics.horiAdvance/64;

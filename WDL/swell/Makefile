@@ -117,6 +117,9 @@ ifdef USESDL
 
   ifndef NOFREETYPE
     CFLAGS += -DSWELL_FREETYPE $(shell $(PKG_CONFIG) --cflags freetype2)
+    ifdef FREETYPE_LOAD_FLAGS
+      CFLAGS += -DSWELL_FREETYPE_LOAD_FLAGS=$(FREETYPE_LOAD_FLAGS)
+    endif
     LINKEXTRA += $(shell $(PKG_CONFIG) --libs freetype2)
     ifndef NOFONTCONFIG
       CFLAGS += -DSWELL_FONTCONFIG
@@ -158,6 +161,9 @@ else ifndef NOGDK
 
   ifndef NOFREETYPE
     CFLAGS += -DSWELL_FREETYPE $(shell $(PKG_CONFIG) --cflags freetype2)
+    ifdef FREETYPE_LOAD_FLAGS
+      CFLAGS += -DSWELL_FREETYPE_LOAD_FLAGS=$(FREETYPE_LOAD_FLAGS)
+    endif
     ifndef PRELOAD_GDK
       LINKEXTRA += $(shell $(PKG_CONFIG) --libs freetype2)
     endif
