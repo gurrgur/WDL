@@ -115,6 +115,17 @@ ifdef USESDL
   SWELL_OBJS += swell-generic-sdl.o
   OBJS += $(LICE_OBJS)
 
+  ifdef SKIA
+    SKIA_CFLAGS ?= $(if $(SKIA_ROOT),-I$(SKIA_ROOT),$(shell $(PKG_CONFIG) --cflags skia 2>/dev/null))
+    SKIA_LIBS ?= $(if $(SKIA_LIBDIR),-L$(SKIA_LIBDIR) -lskia,$(shell $(PKG_CONFIG) --libs skia 2>/dev/null))
+    ifeq ($(strip $(SKIA_CFLAGS)),)
+      $(error SKIA=1 requires Skia headers. Set SKIA_CFLAGS or SKIA_ROOT to the Skia checkout/install root)
+    endif
+    CFLAGS += -DSWELL_SKIA_GDI $(SKIA_CFLAGS)
+    LINKEXTRA += $(SKIA_LIBS)
+    OBJS += swell-gdi-skia.o
+  endif
+
   ifndef NOFREETYPE
     CFLAGS += -DSWELL_FREETYPE $(shell $(PKG_CONFIG) --cflags freetype2)
     ifdef FREETYPE_LOAD_FLAGS
@@ -184,7 +195,7 @@ default: libSwell$(DLL_EXT)
 
 .PHONY: clean 
 
-SWELL_HEADERS=swell-dlggen.h swell-gdi-internalpool.h swell-menugen.h swell-types.h swell-functions.h swell-internal.h
+SWELL_HEADERS=swell-dlggen.h swell-gdi-internalpool.h swell-gdi-skia.h swell-menugen.h swell-types.h swell-functions.h swell-internal.h
 
 swell.o: $(SWELL_HEADERS)
 swell-ini.o: $(SWELL_HEADERS)
@@ -194,6 +205,7 @@ swell-menu-generic.o: $(SWELL_HEADERS)
 swell-misc-generic.o: $(SWELL_HEADERS)
 swell-gdi-generic.o: $(SWELL_HEADERS)
 swell-gdi-lice.o: $(SWELL_HEADERS)
+swell-gdi-skia.o: $(SWELL_HEADERS)
 swell-kb-generic.o: $(SWELL_HEADERS)
 swell-miscdlg-generic.o: $(SWELL_HEADERS)
 swell-modstub-generic.o: $(SWELL_HEADERS)

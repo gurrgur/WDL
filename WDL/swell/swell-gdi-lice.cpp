@@ -27,6 +27,9 @@
 
 #include "swell.h"
 #include "swell-internal.h"
+#ifdef SWELL_SKIA_GDI
+#include "swell-gdi-skia.h"
+#endif
 
 #include "../mutex.h"
 #include "../ptrlist.h"
@@ -305,7 +308,11 @@ static FT_Face MatchFont(const char *lfFaceName, int weight, int italic, int exa
 
 HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
 {
+#ifdef SWELL_SKIA_GDI
+  LICE_IBitmap *bm = SWELL_CreateSkiaRasterBitmap(w,h);
+#else
   LICE_MemBitmap * bm = new LICE_MemBitmap(w,h);
+#endif
   if (WDL_NOT_NORMALLY(!bm)) return 0;
   LICE_Clear(bm,LICE_RGBA(0,0,0,0));
 
@@ -707,6 +714,16 @@ void SWELL_FillRect(HDC ctx, const RECT *r, HBRUSH br)
   if (!c->surface) return;
 
   if (b->wid<0) return;
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaFillRect(c->surface,
+      r->left+c->surface_offs.x,
+      r->top+c->surface_offs.y,
+      r->right-r->left,r->bottom-r->top,b->color,b->alpha))
+  {
+    swell_DirtyContext(ctx,r->left,r->top,r->right,r->bottom);
+    return;
+  }
+#endif
   LICE_FillRect(c->surface,
       r->left+c->surface_offs.x,
       r->top+c->surface_offs.y,
@@ -925,7 +942,11 @@ void *SWELL_GetCtxGC(HDC ctx)
 {
   HDC__ *ct=(HDC__ *)ctx;
   if (!HDC_VALID(ct)) return 0;
+#ifdef SWELL_SKIA_GDI
+  return SWELL_GetSkiaCanvasFromBitmap(ct->surface);
+#else
   return NULL; 
+#endif
 }
 
 

@@ -22,6 +22,9 @@
 #ifdef SWELL_TARGET_SDL
 
 #include "swell-internal.h"
+#ifdef SWELL_SKIA_GDI
+#include "swell-gdi-skia.h"
+#endif
 #include "swell-dlggen.h"
 #include "../wdlcstring.h"
 
@@ -397,7 +400,15 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
     return;
   }
 
-  if (!hwnd->m_backingstore) hwnd->m_backingstore = new LICE_SysBitmap;
+  if (!hwnd->m_backingstore)
+  {
+#ifdef SWELL_SKIA_GDI
+    hwnd->m_backingstore = SWELL_CreateSkiaRasterBitmap(cr.right, cr.bottom);
+    if (!hwnd->m_backingstore) hwnd->m_backingstore = new LICE_SysBitmap;
+#else
+    hwnd->m_backingstore = new LICE_SysBitmap;
+#endif
+  }
   bool forceref = hwnd->m_backingstore->resize(cr.right, cr.bottom);
 
   RECT r;
