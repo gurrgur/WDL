@@ -39,6 +39,8 @@ struct swell_sdl_window_state
   bool prepainted_before_show;
   Uint32 prepaint_ticks;
   RECT dirty;
+  int dirty_rect_count;
+  RECT dirty_rects[8];
 };
 
 static WDL_PtrList<swell_sdl_window_state> s_sdl_windows;
@@ -136,6 +138,26 @@ static bool swell_sdl_upload_texture_rect(swell_sdl_window_state *st, LICE_IBitm
   const int src_pitch = bm->getRowSpan() * (int)sizeof(LICE_pixel);
   const unsigned char *src = (const unsigned char *)bm->getBits() + r->top * src_pitch + r->left * (int)sizeof(LICE_pixel);
   return SDL_UpdateTexture(st->texture, &sr, src, src_pitch) == 0;
+}
+
+static bool swell_sdl_upload_texture_rects(swell_sdl_window_state *st, LICE_IBitmap *bm, const RECT *fallback, const RECT *rects, int rect_count)
+{
+  if (rect_count > 0 && rects)
+  {
+    int split_area = 0;
+    for (int x = 0; x < rect_count; x ++)
+      split_area += (rects[x].right - rects[x].left) * (rects[x].bottom - rects[x].top);
+
+    const int fallback_area = fallback ? (fallback->right - fallback->left) * (fallback->bottom - fallback->top) : 0;
+    if (fallback_area > 0 && split_area * 4 > fallback_area * 3)
+      return swell_sdl_upload_texture_rect(st, bm, fallback);
+
+    bool ret = true;
+    for (int x = 0; x < rect_count; x ++)
+      ret = swell_sdl_upload_texture_rect(st, bm, rects+x) && ret;
+    return ret;
+  }
+  return swell_sdl_upload_texture_rect(st, bm, fallback);
 }
 
 static void swell_sdl_present_texture(swell_sdl_window_state *st)
@@ -384,6 +406,7 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
     st->invalidated = false;
     st->dirty_valid = false;
     st->dirty_needs_paint = false;
+    st->dirty_rect_count = 0;
     s_sdl_paint_depth--;
     return;
   }
@@ -391,6 +414,7 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
   st->invalidated = false;
   st->dirty_valid = false;
   st->dirty_needs_paint = false;
+  st->dirty_rect_count = 0;
 
   LICE_SubBitmap subbm(hwnd->m_backingstore, r.left, r.top, r.right-r.left, r.bottom-r.top);
   if (subbm.getWidth() > 0 && subbm.getHeight() > 0)
@@ -432,7 +456,9 @@ static bool swell_sdl_present_backingstore(HWND hwnd, const RECT *dirty)
   if (!swell_sdl_clip_rect_to_client(&r, need_full_upload ? NULL : dirty, &cr)) return false;
   if (!swell_sdl_ensure_texture(st, cr.right, cr.bottom)) return false;
 
-  if (!swell_sdl_upload_texture_rect(st, hwnd->m_backingstore, &r)) return false;
+  if (!swell_sdl_upload_texture_rects(st, hwnd->m_backingstore, &r,
+                                      need_full_upload ? NULL : st->dirty_rects,
+                                      need_full_upload ? 0 : st->dirty_rect_count)) return false;
   swell_sdl_present_texture(st);
   return true;
 #else
@@ -446,20 +472,52 @@ static void swell_sdl_add_dirty_rect(swell_sdl_window_state *st, const RECT *r)
   if (!r)
   {
     st->dirty_valid = false;
+    st->dirty_rect_count = 0;
     return;
   }
+
+  RECT cr;
+  cr.left = cr.top = 0;
+  cr.right = st->hwnd ? st->hwnd->m_position.right - st->hwnd->m_position.left : 0;
+  cr.bottom = st->hwnd ? st->hwnd->m_position.bottom - st->hwnd->m_position.top : 0;
+  RECT clipped;
+  if (!swell_sdl_clip_rect_to_client(&clipped, r, &cr)) return;
+
   if (!st->dirty_valid)
   {
-    st->dirty = *r;
+    st->dirty = clipped;
     st->dirty_valid = true;
   }
   else
   {
-    if (r->left < st->dirty.left) st->dirty.left = r->left;
-    if (r->top < st->dirty.top) st->dirty.top = r->top;
-    if (r->right > st->dirty.right) st->dirty.right = r->right;
-    if (r->bottom > st->dirty.bottom) st->dirty.bottom = r->bottom;
+    if (clipped.left < st->dirty.left) st->dirty.left = clipped.left;
+    if (clipped.top < st->dirty.top) st->dirty.top = clipped.top;
+    if (clipped.right > st->dirty.right) st->dirty.right = clipped.right;
+    if (clipped.bottom > st->dirty.bottom) st->dirty.bottom = clipped.bottom;
   }
+
+  if (st->dirty_needs_paint) return;
+
+  const int max_rects = (int)(sizeof(st->dirty_rects) / sizeof(st->dirty_rects[0]));
+  for (int x = 0; x < st->dirty_rect_count; x ++)
+  {
+    RECT *tr = st->dirty_rects+x;
+    RECT isect;
+    if (WinIntersectRect(&isect, tr, &clipped) ||
+        (clipped.left <= tr->right && clipped.right >= tr->left &&
+         clipped.top <= tr->bottom && clipped.bottom >= tr->top))
+    {
+      if (clipped.left < tr->left) tr->left = clipped.left;
+      if (clipped.top < tr->top) tr->top = clipped.top;
+      if (clipped.right > tr->right) tr->right = clipped.right;
+      if (clipped.bottom > tr->bottom) tr->bottom = clipped.bottom;
+      return;
+    }
+  }
+  if (st->dirty_rect_count < max_rects)
+    st->dirty_rects[st->dirty_rect_count++] = clipped;
+  else
+    st->dirty_rect_count = 0;
 }
 
 static bool swell_sdl_paint_initial(HWND hwnd)
@@ -480,6 +538,7 @@ static void swell_sdl_mark_dirty(HWND hwnd, const RECT *r)
   if (!st) return;
   st->invalidated = true;
   st->dirty_needs_paint = true;
+  st->dirty_rect_count = 0;
   swell_sdl_add_dirty_rect(st, r);
   if (!s_sdl_processing_events) swell_sdl_queue_paint_event();
 }
@@ -506,6 +565,7 @@ static void swell_sdl_flush_paints()
         st->invalidated = false;
         st->dirty_valid = false;
         st->dirty_needs_paint = false;
+        st->dirty_rect_count = 0;
       }
       else
       {
@@ -513,16 +573,6 @@ static void swell_sdl_flush_paints()
       }
     }
   }
-}
-
-static bool swell_sdl_has_dirty_windows()
-{
-  for (int x = 0; x < s_sdl_windows.GetSize(); x ++)
-  {
-    swell_sdl_window_state *st = s_sdl_windows.Get(x);
-    if (st && st->invalidated) return true;
-  }
-  return false;
 }
 
 void swell_oswindow_destroy(HWND hwnd)
@@ -1119,8 +1169,6 @@ void SWELL_RunEvents()
   {
     swell_sdl_coalesce_motion(&evt);
     swell_sdl_on_event(&evt);
-    if (evt.type == SDL_MOUSEMOTION && swell_sdl_has_dirty_windows())
-      swell_sdl_flush_paints();
   }
   s_sdl_processing_events = false;
 
