@@ -32,6 +32,10 @@ bool SWELL_SkiaDrawBitmap(LICE_IBitmap *dst, LICE_IBitmap *src,
                           int x, int y, int w, int h,
                           int sx, int sy, int sw, int sh,
                           bool use_alpha, float opacity, bool filter);
+bool SWELL_SkiaDrawPolygon(LICE_IBitmap *bitmap, const POINT *pts, int npts, int addx, int addy,
+                           bool do_fill, unsigned int fill_color, float fill_alpha,
+                           bool do_stroke, unsigned int stroke_color, float stroke_alpha,
+                           int stroke_width);
 #endif
 
 #endif

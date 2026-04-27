@@ -15,6 +15,7 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkPaint.h"
+#include "include/core/SkPath.h"
 #include "include/core/SkPixmap.h"
 #include "include/core/SkRect.h"
 #include "include/core/SkSamplingOptions.h"
@@ -130,10 +131,12 @@ void *SWELL_GetSkiaCanvasFromBitmap(LICE_IBitmap *bitmap)
   return bitmap ? (void *)bitmap->Extended(SWELL_SKIA_EXT_CANVAS, NULL) : NULL;
 }
 
-static SkCanvas *swell_skia_canvas_from_bitmap(LICE_IBitmap *bitmap, int *xoff, int *yoff)
+static SkCanvas *swell_skia_canvas_from_bitmap(LICE_IBitmap *bitmap, int *xoff, int *yoff, int *clipw, int *cliph)
 {
   if (xoff) *xoff = 0;
   if (yoff) *yoff = 0;
+  if (clipw) *clipw = bitmap ? bitmap->getWidth() : 0;
+  if (cliph) *cliph = bitmap ? bitmap->getHeight() : 0;
 
   while (bitmap && bitmap->Extended(LICE_SubBitmap::LICE_GET_SUBBITMAP_VERSION, NULL) == LICE_SubBitmap::LICE_SUBBITMAP_VERSION)
   {
@@ -146,6 +149,11 @@ static SkCanvas *swell_skia_canvas_from_bitmap(LICE_IBitmap *bitmap, int *xoff, 
   return bitmap ? (SkCanvas *)bitmap->Extended(SWELL_SKIA_EXT_CANVAS, NULL) : NULL;
 }
 
+static void swell_skia_clip_to_bitmap(SkCanvas *canvas, int xoff, int yoff, int clipw, int cliph)
+{
+  canvas->clipRect(SkRect::MakeXYWH((SkScalar)xoff, (SkScalar)yoff, (SkScalar)clipw, (SkScalar)cliph));
+}
+
 static SkColor swell_skia_color_from_lice(unsigned int c, float alpha)
 {
   if (alpha < 0.0f) alpha = 0.0f;
@@ -156,9 +164,12 @@ static SkColor swell_skia_color_from_lice(unsigned int c, float alpha)
 
 bool SWELL_SkiaFillRect(LICE_IBitmap *bitmap, int x, int y, int w, int h, unsigned int lice_color, float alpha)
 {
-  int xoff = 0, yoff = 0;
-  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff);
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
   if (!canvas || w <= 0 || h <= 0) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
 
   SkPaint paint;
   paint.setAntiAlias(false);
@@ -180,9 +191,12 @@ static void swell_skia_setup_stroke(SkPaint *paint, unsigned int lice_color, flo
 
 bool SWELL_SkiaStrokeRect(LICE_IBitmap *bitmap, int x, int y, int w, int h, unsigned int lice_color, float alpha, int stroke_width)
 {
-  int xoff = 0, yoff = 0;
-  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff);
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
   if (!canvas || w <= 0 || h <= 0) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
 
   SkPaint paint;
   swell_skia_setup_stroke(&paint, lice_color, alpha, stroke_width);
@@ -196,9 +210,12 @@ bool SWELL_SkiaStrokeRect(LICE_IBitmap *bitmap, int x, int y, int w, int h, unsi
 
 bool SWELL_SkiaDrawLine(LICE_IBitmap *bitmap, float x1, float y1, float x2, float y2, unsigned int lice_color, float alpha, int stroke_width)
 {
-  int xoff = 0, yoff = 0;
-  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff);
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
   if (!canvas) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
 
   SkPaint paint;
   swell_skia_setup_stroke(&paint, lice_color, alpha, stroke_width);
@@ -212,9 +229,12 @@ bool SWELL_SkiaDrawEllipse(LICE_IBitmap *bitmap, int l, int t, int r, int b,
                            bool do_stroke, unsigned int stroke_color, float stroke_alpha,
                            int stroke_width)
 {
-  int xoff = 0, yoff = 0;
-  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff);
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
   if (!canvas || r <= l || b <= t || (!do_fill && !do_stroke)) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
 
   SkRect oval = SkRect::MakeLTRB((SkScalar)(l + xoff), (SkScalar)(t + yoff),
                                  (SkScalar)(r + xoff), (SkScalar)(b + yoff));
@@ -244,9 +264,12 @@ bool SWELL_SkiaDrawBitmap(LICE_IBitmap *dst, LICE_IBitmap *src,
                           int sx, int sy, int sw, int sh,
                           bool use_alpha, float opacity, bool filter)
 {
-  int xoff = 0, yoff = 0;
-  SkCanvas *canvas = swell_skia_canvas_from_bitmap(dst, &xoff, &yoff);
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(dst, &xoff, &yoff, &clipw, &cliph);
   if (!canvas || !src || !src->getBits() || w <= 0 || h <= 0 || sw <= 0 || sh <= 0) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
 
   const SkAlphaType alpha_type = use_alpha ? kUnpremul_SkAlphaType : kOpaque_SkAlphaType;
   SkImageInfo info = SkImageInfo::Make(src->getWidth(), src->getHeight(), kBGRA_8888_SkColorType, alpha_type);
@@ -265,6 +288,43 @@ bool SWELL_SkiaDrawBitmap(LICE_IBitmap *dst, LICE_IBitmap *src,
                         SkRect::MakeXYWH((SkScalar)sx, (SkScalar)sy, (SkScalar)sw, (SkScalar)sh),
                         SkRect::MakeXYWH((SkScalar)(x + xoff), (SkScalar)(y + yoff), (SkScalar)w, (SkScalar)h),
                         sampling, &paint, SkCanvas::kStrict_SrcRectConstraint);
+  return true;
+}
+
+bool SWELL_SkiaDrawPolygon(LICE_IBitmap *bitmap, const POINT *pts, int npts, int addx, int addy,
+                           bool do_fill, unsigned int fill_color, float fill_alpha,
+                           bool do_stroke, unsigned int stroke_color, float stroke_alpha,
+                           int stroke_width)
+{
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
+  if (!canvas || !pts || npts < 2 || (!do_fill && !do_stroke)) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
+
+  SkPath path;
+  path.moveTo((SkScalar)(pts[0].x + addx + xoff), (SkScalar)(pts[0].y + addy + yoff));
+  for (int x = 1; x < npts; x ++)
+    path.lineTo((SkScalar)(pts[x].x + addx + xoff), (SkScalar)(pts[x].y + addy + yoff));
+  path.close();
+
+  if (do_fill)
+  {
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setStyle(SkPaint::kFill_Style);
+    paint.setColor(swell_skia_color_from_lice(fill_color, fill_alpha));
+    paint.setBlendMode(SkBlendMode::kSrc);
+    canvas->drawPath(path, paint);
+  }
+  if (do_stroke)
+  {
+    SkPaint paint;
+    swell_skia_setup_stroke(&paint, stroke_color, stroke_alpha, stroke_width);
+    paint.setAntiAlias(true);
+    canvas->drawPath(path, paint);
+  }
   return true;
 }
 

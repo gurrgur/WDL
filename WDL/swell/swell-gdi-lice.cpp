@@ -834,6 +834,25 @@ void Polygon(HDC ctx, POINT *pts, int npts)
   const int dx=c->surface_offs.x;
   const int dy=c->surface_offs.y;
 
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawPolygon(c->surface,pts,npts,dx,dy,
+      fill,fill ? c->curbrush->color : 0,fill ? c->curbrush->alpha : 1.0f,
+      outline,outline ? c->curpen->color : 0,outline ? c->curpen->alpha : 1.0f,
+      outline ? c->curpen->wid : 1))
+  {
+    int minx = pts[0].x, maxx = pts[0].x, miny = pts[0].y, maxy = pts[0].y;
+    for (int x = 1; x < npts; x ++)
+    {
+      if (pts[x].x < minx) minx=pts[x].x;
+      if (pts[x].x > maxx) maxx=pts[x].x;
+      if (pts[x].y < miny) miny=pts[x].y;
+      if (pts[x].y > maxy) maxy=pts[x].y;
+    }
+    swell_DirtyContext(ctx,minx,miny,maxx,maxy);
+    return;
+  }
+#endif
+
   int minx=c->surface->getWidth()+1, maxx=0;
   int miny=c->surface->getHeight()+1, maxy=0;
 
@@ -979,6 +998,13 @@ void SWELL_SetPixel(HDC ctx, int x, int y, int c)
 {
   HDC__ *ct=(HDC__ *)ctx;
   if (!HDC_VALID(ct) || !ct->surface) return;
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaFillRect(ct->surface,x+ct->surface_offs.x,y+ct->surface_offs.y,1,1,LICE_RGBA_FROMNATIVE(c,255),1.0f))
+  {
+    swell_DirtyContext(ct,x,y,x+1,y+1);
+    return;
+  }
+#endif
   LICE_PutPixel(ct->surface,x+ct->surface_offs.x, y+ct->surface_offs.y, LICE_RGBA_FROMNATIVE(c,255),1.0f,LICE_BLIT_MODE_COPY);
   swell_DirtyContext(ct,x,y,x+1,y+1);
 }
