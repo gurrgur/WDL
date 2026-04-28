@@ -428,6 +428,31 @@ bool SWELL_SkiaDrawPolyPolyline(LICE_IBitmap *bitmap, const POINT *pts, const DW
   return true;
 }
 
+bool SWELL_SkiaDrawGlyphMask(LICE_IBitmap *bitmap, int x, int y, unsigned int lice_color,
+                             const unsigned char *src, int w, int pitch, int h, bool mono)
+{
+  if (!bitmap || !src || w <= 0 || h <= 0 || pitch == 0) return false;
+
+  LICE_pixel *tmp = (LICE_pixel *)malloc((size_t)w * h * sizeof(LICE_pixel));
+  if (!tmp) return false;
+
+  for (int yy = 0; yy < h; yy ++)
+  {
+    const unsigned char *in = pitch > 0 ? src + yy * pitch : src + (h - 1 - yy) * -pitch;
+    LICE_pixel *out = tmp + (size_t)yy * w;
+    for (int xx = 0; xx < w; xx ++)
+    {
+      const int a = mono ? ((in[xx >> 3] & (0x80 >> (xx & 7))) ? 255 : 0) : in[xx];
+      out[xx] = LICE_RGBA(LICE_GETR(lice_color), LICE_GETG(lice_color), LICE_GETB(lice_color), a);
+    }
+  }
+
+  LICE_WrapperBitmap glyphbm(tmp,w,h,w,false);
+  const bool ok = SWELL_SkiaDrawBitmap(bitmap,&glyphbm,x,y,w,h,0,0,w,h,true,1.0f,false);
+  free(tmp);
+  return ok;
+}
+
 bool SWELL_SkiaPushClipRegion(LICE_IBitmap *bitmap)
 {
   SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, NULL, NULL, NULL, NULL);

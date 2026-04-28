@@ -1355,22 +1355,40 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
         {
           FT_GlyphSlot g = face->glyph;
           const int ha = g->metrics.horiAdvance/64;
-          if (bgmode==OPAQUE) LICE_FillRect(surface,xpos,ypos,ha,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          if (bgmode==OPAQUE)
+          {
+#ifdef SWELL_SKIA_GDI
+            if (!SWELL_SkiaFillRect(surface,xpos,ypos,ha,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f))
+#endif
+              LICE_FillRect(surface,xpos,ypos,ha,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          }
   
           if (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
           {
-            LICE_DrawMonoGlyph(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
+#ifdef SWELL_SKIA_GDI
+            if (!SWELL_SkiaDrawGlyphMask(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,
+                  (const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,true))
+#endif
+              LICE_DrawMonoGlyph(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
           }
           else  // FT_PIXEL_MODE_GRAY (hopefully!)
           {
-            LICE_DrawGlyphEx(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(LICE_pixel_chan *)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
+#ifdef SWELL_SKIA_GDI
+            if (!SWELL_SkiaDrawGlyphMask(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,
+                  (const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,false))
+#endif
+              LICE_DrawGlyphEx(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(LICE_pixel_chan *)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
           }
           if (doUl) 
           {
             int xw = g->metrics.width/64;
             if (xw > 1) xw--;
-            LICE_Line(surface,xpos + g->metrics.horiBearingX/64,ypos+ascent+1,
-                              xpos + xw,ypos+ascent+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
+#ifdef SWELL_SKIA_GDI
+            if (!SWELL_SkiaDrawLine(surface,(float)(xpos + g->metrics.horiBearingX/64),(float)(ypos+ascent+1),
+                  (float)(xpos + xw),(float)(ypos+ascent+1),fgcol,1.0f,1))
+#endif
+              LICE_Line(surface,xpos + g->metrics.horiBearingX/64,ypos+ascent+1,
+                                xpos + xw,ypos+ascent+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
           }
   
           int rext = xpos + (g->metrics.width + g->metrics.horiBearingX)/64;
@@ -1388,7 +1406,13 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
       {
         if (c=='\t') 
         {
-          if (bgmode==OPAQUE) LICE_FillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          if (bgmode==OPAQUE)
+          {
+#ifdef SWELL_SKIA_GDI
+            if (!SWELL_SkiaFillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f))
+#endif
+              LICE_FillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          }
           xpos+=charw*5;
          
           const int bext = ypos+ascent-descent;
@@ -1396,9 +1420,22 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
         }
         else 
         {
-          if (bgmode==OPAQUE) LICE_FillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          if (bgmode==OPAQUE)
+          {
+#ifdef SWELL_SKIA_GDI
+            if (!SWELL_SkiaFillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f))
+#endif
+              LICE_FillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          }
           LICE_DrawChar(surface,xpos,ypos,c,fgcol,1.0f,LICE_BLIT_MODE_COPY);
-          if (doUl) LICE_Line(surface,xpos,ypos+(ascent-descent)+1,xpos+charw,ypos+(ascent-descent)+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
+          if (doUl)
+          {
+#ifdef SWELL_SKIA_GDI
+            if (!SWELL_SkiaDrawLine(surface,(float)xpos,(float)(ypos+(ascent-descent)+1),
+                  (float)(xpos+charw),(float)(ypos+(ascent-descent)+1),fgcol,1.0f,1))
+#endif
+              LICE_Line(surface,xpos,ypos+(ascent-descent)+1,xpos+charw,ypos+(ascent-descent)+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
+          }
   
           const int bext=ypos+ascent-descent+(doUl ? 2:1);
           if (max_ypos < bext) max_ypos=bext;
