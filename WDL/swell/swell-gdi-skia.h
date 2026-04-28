@@ -36,6 +36,16 @@ bool SWELL_SkiaDrawPolygon(LICE_IBitmap *bitmap, const POINT *pts, int npts, int
                            bool do_fill, unsigned int fill_color, float fill_alpha,
                            bool do_stroke, unsigned int stroke_color, float stroke_alpha,
                            int stroke_width);
+bool SWELL_SkiaDrawRoundRect(LICE_IBitmap *bitmap, int l, int t, int r, int b, int rx, int ry,
+                             bool do_fill, unsigned int fill_color, float fill_alpha,
+                             bool do_stroke, unsigned int stroke_color, float stroke_alpha,
+                             int stroke_width);
+bool SWELL_SkiaDrawPolyBezierTo(LICE_IBitmap *bitmap, float startx, float starty,
+                                const POINT *pts, int npts, int addx, int addy,
+                                unsigned int stroke_color, float stroke_alpha, int stroke_width);
+bool SWELL_SkiaDrawPolyPolyline(LICE_IBitmap *bitmap, const POINT *pts, const DWORD *cnts, int nseg,
+                                int addx, int addy, unsigned int stroke_color, float stroke_alpha,
+                                int stroke_width);
 #endif
 
 #endif

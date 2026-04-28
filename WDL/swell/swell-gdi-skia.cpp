@@ -328,5 +328,105 @@ bool SWELL_SkiaDrawPolygon(LICE_IBitmap *bitmap, const POINT *pts, int npts, int
   return true;
 }
 
+bool SWELL_SkiaDrawRoundRect(LICE_IBitmap *bitmap, int l, int t, int r, int b, int rx, int ry,
+                             bool do_fill, unsigned int fill_color, float fill_alpha,
+                             bool do_stroke, unsigned int stroke_color, float stroke_alpha,
+                             int stroke_width)
+{
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
+  if (!canvas || r <= l || b <= t || (!do_fill && !do_stroke)) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
+
+  const SkScalar sx = (SkScalar)(rx > 0 ? rx : 0);
+  const SkScalar sy = (SkScalar)(ry > 0 ? ry : 0);
+  SkRect rect = SkRect::MakeLTRB((SkScalar)(l + xoff), (SkScalar)(t + yoff),
+                                 (SkScalar)(r + xoff), (SkScalar)(b + yoff));
+  if (do_fill)
+  {
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setStyle(SkPaint::kFill_Style);
+    paint.setColor(swell_skia_color_from_lice(fill_color, fill_alpha));
+    paint.setBlendMode(SkBlendMode::kSrc);
+    canvas->drawRoundRect(rect, sx, sy, paint);
+  }
+  if (do_stroke)
+  {
+    SkPaint paint;
+    swell_skia_setup_stroke(&paint, stroke_color, stroke_alpha, stroke_width);
+    paint.setAntiAlias(true);
+    const SkScalar inset = paint.getStrokeWidth() * 0.5f;
+    rect.inset(inset, inset);
+    canvas->drawRoundRect(rect, sx, sy, paint);
+  }
+  return true;
+}
+
+bool SWELL_SkiaDrawPolyBezierTo(LICE_IBitmap *bitmap, float startx, float starty,
+                                const POINT *pts, int npts, int addx, int addy,
+                                unsigned int stroke_color, float stroke_alpha, int stroke_width)
+{
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
+  if (!canvas || !pts || npts < 3) return false;
+
+  SkPath path;
+  path.moveTo((SkScalar)(startx + addx + xoff), (SkScalar)(starty + addy + yoff));
+  for (int x = 0; x < npts - 2; x += 3)
+    path.cubicTo((SkScalar)(pts[x].x + addx + xoff), (SkScalar)(pts[x].y + addy + yoff),
+                 (SkScalar)(pts[x+1].x + addx + xoff), (SkScalar)(pts[x+1].y + addy + yoff),
+                 (SkScalar)(pts[x+2].x + addx + xoff), (SkScalar)(pts[x+2].y + addy + yoff));
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
+
+  SkPaint paint;
+  swell_skia_setup_stroke(&paint, stroke_color, stroke_alpha, stroke_width);
+  paint.setAntiAlias(true);
+  canvas->drawPath(path, paint);
+  return true;
+}
+
+bool SWELL_SkiaDrawPolyPolyline(LICE_IBitmap *bitmap, const POINT *pts, const DWORD *cnts, int nseg,
+                                int addx, int addy, unsigned int stroke_color, float stroke_alpha,
+                                int stroke_width)
+{
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
+  if (!canvas || !pts || !cnts || nseg < 1) return false;
+
+  SkPath path;
+  bool has_path = false;
+  for (int seg = 0; seg < nseg; seg ++)
+  {
+    DWORD cnt = cnts[seg];
+    if (!cnt) continue;
+    if (cnt < 2)
+    {
+      pts++;
+      continue;
+    }
+
+    path.moveTo((SkScalar)(pts->x + addx + xoff), (SkScalar)(pts->y + addy + yoff));
+    pts++;
+    for (DWORD x = 1; x < cnt; x ++, pts++)
+      path.lineTo((SkScalar)(pts->x + addx + xoff), (SkScalar)(pts->y + addy + yoff));
+    has_path = true;
+  }
+  if (!has_path) return true;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
+
+  SkPaint paint;
+  swell_skia_setup_stroke(&paint, stroke_color, stroke_alpha, stroke_width);
+  paint.setAntiAlias(true);
+  canvas->drawPath(path, paint);
+  return true;
+}
+
 #endif
 #endif

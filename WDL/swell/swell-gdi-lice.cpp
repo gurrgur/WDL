@@ -733,9 +733,30 @@ void SWELL_FillRect(HDC ctx, const RECT *r, HBRUSH br)
 
 void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
 {
-	xrnd/=3;
-	yrnd/=3;
-	POINT pts[10]={ // todo: curves between edges
+#ifdef SWELL_SKIA_GDI
+  HDC__ *c=(HDC__ *)ctx;
+  if (HDC_VALID(c) && c->surface)
+  {
+    const bool wantBrush = HGDIOBJ_VALID(c->curbrush,TYPE_BRUSH) && c->curbrush->wid >= 0;
+    const bool wantPen = HGDIOBJ_VALID(c->curpen,TYPE_PEN) && c->curpen->wid >= 0;
+    if ((wantBrush || wantPen) &&
+        SWELL_SkiaDrawRoundRect(c->surface,
+          x+c->surface_offs.x,y+c->surface_offs.y,
+          x2+c->surface_offs.x,y2+c->surface_offs.y,
+          xrnd/3,yrnd/3,
+          wantBrush,wantBrush ? c->curbrush->color : 0,wantBrush ? c->curbrush->alpha : 1.0f,
+          wantPen,wantPen ? c->curpen->color : 0,wantPen ? c->curpen->alpha : 1.0f,
+          wantPen ? c->curpen->wid : 1))
+    {
+      swell_DirtyContext(ctx,x,y,x2,y2);
+      return;
+    }
+  }
+#endif
+
+  xrnd/=3;
+  yrnd/=3;
+  POINT pts[10]={ // todo: curves between edges
 		{x,y+yrnd},
 		{x+xrnd,y},
 		{x2-xrnd,y},
@@ -919,18 +940,56 @@ void MoveToEx(HDC ctx, int x, int y, POINT *op)
 void PolyBezierTo(HDC ctx, POINT *pts, int np)
 {
   HDC__ *c=(HDC__ *)ctx;
-  if (!HDC_VALID(c)||!HGDIOBJ_VALID(c->curpen,TYPE_PEN)||c->curpen->wid<0||np<3) return;
+  if (!HDC_VALID(c)||!HGDIOBJ_VALID(c->curpen,TYPE_PEN)||c->curpen->wid<0||np<3||!pts) return;
   
   int x; 
   float xp=c->lastpos_x,yp=c->lastpos_y;
+  int minx=(int)xp, maxx=(int)xp, miny=(int)yp, maxy=(int)yp;
+  for (x = 0; x < np; x ++)
+  {
+    if (pts[x].x < minx) minx=pts[x].x;
+    if (pts[x].x > maxx) maxx=pts[x].x;
+    if (pts[x].y < miny) miny=pts[x].y;
+    if (pts[x].y > maxy) maxy=pts[x].y;
+  }
+
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawPolyBezierTo(c->surface,xp,yp,pts,np,c->surface_offs.x,c->surface_offs.y,
+      c->curpen->color,c->curpen->alpha,c->curpen->wid))
+  {
+    for (x = 0; x < np-2; x += 3)
+    {
+      xp=(float)pts[x+2].x;
+      yp=(float)pts[x+2].y;
+    }
+    c->lastpos_x=xp;
+    c->lastpos_y=yp;
+    swell_DirtyContext(ctx,minx-c->curpen->wid-1,miny-c->curpen->wid-1,maxx+c->curpen->wid+1,maxy+c->curpen->wid+1);
+    return;
+  }
+#endif
+
+  if (!c->surface) return;
   for (x = 0; x < np-2; x += 3)
   {
-      // todo
-      xp=(float)pts[x+2].x;
-      yp=(float)pts[x+2].y;    
+    if (c->curpen->wid > 1)
+      LICE_DrawThickCBezier(c->surface,xp+c->surface_offs.x,yp+c->surface_offs.y,
+        pts[x].x+c->surface_offs.x,pts[x].y+c->surface_offs.y,
+        pts[x+1].x+c->surface_offs.x,pts[x+1].y+c->surface_offs.y,
+        pts[x+2].x+c->surface_offs.x,pts[x+2].y+c->surface_offs.y,
+        c->curpen->color,c->curpen->alpha,LICE_BLIT_MODE_COPY,c->curpen->wid);
+    else
+      LICE_DrawCBezier(c->surface,xp+c->surface_offs.x,yp+c->surface_offs.y,
+        pts[x].x+c->surface_offs.x,pts[x].y+c->surface_offs.y,
+        pts[x+1].x+c->surface_offs.x,pts[x+1].y+c->surface_offs.y,
+        pts[x+2].x+c->surface_offs.x,pts[x+2].y+c->surface_offs.y,
+        c->curpen->color,c->curpen->alpha,LICE_BLIT_MODE_COPY,true);
+    xp=(float)pts[x+2].x;
+    yp=(float)pts[x+2].y;
   }
-  c->lastpos_x=(float)xp;
-  c->lastpos_y=(float)yp;
+  c->lastpos_x=xp;
+  c->lastpos_y=yp;
+  swell_DirtyContext(ctx,minx-c->curpen->wid-1,miny-c->curpen->wid-1,maxx+c->curpen->wid+1,maxy+c->curpen->wid+1);
 }
 
 
@@ -964,23 +1023,63 @@ void SWELL_LineTo(HDC ctx, int x, int y)
 void PolyPolyline(HDC ctx, const POINT *pts, const DWORD *cnts, int nseg)
 {
   HDC__ *c=(HDC__ *)ctx;
-  if (!HDC_VALID(c)||!HGDIOBJ_VALID(c->curpen,TYPE_PEN)||c->curpen->wid<0||nseg<1) return;
+  if (!HDC_VALID(c)||!HGDIOBJ_VALID(c->curpen,TYPE_PEN)||c->curpen->wid<0||nseg<1||!pts||!cnts) return;
 
+  const POINT *scan_pts=pts;
+  bool have_bounds=false;
+  int minx=0,maxx=0,miny=0,maxy=0;
+  for (int scan_seg = 0; scan_seg < nseg; scan_seg ++)
+  {
+    DWORD cnt=cnts[scan_seg];
+    while (cnt--)
+    {
+      if (!have_bounds)
+      {
+        minx=maxx=scan_pts->x;
+        miny=maxy=scan_pts->y;
+        have_bounds=true;
+      }
+      else
+      {
+        if (scan_pts->x < minx) minx=scan_pts->x;
+        if (scan_pts->x > maxx) maxx=scan_pts->x;
+        if (scan_pts->y < miny) miny=scan_pts->y;
+        if (scan_pts->y > maxy) maxy=scan_pts->y;
+      }
+      scan_pts++;
+    }
+  }
+  if (!have_bounds) return;
+
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawPolyPolyline(c->surface,pts,cnts,nseg,c->surface_offs.x,c->surface_offs.y,
+      c->curpen->color,c->curpen->alpha,c->curpen->wid))
+  {
+    swell_DirtyContext(ctx,minx-c->curpen->wid-1,miny-c->curpen->wid-1,maxx+c->curpen->wid+1,maxy+c->curpen->wid+1);
+    return;
+  }
+#endif
+
+  if (!c->surface) return;
   while (nseg-->0)
   {
     DWORD cnt=*cnts++;
     if (!cnt) continue;
     if (!--cnt) { pts++; continue; }
     
-    // todo
+    POINT lp=*pts;
     pts++;
     
     while (cnt--)
     {
-      // todo
+      LICE_Line(c->surface,lp.x+c->surface_offs.x,lp.y+c->surface_offs.y,
+        pts->x+c->surface_offs.x,pts->y+c->surface_offs.y,
+        c->curpen->color,c->curpen->alpha,LICE_BLIT_MODE_COPY,true);
+      lp=*pts;
       pts++;
     }
   }
+  swell_DirtyContext(ctx,minx-c->curpen->wid-1,miny-c->curpen->wid-1,maxx+c->curpen->wid+1,maxy+c->curpen->wid+1);
 }
 void *SWELL_GetCtxGC(HDC ctx)
 {
