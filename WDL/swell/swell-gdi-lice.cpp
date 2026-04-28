@@ -1198,6 +1198,250 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
 int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 {
+#ifdef SWELL_SKIA_GDI
+  // ========================================================================
+  // PURE SKIA CODE PATH
+  // ========================================================================
+  WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
+  WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
+    (r && r->right > r->left && r->bottom > r->top));
+
+  HDC__ *ct=(HDC__ *)ctx;
+  if (WDL_NOT_NORMALLY(!r)) return 0;
+
+  HGDIOBJ__  *font  = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont,TYPE_FONT) ? ct->curfont : SWELL_GetDefaultFont();
+  void *sf = font ? font->skia_font : NULL;
+  
+  int lineh = 8, charw = 8, ascent = 8, descent = 0;
+  if (sf) {
+    SWELL_SkiaGetFontMetrics(sf, &ascent, &descent, &lineh, &charw);
+    descent = -descent; // negate to match sign convention used below
+  }
+
+  // --- CALCRECT MEASUREMENT ---
+  if (align & DT_CALCRECT)
+  {
+    int xpos=0, ypos=0;
+    r->bottom=r->top;
+    r->right=r->left;
+    bool in_prefix=false;
+    while (buflen && *buf)
+    {
+      int c=0, charlen = wdl_utf8_parsechar(buf,&c);
+      buf+=charlen;
+      if (buflen > 0) {
+        buflen -= charlen;
+        if (buflen < 0) buflen=0;
+      }
+      if (!c) break;
+
+      if (c=='&' && !in_prefix && !(align&DT_NOPREFIX)) { in_prefix = true; continue; }
+      in_prefix=false;
+
+      if (c == '\n' && (align & DT_SINGLELINE)) c=' ';
+ 
+      if (c == '\n') { ypos += lineh; xpos=0; }
+      else if (c != '\r')
+      {
+        if (sf && c != '\t')
+        {
+          float adv, ink_r;
+          SWELL_SkiaMeasureUnichar(sf, c, &adv, NULL, &ink_r);
+          int rext = xpos;
+          if ((align&(DT_BOTTOM|DT_VCENTER|DT_CENTER|DT_RIGHT))!=DT_RIGHT)
+            rext += (int)(ink_r + 0.5f);
+          xpos += (int)(adv + 0.5f);
+          if (rext<xpos) rext=xpos;
+          if (r->left+rext > r->right) r->right = r->left+rext;
+          int bext = r->top + ypos + ascent - descent;
+          if (bext > r->bottom) r->bottom = bext;
+          continue;
+        }
+        // Fallback for missing font or tab
+        xpos += c=='\t' ? charw*5 : charw;
+        int bext = r->top + ypos + ascent - descent;
+        if (bext > r->bottom) r->bottom = bext;
+        if (r->left+xpos>r->right) r->right=r->left+xpos;
+      }
+    }
+    return r->bottom-r->top;
+  }
+
+  if (!HDC_VALID(ct)) return 0;
+
+  RECT use_r = *r;
+  if ((align & DT_VCENTER) && use_r.top > use_r.bottom)
+  {
+    use_r.top = r->bottom;
+    use_r.bottom = r->top;
+  }
+  use_r.left += ct->surface_offs.x;
+  use_r.right += ct->surface_offs.x;
+  use_r.top += ct->surface_offs.y;
+  use_r.bottom += ct->surface_offs.y;
+
+  int xpos = use_r.left;
+  int ypos = use_r.top;
+  if ((align & DT_SINGLELINE) && (align&(DT_CENTER|DT_VCENTER|DT_RIGHT|DT_BOTTOM)) )
+  {
+    RECT tr={0,};
+    DrawText(ctx,buf,buflen,&tr,align|DT_CALCRECT);
+
+    if (align&DT_CENTER)
+      xpos -= ((tr.right-tr.left) - (use_r.right-use_r.left))/2;
+    else if (align&DT_RIGHT)
+      xpos = use_r.right - (tr.right-tr.left);
+
+    if (align&DT_VCENTER)
+      ypos -= ((tr.bottom-tr.top) - (use_r.bottom-use_r.top))/2;
+    else if (align&DT_BOTTOM)
+      ypos = use_r.bottom - (tr.bottom-tr.top);
+  }
+
+  LICE_IBitmap *surface = ct->surface;
+  int fgcol = ct->cur_text_color_int;
+  int bgcol = ct->curbkcol;
+  int bgmode = ct->curbkmode;
+
+  int clip_x1=wdl_max(use_r.left,0), clip_y1 = wdl_max(use_r.top,0);
+  int clip_w=0, clip_h=0;
+  if (surface)
+  {
+    clip_w = wdl_min(use_r.right,surface->getWidth())-clip_x1;
+    clip_h = wdl_min(use_r.bottom,surface->getHeight())-clip_y1;
+    if (clip_w<0)clip_w=0;
+    if (clip_h<0)clip_h=0;
+  }
+
+  LICE_SubBitmap clipbm(surface,clip_x1,clip_y1,clip_w,clip_h);
+  if (surface && !(align&DT_NOCLIP)) { surface = &clipbm; xpos-=clip_x1; ypos-=clip_y1; }
+
+  int left_xpos = xpos, start_ypos = ypos, max_ypos=ypos, max_xpos=0;
+  bool in_prefix=false;
+  bool is_start_of_line = !(align & DT_SINGLELINE);
+
+  const bool skia_canvas_ok = sf && SWELL_GetSkiaCanvasFromBitmap(surface);
+  enum { SWELL_SKIA_GLYPH_BATCH = 512 };
+  uint16_t batch_glyphs[SWELL_SKIA_GLYPH_BATCH];
+  float batch_xpos[SWELL_SKIA_GLYPH_BATCH];
+  int batch_n = 0;
+  const auto flush_glyphs = [&]() {
+    if (batch_n > 0)
+      SWELL_SkiaDrawGlyphRun(surface, sf, batch_glyphs, batch_xpos, batch_n,
+                              (float)(ypos + ascent), fgcol);
+    batch_n = 0;
+  };
+
+  while (buflen && *buf)
+  {
+    if (is_start_of_line)
+    {
+      WDL_ASSERT(!(align&DT_SINGLELINE));
+      if (align & (DT_RIGHT|DT_CENTER))
+      {
+        int x;
+        for (x = 0; (buflen<0 || x < buflen) && buf[x] && buf[x] != '\n'; x++);
+        if (x>0)
+        {
+          RECT tr={0,};
+          DrawText(ctx,buf,x,&tr,(align&DT_NOPREFIX)|DT_SINGLELINE|DT_CALCRECT);
+          if (align&DT_CENTER)
+            xpos -= ((tr.right-tr.left) - (use_r.right-use_r.left))/2;
+          else if (align&DT_RIGHT)
+            xpos += (use_r.right-use_r.left) - (tr.right-tr.left);
+        }
+      }
+      is_start_of_line = false;
+    }
+    int c=0, charlen = wdl_utf8_parsechar(buf,&c);
+    if (buflen>0) {
+      buflen -= charlen;
+      if (buflen<0) buflen=0;
+    }
+    buf+=charlen;
+
+    bool doUl=in_prefix;
+    if (c=='&' && !in_prefix && !(align&DT_NOPREFIX)) { in_prefix = true; continue; }
+    in_prefix=false;
+    if (c == '\n' && (align & DT_SINGLELINE)) c=' ';
+
+    if (c =='\n')
+    {
+      flush_glyphs();
+      xpos=left_xpos; ypos+=lineh; is_start_of_line = true;
+    }
+    else if (c=='\r') { }
+    else 
+    {
+      if (skia_canvas_ok && sf && c != '\t')
+      {
+        float adv, ink_r;
+        uint16_t gid = SWELL_SkiaMeasureUnichar(sf, c, &adv, NULL, &ink_r);
+        const int ha = (int)(adv + 0.5f);
+        
+        if (bgmode==OPAQUE)
+          SWELL_SkiaFillRect(surface,xpos,ypos,ha,(align&DT_SINGLELINE)?(ascent-descent):lineh,bgcol,1.0f);
+          
+        if (doUl)
+        {
+          const int xw = wdl_max(1, (int)(ink_r + 0.5f) - 1);
+          SWELL_SkiaDrawLine(surface,(float)xpos,(float)(ypos+ascent+1),
+                            (float)(xpos+xw),(float)(ypos+ascent+1),fgcol,1.0f,1);
+        }
+        
+        if (batch_n >= SWELL_SKIA_GLYPH_BATCH) flush_glyphs();
+        batch_glyphs[batch_n] = gid;
+        batch_xpos[batch_n] = (float)xpos;
+        batch_n++;
+        
+        int rext = xpos + (int)(ink_r + 0.5f);
+        if (rext <= xpos) rext = xpos + ha;
+        if (rext > max_xpos) max_xpos = rext;
+        xpos += ha;
+        const int bext = ypos + ascent - descent;
+        if (max_ypos < bext) max_ypos = bext;
+      }
+      else
+      {
+        // Fallback for tabs or when Skia canvas isn't available
+        if (c=='\t')
+        {
+          if (bgmode==OPAQUE)
+            SWELL_SkiaFillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f);
+          xpos+=charw*5;
+          const int bext = ypos+ascent-descent;
+          if (max_ypos < bext) max_ypos=bext;
+        }
+        else
+        {
+          if (bgmode==OPAQUE)
+            SWELL_SkiaFillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f);
+          // Fallback glyph drawing (rarely hit when Skia is properly configured)
+          LICE_DrawChar(surface,xpos,ypos,c,fgcol,1.0f,LICE_BLIT_MODE_COPY);
+          if (doUl)
+            LICE_Line(surface,xpos,ypos+(ascent-descent)+1,xpos+charw,ypos+(ascent-descent)+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
+          
+          const int bext=ypos+ascent-descent+(doUl ? 2:1);
+          if (max_ypos < bext) max_ypos=bext;
+          xpos+=charw;
+        }
+      }
+    }
+    if(xpos>max_xpos)max_xpos=xpos;
+  }
+  flush_glyphs();
+  
+  if (surface==&clipbm)
+    swell_DirtyContext(ct,clip_x1+left_xpos,clip_y1+start_ypos,clip_x1+max_xpos,clip_y1+max_ypos);
+  else
+    swell_DirtyContext(ct,left_xpos,start_ypos,max_xpos,max_ypos);
+    
+  return max_ypos - start_ypos;
+
+#else
+  // ========================================================================
+  // ORIGINAL NON-SKIA CODE PATH (UNCHANGED LOGIC)
+  // ========================================================================
   WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
   WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
     (r && r->right > r->left && r->bottom > r->top));
@@ -1213,21 +1457,9 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 #if defined(SWELL_FREETYPE) || defined(SWELL_SKIA_GDI)
   font  = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont,TYPE_FONT) ? ct->curfont : SWELL_GetDefaultFont();
 #endif
-#ifdef SWELL_SKIA_GDI
-  void *sf = font ? font->skia_font : NULL;
-  if (sf)
-  {
-    SWELL_SkiaGetFontMetrics(sf, &ascent, &descent, &lineh, &charw);
-    descent = -descent; // negate to match the FreeType sign convention used below
-  }
-#endif
 #ifdef SWELL_FREETYPE
   FT_Face face = font && font->typedata ? (FT_Face)font->typedata : NULL;
-  if (face
-#ifdef SWELL_SKIA_GDI
-      && !sf
-#endif
-     )
+  if (face)
   {
     lineh = FT_MulFix(face->height, face->size->metrics.y_scale)/64;
     ascent = FT_MulFix(face->ascender, face->size->metrics.y_scale)/64;
@@ -1269,22 +1501,6 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
       {
         if (font)
         {
-#ifdef SWELL_SKIA_GDI
-          if (sf && c != '\t')
-          {
-            float adv, ink_r;
-            SWELL_SkiaMeasureUnichar(sf, c, &adv, NULL, &ink_r);
-            int rext = xpos;
-            if ((align&(DT_BOTTOM|DT_VCENTER|DT_CENTER|DT_RIGHT))!=DT_RIGHT)
-              rext += (int)(ink_r + 0.5f);
-            xpos += (int)(adv + 0.5f);
-            if (rext<xpos) rext=xpos;
-            if (r->left+rext > r->right) r->right = r->left+rext;
-            int bext = r->top + ypos + ascent - descent;
-            if (bext > r->bottom) r->bottom = bext;
-            continue;
-          }
-#endif
 #ifdef SWELL_FREETYPE
           if (c != '\t' && !FT_Load_Char(face, c, SWELL_FREETYPE_LOAD_FLAGS) && face->glyph)
           {
@@ -1366,23 +1582,6 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
   bool in_prefix=false;
   bool is_start_of_line = !(align & DT_SINGLELINE);
 
-#ifdef SWELL_SKIA_GDI
-  const bool skia_canvas_ok = sf && SWELL_GetSkiaCanvasFromBitmap(surface);
-  const bool use_skia = skia_canvas_ok;
-  
-  enum { SWELL_SKIA_GLYPH_BATCH = 512 };
-  uint16_t batch_glyphs[SWELL_SKIA_GLYPH_BATCH];
-  float batch_xpos[SWELL_SKIA_GLYPH_BATCH];
-  int batch_n = 0;
-  
-  const auto flush_glyphs = [&]() {
-    if (batch_n > 0)
-      SWELL_SkiaDrawGlyphRun(surface, sf, batch_glyphs, batch_xpos, batch_n,
-                              (float)(ypos + ascent), fgcol);
-    batch_n = 0;
-  };
-#endif
-
   while (buflen && *buf)
   {
     if (is_start_of_line)
@@ -1425,72 +1624,11 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
     if (c =='\n')
     {
-#ifdef SWELL_SKIA_GDI
-      if (use_skia) flush_glyphs();
-#endif
       xpos=left_xpos; ypos+=lineh; is_start_of_line = true;
     }
     else if (c=='\r')  {} 
     else 
     {
-#ifdef SWELL_SKIA_GDI
-      // ============================================================
-      // PURE SKIA PATH: Handles everything when Skia is available.
-      // ============================================================
-      if (use_skia)
-      {
-        if (c != '\t')
-        {
-          float adv, ink_l, ink_r;
-          uint16_t gid = SWELL_SkiaMeasureUnichar(sf, c, &adv, &ink_l, &ink_r);
-          const int ha = (int)(adv + 0.5f);
-          const int char_h = (align&DT_SINGLELINE) ? (ascent-descent) : lineh;
-
-          // Background
-          if (bgmode==OPAQUE)
-            SWELL_SkiaFillRect(surface, xpos, ypos, ha, char_h, bgcol, 1.0f);
-
-          // Underline
-          if (doUl)
-          {
-            const int xw = wdl_max(1, (int)(ink_r - ink_l + 0.5f));
-            SWELL_SkiaDrawLine(surface, (float)xpos, (float)(ypos+ascent+1),
-                              (float)(xpos+xw), (float)(ypos+ascent+1), fgcol, 1.0f, 1);
-          }
-
-          // Batch glyph
-          if (batch_n >= SWELL_SKIA_GLYPH_BATCH) flush_glyphs();
-          batch_glyphs[batch_n] = gid;
-          batch_xpos[batch_n] = (float)xpos;
-          batch_n++;
-
-          // Bounding box
-          int rext = xpos + (int)(ink_r + 0.5f);
-          if (rext <= xpos) rext = xpos + ha;
-          if (rext > max_xpos) max_xpos = rext;
-          xpos += ha;
-
-          const int bext = ypos + ascent - descent;
-          if (max_ypos < bext) max_ypos = bext;
-          
-          continue; // Skip non-Skia path
-        }
-        else // c == '\t'
-        {
-          const int char_h = (align&DT_SINGLELINE) ? (ascent-descent) : lineh;
-          if (bgmode==OPAQUE)
-            SWELL_SkiaFillRect(surface, xpos, ypos, charw*5, char_h, bgcol, 1.0f);
-          xpos += charw*5;
-          const int bext = ypos+ascent-descent;
-          if (max_ypos < bext) max_ypos=bext;
-          continue; // Skip non-Skia path
-        }
-      }
-#endif
-
-      // ============================================================
-      // NON-SKIA PATH: Completely untouched as requested.
-      // ============================================================
       bool needr=true;
       if (needr && font)
       {
@@ -1500,39 +1638,19 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
           FT_GlyphSlot g = face->glyph;
           const int ha = g->metrics.horiAdvance/64;
           if (bgmode==OPAQUE)
-          {
-#ifdef SWELL_SKIA_GDI
-            if (!SWELL_SkiaFillRect(surface,xpos,ypos,ha,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f))
-#endif
-              LICE_FillRect(surface,xpos,ypos,ha,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
-          }
+            LICE_FillRect(surface,xpos,ypos,ha,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
   
           if (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
-          {
-#ifdef SWELL_SKIA_GDI
-            if (!SWELL_SkiaDrawGlyphMask(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,
-                  (const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,true))
-#endif
-              LICE_DrawMonoGlyph(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
-          }
-          else  // FT_PIXEL_MODE_GRAY (hopefully!)
-          {
-#ifdef SWELL_SKIA_GDI
-            if (!SWELL_SkiaDrawGlyphMask(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,
-                  (const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,false))
-#endif
-              LICE_DrawGlyphEx(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(LICE_pixel_chan *)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
-          }
+            LICE_DrawMonoGlyph(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
+          else  // FT_PIXEL_MODE_GRAY
+            LICE_DrawGlyphEx(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(LICE_pixel_chan *)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
+            
           if (doUl) 
           {
             int xw = g->metrics.width/64;
             if (xw > 1) xw--;
-#ifdef SWELL_SKIA_GDI
-            if (!SWELL_SkiaDrawLine(surface,(float)(xpos + g->metrics.horiBearingX/64),(float)(ypos+ascent+1),
-                  (float)(xpos + xw),(float)(ypos+ascent+1),fgcol,1.0f,1))
-#endif
-              LICE_Line(surface,xpos + g->metrics.horiBearingX/64,ypos+ascent+1,
-                                xpos + xw,ypos+ascent+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
+            LICE_Line(surface,xpos + g->metrics.horiBearingX/64,ypos+ascent+1,
+                                  xpos + xw,ypos+ascent+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
           }
   
           int rext = xpos + (g->metrics.width + g->metrics.horiBearingX)/64;
@@ -1551,12 +1669,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
         if (c=='\t') 
         {
           if (bgmode==OPAQUE)
-          {
-#ifdef SWELL_SKIA_GDI
-            if (!SWELL_SkiaFillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f))
-#endif
-              LICE_FillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
-          }
+            LICE_FillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
           xpos+=charw*5;
          
           const int bext = ypos+ascent-descent;
@@ -1565,21 +1678,10 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
         else 
         {
           if (bgmode==OPAQUE)
-          {
-#ifdef SWELL_SKIA_GDI
-            if (!SWELL_SkiaFillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f))
-#endif
-              LICE_FillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
-          }
+            LICE_FillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
           LICE_DrawChar(surface,xpos,ypos,c,fgcol,1.0f,LICE_BLIT_MODE_COPY);
           if (doUl)
-          {
-#ifdef SWELL_SKIA_GDI
-            if (!SWELL_SkiaDrawLine(surface,(float)xpos,(float)(ypos+(ascent-descent)+1),
-                  (float)(xpos+charw),(float)(ypos+(ascent-descent)+1),fgcol,1.0f,1))
-#endif
-              LICE_Line(surface,xpos,ypos+(ascent-descent)+1,xpos+charw,ypos+(ascent-descent)+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
-          }
+            LICE_Line(surface,xpos,ypos+(ascent-descent)+1,xpos+charw,ypos+(ascent-descent)+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
   
           const int bext=ypos+ascent-descent+(doUl ? 2:1);
           if (max_ypos < bext) max_ypos=bext;
@@ -1589,14 +1691,12 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
     }
     if(xpos>max_xpos)max_xpos=xpos;
   }
-#ifdef SWELL_SKIA_GDI
-  flush_glyphs();
-#endif
   if (surface==&clipbm)
     swell_DirtyContext(ct,clip_x1+left_xpos,clip_y1+start_ypos,clip_x1+max_xpos,clip_y1+max_ypos);
   else
     swell_DirtyContext(ct,left_xpos,start_ypos,max_xpos,max_ypos);
   return max_ypos - start_ypos;
+#endif
 }
 
 
