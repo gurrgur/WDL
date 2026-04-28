@@ -25,6 +25,11 @@
 #ifdef SWELL_LICE_GDI
 #ifndef SWELL_PROVIDED_BY_APP
 
+#ifdef SWELL_TARGET_SDL
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+#endif
+
 #include "swell.h"
 #include "swell-internal.h"
 #ifdef SWELL_SKIA_GDI
@@ -1428,6 +1433,53 @@ void SetTextColor(HDC ctx, int col)
 
 ////////// todo: some sort of HICON emul
 
+#ifdef SWELL_TARGET_SDL
+static HICON swell_load_lice_bitmap_from_sdl_surface(SDL_Surface *surf)
+{
+  if (!surf) return 0;
+
+  SDL_Surface *conv = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_RGBA32, 0);
+  SDL_FreeSurface(surf);
+  if (!conv) return 0;
+
+  HGDIOBJ__ *ret=NULL;
+  if (conv->w > 0 && conv->h > 0 && conv->pixels)
+  {
+    LICE_MemBitmap *bm = new LICE_MemBitmap(conv->w,conv->h);
+    LICE_pixel_chan *wr = bm ? (LICE_pixel_chan*)bm->getBits() : NULL;
+    if (wr)
+    {
+      const unsigned char *rd = (const unsigned char *)conv->pixels;
+      const int wradv = bm->getRowSpan()*4;
+      for (int y=0; y < conv->h; y++)
+      {
+        const unsigned char *src = rd;
+        LICE_pixel_chan *dst = wr;
+        for (int x=0; x < conv->w; x++)
+        {
+          dst[LICE_PIXEL_R] = src[0];
+          dst[LICE_PIXEL_G] = src[1];
+          dst[LICE_PIXEL_B] = src[2];
+          dst[LICE_PIXEL_A] = src[3];
+          dst += 4;
+          src += 4;
+        }
+        rd += conv->pitch;
+        wr += wradv;
+      }
+      ret=GDP_OBJECT_NEW();
+      ret->type=TYPE_BITMAP;
+      ret->alpha = 1.0f;
+      ret->wid=1;
+      ret->typedata = bm;
+    }
+    else delete bm;
+  }
+  SDL_FreeSurface(conv);
+  return (HICON)ret;
+}
+#endif
+
 HICON LoadNamedImage(const char *name, bool alphaFromMask)
 {
 #ifdef SWELL_TARGET_GDK
@@ -1502,6 +1554,35 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
   
 
 #endif
+#ifdef SWELL_TARGET_SDL
+  char buf[1024];
+  SDL_Surface *surf = NULL;
+  if (strstr(name,"/"))
+  {
+    lstrcpyn_safe(buf,name,sizeof(buf));
+    surf = IMG_Load(buf);
+  }
+  else
+  {
+    GetModuleFileName(NULL,buf,sizeof(buf));
+    WDL_remove_filepart(buf);
+    snprintf_append(buf,sizeof(buf),"/Resources/%s.png",name);
+    surf = IMG_Load(buf);
+    if (!surf)
+    {
+      WDL_remove_fileext(buf);
+      lstrcatn(buf,".ico",sizeof(buf));
+      surf = IMG_Load(buf);
+    }
+    if (!surf)
+    {
+      WDL_remove_fileext(buf);
+      lstrcatn(buf,".bmp",sizeof(buf));
+      surf = IMG_Load(buf);
+    }
+  }
+  if (surf) return swell_load_lice_bitmap_from_sdl_surface(surf);
+#endif
   return 0; // todo
 }
 
@@ -1557,7 +1638,24 @@ BOOL GetObject(HICON icon, int bmsz, void *_bm)
 
 void BitBltAlphaFromMem(HDC hdcOut, int x, int y, int w, int h, void *inbufptr, int inbuf_span, int inbuf_h, int xin, int yin, int mode, bool useAlphaChannel, float opacity)
 {
- // todo: use LICE_WrapperBitmap?
+  HDC__ *out = (HDC__ *)hdcOut;
+  if (!HDC_VALID(out) || !out->surface || !inbufptr || w <= 0 || h <= 0 || inbuf_span <= 0 || inbuf_h <= 0) return;
+
+  LICE_WrapperBitmap srcbm((LICE_pixel*)inbufptr,inbuf_span,inbuf_h,inbuf_span,false);
+#ifdef SWELL_SKIA_GDI
+  if (SWELL_SkiaDrawBitmap(out->surface,&srcbm,
+      x+out->surface_offs.x,y+out->surface_offs.y,w,h,
+      xin,yin,w,h,useAlphaChannel,opacity,false))
+  {
+    swell_DirtyContext(out,x,y,x+w,y+h);
+    return;
+  }
+#endif
+  LICE_Blit(out->surface,&srcbm,
+            x+out->surface_offs.x,y+out->surface_offs.y,
+            xin,yin,w,h,
+            opacity,LICE_BLIT_MODE_COPY|(useAlphaChannel?LICE_BLIT_USE_ALPHA:0));
+  swell_DirtyContext(out,x,y,x+w,y+h);
 }
 
 void BitBltAlpha(HDC hdcOut, int x, int y, int w, int h, HDC hdcIn, int xin, int yin, int mode, bool useAlphaChannel, float opacity)
