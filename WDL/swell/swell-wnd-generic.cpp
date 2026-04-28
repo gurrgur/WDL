@@ -1768,6 +1768,27 @@ static int editMeasureLineLength(HDC hdc, const char *str, int str_len)
   return tmp.right;
 }
 
+static int swell_accum_wheel_delta(int *accum, int delta, int div)
+{
+  if (div == 0) return 0;
+  if (!accum) return delta / div;
+  *accum += delta;
+  const int amt = *accum / div;
+  if (amt) *accum -= amt * div;
+  return amt;
+}
+
+static int swell_accum_wheel_delta_scaled(int *accum, int delta, int numer, int div)
+{
+  if (div == 0) return 0;
+  const int v = delta * numer;
+  if (!accum) return v / div;
+  if ((*accum < 0 && v > 0) || (*accum > 0 && v < 0)) *accum = 0;
+  *accum += v;
+  const int amt = *accum / div;
+  if (amt) *accum -= amt * div;
+  return amt;
+}
 
 int swell_getLineLength(const char *buf, int *post_skip, int wrap_maxwid, HDC hdc)
 {
@@ -3960,6 +3981,7 @@ struct listViewState
     m_owner_data_size = ownerData ? 0 : -1;
     m_last_row_height = 0;
     m_scroll_x=m_scroll_y=0;
+    m_wheel_accum_x=m_wheel_accum_y=0;
     m_capmode_state=LISTVIEW_CAP_NONE;
     m_capmode_data1=0;
     m_capmode_data2=0;
@@ -4024,7 +4046,7 @@ struct listViewState
   int m_selitem; // for single sel, or used for focus for multisel
 
   ListViewCapMode m_capmode_state;
-  int m_scroll_x,m_scroll_y, m_capmode_data1,m_capmode_data2;
+  int m_scroll_x,m_scroll_y, m_wheel_accum_x,m_wheel_accum_y, m_capmode_data1,m_capmode_data2;
   int m_extended_style;
 
   int m_fastclick_mask;
@@ -4227,24 +4249,31 @@ static LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
       if ((GetAsyncKeyState(VK_CONTROL)&0x8000) || (GetAsyncKeyState(VK_MENU)&0x8000)) break; // pass modified mousewheel to parent
 
       {
-        const int amt = ((short)HIWORD(wParam))/40;
-        if (amt && lvs)
+        if (lvs)
         {
           if ((GetAsyncKeyState(VK_SHIFT) ^ (msg==WM_MOUSEHWHEEL?0x8000:0))&0x8000)
           {
-            const int oldscroll = lvs->m_scroll_x;
-            lvs->m_scroll_x -= amt*4;
-            lvs->sanitizeScroll(hwnd);
-            if (lvs->m_scroll_x != oldscroll)
-              InvalidateRect(hwnd,NULL,FALSE);
+            const int amt = swell_accum_wheel_delta_scaled(&lvs->m_wheel_accum_x, (short)HIWORD(wParam), 4, 40);
+            if (amt)
+            {
+              const int oldscroll = lvs->m_scroll_x;
+              lvs->m_scroll_x -= amt;
+              lvs->sanitizeScroll(hwnd);
+              if (lvs->m_scroll_x != oldscroll)
+                InvalidateRect(hwnd,NULL,FALSE);
+            }
           }  
           else
           {
-            const int oldscroll = lvs->m_scroll_y;
-            lvs->m_scroll_y -= amt*lvs->m_last_row_height;
-            lvs->sanitizeScroll(hwnd);
-            if (lvs->m_scroll_y != oldscroll)
-              InvalidateRect(hwnd,NULL,FALSE);
+            const int amt = swell_accum_wheel_delta_scaled(&lvs->m_wheel_accum_y, (short)HIWORD(wParam), lvs->m_last_row_height, 40);
+            if (amt)
+            {
+              const int oldscroll = lvs->m_scroll_y;
+              lvs->m_scroll_y -= amt;
+              lvs->sanitizeScroll(hwnd);
+              if (lvs->m_scroll_y != oldscroll)
+                InvalidateRect(hwnd,NULL,FALSE);
+            }
           }
         }
       }
@@ -5440,6 +5469,7 @@ struct treeViewState
     m_sel=NULL;
     m_last_row_height=0;
     m_scroll_x=m_scroll_y=m_capmode=0;
+    m_wheel_accum_y=0;
     m_root.m_state = TVIS_EXPANDED;
     m_root.m_haschildren=true;
   }
@@ -5714,7 +5744,7 @@ next_item_in_parent:
   HTREEITEM m_sel;
   int m_last_row_height;
 
-  int m_scroll_x,m_scroll_y;
+  int m_scroll_x,m_scroll_y, m_wheel_accum_y;
 
   int m_capmode; // HIWORD is 0 for normal (then LOWORD gets 1 set if drag began), 1 for scroll (LOWORD has ypos)
 };
@@ -5729,11 +5759,11 @@ static LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
       if ((GetAsyncKeyState(VK_CONTROL)&0x8000) || (GetAsyncKeyState(VK_MENU)&0x8000)) break; // pass modified mousewheel to parent
 
       {
-        const int amt = ((short)HIWORD(wParam))/40;
+        const int amt = tvs ? swell_accum_wheel_delta_scaled(&tvs->m_wheel_accum_y, (short)HIWORD(wParam), tvs->m_last_row_height, 40) : 0;
         if (amt && tvs)
         {
           const int oldscroll = tvs->m_scroll_y;
-          tvs->m_scroll_y -= amt*tvs->m_last_row_height;
+          tvs->m_scroll_y -= amt;
           tvs->sanitizeScroll(hwnd);
           if (tvs->m_scroll_y != oldscroll)
             InvalidateRect(hwnd,NULL,FALSE);
