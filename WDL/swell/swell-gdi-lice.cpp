@@ -1200,7 +1200,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 {
 #ifdef SWELL_SKIA_GDI
   // ========================================================================
-  // PURE SKIA CODE PATH
+  // PURE SKIA BACKEND (NO LICE / NO FALLBACK FONT INTERLEAVING)
   // ========================================================================
   WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
   WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
@@ -1209,13 +1209,12 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
   HDC__ *ct=(HDC__ *)ctx;
   if (WDL_NOT_NORMALLY(!r)) return 0;
 
-  HGDIOBJ__  *font  = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont,TYPE_FONT) ? ct->curfont : SWELL_GetDefaultFont();
-  void *sf = font ? font->skia_font : NULL;
-  
+  // Direct Skia font access; skip if unavailable to maintain pure Skia path
+  void *sf = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont, TYPE_FONT) ? ct->curfont->skia_font : NULL;
   int lineh = 8, charw = 8, ascent = 8, descent = 0;
   if (sf) {
     SWELL_SkiaGetFontMetrics(sf, &ascent, &descent, &lineh, &charw);
-    descent = -descent; // negate to match sign convention used below
+    descent = -descent; // negate to match sign convention
   }
 
   // --- CALCRECT MEASUREMENT ---
@@ -1257,8 +1256,9 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
           if (bext > r->bottom) r->bottom = bext;
           continue;
         }
-        // Fallback for missing font or tab
-        xpos += c=='\t' ? charw*5 : charw;
+        // Pure Skia fallback for tabs or missing glyph
+        int w = (c=='\t') ? charw*5 : charw;
+        xpos += w;
         int bext = r->top + ypos + ascent - descent;
         if (bext > r->bottom) r->bottom = bext;
         if (r->left+xpos>r->right) r->right=r->left+xpos;
@@ -1373,6 +1373,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
     else if (c=='\r') { }
     else 
     {
+      // Pure Skia rendering path
       if (skia_canvas_ok && sf && c != '\t')
       {
         float adv, ink_r;
@@ -1403,28 +1404,16 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
       }
       else
       {
-        // Fallback for tabs or when Skia canvas isn't available
-        if (c=='\t')
-        {
-          if (bgmode==OPAQUE)
-            SWELL_SkiaFillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f);
-          xpos+=charw*5;
-          const int bext = ypos+ascent-descent;
-          if (max_ypos < bext) max_ypos=bext;
-        }
-        else
-        {
-          if (bgmode==OPAQUE)
-            SWELL_SkiaFillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f);
-          // Fallback glyph drawing (rarely hit when Skia is properly configured)
-          LICE_DrawChar(surface,xpos,ypos,c,fgcol,1.0f,LICE_BLIT_MODE_COPY);
-          if (doUl)
-            LICE_Line(surface,xpos,ypos+(ascent-descent)+1,xpos+charw,ypos+(ascent-descent)+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
-          
-          const int bext=ypos+ascent-descent+(doUl ? 2:1);
-          if (max_ypos < bext) max_ypos=bext;
-          xpos+=charw;
-        }
+        // Skia-only fallback for tabs or missing sf (no LICE calls)
+        int w = (c=='\t') ? charw*5 : charw;
+        if (bgmode==OPAQUE)
+          SWELL_SkiaFillRect(surface,xpos,ypos,w,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f);
+        if (doUl)
+          SWELL_SkiaDrawLine(surface,(float)xpos,(float)(ypos+(ascent-descent)+1),
+                            (float)(xpos+w),(float)(ypos+(ascent-descent)+1),fgcol,1.0f,1);
+        xpos += w;
+        const int bext = ypos + ascent - descent + (doUl ? 2 : 1);
+        if (max_ypos < bext) max_ypos = bext;
       }
     }
     if(xpos>max_xpos)max_xpos=xpos;
@@ -1440,7 +1429,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
 #else
   // ========================================================================
-  // ORIGINAL NON-SKIA CODE PATH (UNCHANGED LOGIC)
+  // ORIGINAL NON-SKIA CODE PATH (UNCHANGED)
   // ========================================================================
   WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
   WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
