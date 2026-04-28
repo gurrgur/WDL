@@ -598,7 +598,13 @@ bool SWELL_SkiaGetFontMetrics(void *skia_font, int *ascent, int *descent, int *l
 uint16_t SWELL_SkiaMeasureUnichar(void *skia_font, int codepoint,
                                   float *advance, float *ink_l, float *ink_r)
 {
-  if (!skia_font) return 0;
+  if (!skia_font)
+  {
+    if (advance) *advance = 0.0f;
+    if (ink_l)   *ink_l   = 0.0f;
+    if (ink_r)   *ink_r   = 0.0f;
+    return 0;
+  }
 
   const SkFont *font = static_cast<const SkFont *>(skia_font);
 
@@ -606,14 +612,12 @@ uint16_t SWELL_SkiaMeasureUnichar(void *skia_font, int codepoint,
   SkRect bounds = SkRect::MakeEmpty();
   SkScalar adv = 0.0f;
 
-  if (gid != 0)
-  {
-    font->getWidthsBounds(
-        SkSpan<const SkGlyphID>(&gid, 1),
-        SkSpan<SkScalar>(&adv, 1),
-        SkSpan<SkRect>(&bounds, 1),
-        nullptr);
-  }
+  // Measure glyph 0 too. It is the font's .notdef glyph and may have a valid advance.
+  font->getWidthsBounds(
+      SkSpan<const SkGlyphID>(&gid, 1),
+      SkSpan<SkScalar>(&adv, 1),
+      SkSpan<SkRect>(&bounds, 1),
+      nullptr);
 
   if (advance) *advance = adv;
   if (ink_l)   *ink_l   = bounds.fLeft;
