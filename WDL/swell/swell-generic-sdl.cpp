@@ -1023,12 +1023,21 @@ static void swell_sdl_send_mouse(HWND hwnd, UINT msg, WPARAM wParam, POINT scree
   hwnd->Release();
 }
 
-static int swell_sdl_wheel_delta(double amt, double scale, double *rem)
+static int swell_sdl_wheel_delta(double amt, double scale, int axis, bool smooth)
 {
-  const double v = amt * scale + (rem ? *rem : 0.0);
-  const int iv = (int)v;
-  if (rem) *rem = v - iv;
-  return iv;
+  static double s_accum[2][2];
+  const double smooth_min_amt = 0.25;
+  if (scale <= 0.0) return 0;
+  if (axis < 0 || axis > 1) axis = 0;
+  double *accum = &s_accum[axis][smooth ? 1 : 0];
+  if ((*accum < 0.0 && amt > 0.0) || (*accum > 0.0 && amt < 0.0))
+    *accum = 0.0;
+  *accum += amt;
+  if (smooth && *accum > -smooth_min_amt && *accum < smooth_min_amt)
+    return 0;
+  const int delta = (int)(*accum * scale);
+  if (delta) *accum -= delta / scale;
+  return delta;
 }
 
 static void swell_sdl_send_wheel(HWND hwnd, UINT msg, int delta, POINT screen_pt)
@@ -1038,6 +1047,50 @@ static void swell_sdl_send_wheel(HWND hwnd, UINT msg, int delta, POINT screen_pt
   hwnd->Retain();
   SWELL_SendMouseMessage(hwnd, msg, MAKEWPARAM(swell_sdl_mods(), delta), MAKELPARAM(screen_pt.x, screen_pt.y));
   hwnd->Release();
+}
+
+struct swell_sdl_pending_wheel
+{
+  HWND hwnd;
+  POINT screen_pt;
+  double amt;
+};
+
+static swell_sdl_pending_wheel s_sdl_pending_smooth_wheel[2];
+
+static void swell_sdl_queue_smooth_wheel(HWND hwnd, int axis, double amt, POINT screen_pt)
+{
+  if (!hwnd || amt == 0.0) return;
+  if (axis < 0 || axis > 1) axis = 0;
+
+  swell_sdl_pending_wheel *p = &s_sdl_pending_smooth_wheel[axis];
+  if (p->hwnd && p->hwnd != hwnd)
+  {
+    p->hwnd->Release();
+    memset(p, 0, sizeof(*p));
+  }
+  if (!p->hwnd)
+  {
+    hwnd->Retain();
+    p->hwnd = hwnd;
+  }
+  p->screen_pt = screen_pt;
+  p->amt += amt;
+}
+
+static void swell_sdl_flush_smooth_wheel()
+{
+  const UINT msgs[2] = { WM_MOUSEHWHEEL, WM_MOUSEWHEEL };
+  for (int axis = 0; axis < 2; axis ++)
+  {
+    swell_sdl_pending_wheel *p = &s_sdl_pending_smooth_wheel[axis];
+    if (p->hwnd)
+    {
+      swell_sdl_send_wheel(p->hwnd, msgs[axis], swell_sdl_wheel_delta(p->amt, 32.0, axis, true), p->screen_pt);
+      p->hwnd->Release();
+      memset(p, 0, sizeof(*p));
+    }
+  }
 }
 
 static void swell_sdl_on_event(const SDL_Event *evt)
@@ -1099,7 +1152,6 @@ static void swell_sdl_on_event(const SDL_Event *evt)
     break;
     case SDL_MOUSEWHEEL:
     {
-      static double s_rem_x, s_rem_y;
       HWND hwnd = swell_sdl_hwnd_from_id(evt->wheel.windowID);
       POINT local_pt;
       SDL_GetMouseState(&local_pt.x, &local_pt.y);
@@ -1111,12 +1163,14 @@ static void swell_sdl_on_event(const SDL_Event *evt)
         double x = evt->wheel.x;
         double y = evt->wheel.y;
         double scale = 120.0;
+        bool smooth = false;
 #if SDL_VERSION_ATLEAST(2,0,18)
         if (evt->wheel.preciseX != (float)evt->wheel.x || evt->wheel.preciseY != (float)evt->wheel.y)
         {
           x = evt->wheel.preciseX;
           y = evt->wheel.preciseY;
           scale = 16.0;
+          smooth = true;
         }
 #endif
         if (evt->wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
@@ -1124,8 +1178,16 @@ static void swell_sdl_on_event(const SDL_Event *evt)
           x = -x;
           y = -y;
         }
-        swell_sdl_send_wheel(hwnd, WM_MOUSEHWHEEL, swell_sdl_wheel_delta(-x, scale, &s_rem_x), screen_pt);
-        swell_sdl_send_wheel(hwnd, WM_MOUSEWHEEL, swell_sdl_wheel_delta(y, scale, &s_rem_y), screen_pt);
+        if (smooth)
+        {
+          swell_sdl_queue_smooth_wheel(hwnd, 0, -x, screen_pt);
+          swell_sdl_queue_smooth_wheel(hwnd, 1, y, screen_pt);
+        }
+        else
+        {
+          swell_sdl_send_wheel(hwnd, WM_MOUSEHWHEEL, swell_sdl_wheel_delta(-x, scale, 0, false), screen_pt);
+          swell_sdl_send_wheel(hwnd, WM_MOUSEWHEEL, swell_sdl_wheel_delta(y, scale, 1, false), screen_pt);
+        }
       }
     }
     break;
@@ -1215,6 +1277,7 @@ void SWELL_RunEvents()
   }
   s_sdl_processing_events = false;
 
+  swell_sdl_flush_smooth_wheel();
   swell_sdl_flush_paints();
 }
 
