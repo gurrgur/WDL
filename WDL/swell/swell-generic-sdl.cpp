@@ -1023,6 +1023,23 @@ static void swell_sdl_send_mouse(HWND hwnd, UINT msg, WPARAM wParam, POINT scree
   hwnd->Release();
 }
 
+static int swell_sdl_wheel_delta(double amt, double scale, double *rem)
+{
+  const double v = amt * scale + (rem ? *rem : 0.0);
+  const int iv = (int)v;
+  if (rem) *rem = v - iv;
+  return iv;
+}
+
+static void swell_sdl_send_wheel(HWND hwnd, UINT msg, int delta, POINT screen_pt)
+{
+  if (!hwnd || !delta) return;
+  s_last_message_pos = MAKELONG(((int)screen_pt.x)&0xffff, ((int)screen_pt.y)&0xffff);
+  hwnd->Retain();
+  SWELL_SendMouseMessage(hwnd, msg, MAKEWPARAM(swell_sdl_mods(), delta), MAKELPARAM(screen_pt.x, screen_pt.y));
+  hwnd->Release();
+}
+
 static void swell_sdl_on_event(const SDL_Event *evt)
 {
   s_cur_evt = *evt;
@@ -1082,6 +1099,7 @@ static void swell_sdl_on_event(const SDL_Event *evt)
     break;
     case SDL_MOUSEWHEEL:
     {
+      static double s_rem_x, s_rem_y;
       HWND hwnd = swell_sdl_hwnd_from_id(evt->wheel.windowID);
       POINT local_pt;
       SDL_GetMouseState(&local_pt.x, &local_pt.y);
@@ -1090,10 +1108,24 @@ static void swell_sdl_on_event(const SDL_Event *evt)
       hwnd = swell_sdl_mouse_target(hwnd, local_pt.x, local_pt.y);
       if (hwnd)
       {
-        s_last_message_pos = MAKELONG(((int)screen_pt.x)&0xffff, ((int)screen_pt.y)&0xffff);
-        hwnd->Retain();
-        SWELL_SendMouseMessage(hwnd, WM_MOUSEWHEEL, MAKEWPARAM(swell_sdl_mods(), evt->wheel.y * 120), MAKELPARAM(screen_pt.x, screen_pt.y));
-        hwnd->Release();
+        double x = evt->wheel.x;
+        double y = evt->wheel.y;
+        double scale = 120.0;
+#if SDL_VERSION_ATLEAST(2,0,18)
+        if (evt->wheel.preciseX != (float)evt->wheel.x || evt->wheel.preciseY != (float)evt->wheel.y)
+        {
+          x = evt->wheel.preciseX;
+          y = evt->wheel.preciseY;
+          scale = 16.0;
+        }
+#endif
+        if (evt->wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+        {
+          x = -x;
+          y = -y;
+        }
+        swell_sdl_send_wheel(hwnd, WM_MOUSEHWHEEL, swell_sdl_wheel_delta(-x, scale, &s_rem_x), screen_pt);
+        swell_sdl_send_wheel(hwnd, WM_MOUSEWHEEL, swell_sdl_wheel_delta(y, scale, &s_rem_y), screen_pt);
       }
     }
     break;
