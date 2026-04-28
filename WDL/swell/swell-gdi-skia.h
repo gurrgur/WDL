@@ -51,6 +51,17 @@ bool SWELL_SkiaDrawGlyphMask(LICE_IBitmap *bitmap, int x, int y, unsigned int li
 bool SWELL_SkiaPushClipRegion(LICE_IBitmap *bitmap);
 bool SWELL_SkiaSetClipRegion(LICE_IBitmap *bitmap, const RECT *r, int addx, int addy);
 bool SWELL_SkiaPopClipRegion(LICE_IBitmap *bitmap);
+
+// SkFont management — opaque handle is a heap-allocated SkFont*
+void *SWELL_SkiaFontFromFile(const char *path, int index, float pixel_size);
+void SWELL_SkiaReleaseFont(void *skia_font);
+bool SWELL_SkiaGetFontMetrics(void *skia_font, int *ascent, int *descent, int *lineh, int *charw);
+// Returns glyph ID and fills advance/ink extents (all in pixels). ink_l/ink_r may be NULL.
+uint16_t SWELL_SkiaMeasureUnichar(void *skia_font, int codepoint, float *advance, float *ink_l, float *ink_r);
+// Draws a run of pre-collected glyphs at their x positions against a shared baseline y.
+bool SWELL_SkiaDrawGlyphRun(LICE_IBitmap *bitmap, void *skia_font,
+                             const uint16_t *glyphs, const float *xpos, int count,
+                             float baseline_y, unsigned int lice_color);
 #endif
 
 #endif

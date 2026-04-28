@@ -12,6 +12,10 @@
 
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColorType.h"
+#include "include/core/SkData.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkFontMetrics.h"
+#include "include/core/SkFontMgr.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkPaint.h"
@@ -19,7 +23,12 @@
 #include "include/core/SkPixmap.h"
 #include "include/core/SkRect.h"
 #include "include/core/SkSamplingOptions.h"
+#include "include/core/SkSpan.h"
 #include "include/core/SkSurface.h"
+#include "include/core/SkTypeface.h"
+#ifdef SWELL_FONTCONFIG
+#include "include/ports/SkFontMgr_fontconfig.h"
+#endif
 
 #include "swell.h"
 #include "swell-internal.h"
@@ -519,6 +528,135 @@ bool SWELL_SkiaPopClipRegion(LICE_IBitmap *bitmap)
   SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, NULL, NULL, NULL, NULL);
   if (!canvas) return false;
   canvas->restore();
+  return true;
+}
+
+static sk_sp<SkFontMgr> SWELL_SkiaFontMgr()
+{
+#if defined(SK_FONTMGR_FREETYPE_EMPTY_AVAILABLE)
+  static SkFontMgr* s_mgr = SkFontMgr_New_Custom_Empty().release();
+  return sk_ref_sp(s_mgr);
+#else
+  // Prefer returning your app/platform font manager here.
+  // SkFontMgr::RefEmpty() generally won't load arbitrary font files.
+  return nullptr;
+#endif
+}
+
+void *SWELL_SkiaFontFromFile(const char *path, int index, float pixel_size)
+{
+  if (!path || !path[0] || pixel_size <= 0.0f) return nullptr;
+
+  sk_sp<SkFontMgr> fm = SWELL_SkiaFontMgr();
+  if (!fm) return nullptr;
+
+  sk_sp<SkTypeface> tf = fm->makeFromFile(path, index);
+  if (!tf) return nullptr;
+
+  SkFont *font = new SkFont(std::move(tf), pixel_size);
+  font->setEdging(SkFont::Edging::kAntiAlias);
+  font->setHinting(SkFontHinting::kSlight);
+  font->setSubpixel(true);
+
+  return font;
+}
+
+void SWELL_SkiaReleaseFont(void *skia_font)
+{
+  delete (SkFont *)skia_font;
+}
+
+bool SWELL_SkiaGetFontMetrics(void *skia_font, int *ascent, int *descent, int *lineh, int *charw)
+{
+  if (!skia_font) return false;
+
+  const SkFont *font = static_cast<const SkFont *>(skia_font);
+
+  SkFontMetrics m;
+  font->getMetrics(&m);
+
+  const int asc = static_cast<int>(-m.fAscent + 0.5f);
+  const int des = static_cast<int>( m.fDescent + 0.5f);
+
+  if (ascent)  *ascent  = asc;
+  if (descent) *descent = des;
+
+  if (lineh)
+    *lineh = static_cast<int>(-m.fAscent + m.fDescent + m.fLeading + 0.5f);
+
+  if (charw)
+  {
+    SkGlyphID x_glyph = font->unicharToGlyph('x');
+    SkScalar x_advance = x_glyph ? font->getWidth(x_glyph) : 0;
+
+    *charw = wdl_max(1, static_cast<int>(x_advance + 0.5f));
+  }
+
+  return true;
+}
+
+uint16_t SWELL_SkiaMeasureUnichar(void *skia_font, int codepoint,
+                                  float *advance, float *ink_l, float *ink_r)
+{
+  if (!skia_font) return 0;
+
+  const SkFont *font = static_cast<const SkFont *>(skia_font);
+
+  SkGlyphID gid = font->unicharToGlyph(codepoint);
+  SkRect bounds = SkRect::MakeEmpty();
+  SkScalar adv = 0.0f;
+
+  if (gid != 0)
+  {
+    font->getWidthsBounds(
+        SkSpan<const SkGlyphID>(&gid, 1),
+        SkSpan<SkScalar>(&adv, 1),
+        SkSpan<SkRect>(&bounds, 1),
+        nullptr);
+  }
+
+  if (advance) *advance = adv;
+  if (ink_l)   *ink_l   = bounds.fLeft;
+  if (ink_r)   *ink_r   = bounds.fRight;
+
+  return static_cast<uint16_t>(gid);
+}
+
+bool SWELL_SkiaDrawGlyphRun(LICE_IBitmap *bitmap, void *skia_font,
+                             const uint16_t *glyphs, const float *xpos, int count,
+                             float baseline_y, unsigned int lice_color)
+{
+  if (!bitmap || !skia_font || !glyphs || !xpos || count <= 0) return false;
+
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
+  if (!canvas) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
+
+  SkPoint pos_buf[256];
+  SkPoint *positions = count <= 256 ? pos_buf : new SkPoint[count];
+
+  const float dy = baseline_y + (float)yoff;
+  const float dx = (float)xoff;
+
+  for (int i = 0; i < count; i++)
+    positions[i] = SkPoint::Make(xpos[i] + dx, dy);
+
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  paint.setColor(swell_skia_color_from_lice(lice_color, 1.0f));
+  paint.setBlendMode(SkBlendMode::kSrcOver);
+
+  canvas->drawGlyphs(
+      SkSpan<const SkGlyphID>((const SkGlyphID *)glyphs, count),
+      SkSpan<const SkPoint>(positions, count),
+      SkPoint::Make(0.0f, 0.0f),
+      *(const SkFont *)skia_font,
+      paint);
+
+  if (positions != pos_buf) delete[] positions;
   return true;
 }
 

@@ -977,6 +977,9 @@ struct HGDIOBJ__
   struct HGDIOBJ__ *_next;
   bool _infreelist;
   void *typedata; // font: FT_Face, bitmap: LICE_IBitmap
+#ifdef SWELL_SKIA_GDI
+  void *skia_font; // SkFont* (heap-allocated), only for TYPE_FONT
+#endif
 };
 
 

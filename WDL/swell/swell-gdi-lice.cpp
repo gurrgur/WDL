@@ -417,6 +417,9 @@ static HFONT swell_CreateFontImpl(int lfHeight, int lfWidth, int lfEscapement, i
   font->typedata = NULL;
   font->type=TYPE_FONT;
   font->alpha = 1.0f;
+#ifdef SWELL_SKIA_GDI
+  font->skia_font = NULL;
+#endif
 #ifdef SWELL_FREETYPE
   if (!s_freetype_failed && !s_freetype) 
   {
@@ -448,7 +451,18 @@ static HFONT swell_CreateFontImpl(int lfHeight, int lfWidth, int lfEscapement, i
       face = ent->m_face;
       swell_last_font_filename = ent->m_fndesc;
       FT_Reference_Face(face);
-      if (x < cache.GetSize()-1) 
+#ifdef SWELL_SKIA_GDI
+      {
+        char sk_path[1024];
+        lstrcpyn_safe(sk_path, ent->m_fndesc, sizeof(sk_path));
+        int sk_idx = 0;
+        char *idx_marker = strstr(sk_path, " <");
+        if (idx_marker) { *idx_marker = '\0'; sk_idx = atoi(idx_marker + 2); }
+        font->skia_font = sk_path[0] ?
+          SWELL_SkiaFontFromFile(sk_path, sk_idx, (float)face->size->metrics.y_ppem) : NULL;
+      }
+#endif
+      if (x < cache.GetSize()-1)
       {
         cache.Delete(x);
         cache.Add(ent); // make this cache entry most recent
@@ -557,12 +571,6 @@ static HFONT swell_CreateFontImpl(int lfHeight, int lfWidth, int lfEscapement, i
 
     if (face)
     {
-      if (face_idx) snprintf_append(face_fn,sizeof(face_fn)," <%d>",face_idx);
-      fontConfigCacheEnt *ce = new fontConfigCacheEnt(lfFaceName?lfFaceName:"",cache_flag,lfWidth,lfHeight,face, face_fn);
-      cache.Add(ce);
-      if (cache.GetSize()>SWELL_FREETYPE_CACHE_SIZE) cache.Delete(0,true);
-      swell_last_font_filename = ce->m_fndesc;
-
       int hf64;
       if (lfHeight > 0)
         // scale point size so that the height fit in this many pixels
@@ -571,6 +579,16 @@ static HFONT swell_CreateFontImpl(int lfHeight, int lfWidth, int lfEscapement, i
         hf64 = -lfHeight * 64;
 
       FT_Set_Char_Size(face,lfWidth*64, hf64,0,0);
+
+#ifdef SWELL_SKIA_GDI
+      font->skia_font = face_fn[0] ? SWELL_SkiaFontFromFile(face_fn, face_idx, hf64 / 64.0f) : NULL;
+#endif
+
+      if (face_idx) snprintf_append(face_fn,sizeof(face_fn)," <%d>",face_idx);
+      fontConfigCacheEnt *ce = new fontConfigCacheEnt(lfFaceName?lfFaceName:"",cache_flag,lfWidth,lfHeight,face, face_fn);
+      cache.Add(ce);
+      if (cache.GetSize()>SWELL_FREETYPE_CACHE_SIZE) cache.Delete(0,true);
+      swell_last_font_filename = ce->m_fndesc;
     }
   }
   font->typedata = face;
@@ -624,6 +642,9 @@ void DeleteObject(HGDIOBJ pen)
       {
         if (p->type == TYPE_FONT)
         {
+#ifdef SWELL_SKIA_GDI
+          if (p->skia_font) { SWELL_SkiaReleaseFont(p->skia_font); p->skia_font = NULL; }
+#endif
 #ifdef SWELL_FREETYPE
           if (p->typedata)
           {
@@ -1142,8 +1163,22 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
   }
   if (!HDC_VALID(ct)||WDL_NOT_NORMALLY(!tm)) return 0;
 
-#ifdef SWELL_FREETYPE
   HGDIOBJ__  *font  = HGDIOBJ_VALID(ct->curfont,TYPE_FONT) ? ct->curfont : SWELL_GetDefaultFont();
+
+#ifdef SWELL_SKIA_GDI
+  if (font && font->skia_font)
+  {
+    int asc, des, lh, cw;
+    SWELL_SkiaGetFontMetrics(font->skia_font, &asc, &des, &lh, &cw);
+    tm->tmAscent = asc;
+    tm->tmDescent = des;
+    tm->tmHeight = asc + des;
+    tm->tmInternalLeading = wdl_max(0, lh - (asc + des));
+    tm->tmAveCharWidth = cw;
+    return 1;
+  }
+#endif
+#ifdef SWELL_FREETYPE
   if (font && font->typedata)
   {
     FT_Face face=(FT_Face) font->typedata;
@@ -1176,12 +1211,25 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
   HGDIOBJ__  *font  = NULL;
   int ascent=8, descent=0;
-#ifdef SWELL_FREETYPE
+#if defined(SWELL_FREETYPE) || defined(SWELL_SKIA_GDI)
   font  = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont,TYPE_FONT) ? ct->curfont : SWELL_GetDefaultFont();
-  FT_Face face = NULL;
-  if (font && font->typedata) 
+#endif
+#ifdef SWELL_SKIA_GDI
+  void *sf = font ? font->skia_font : NULL;
+  if (sf)
   {
-    face=(FT_Face)font->typedata;
+    SWELL_SkiaGetFontMetrics(sf, &ascent, &descent, &lineh, &charw);
+    descent = -descent; // negate to match the FreeType sign convention used below
+  }
+#endif
+#ifdef SWELL_FREETYPE
+  FT_Face face = font && font->typedata ? (FT_Face)font->typedata : NULL;
+  if (face
+#ifdef SWELL_SKIA_GDI
+      && !sf
+#endif
+     )
+  {
     lineh = FT_MulFix(face->height, face->size->metrics.y_scale)/64;
     ascent = FT_MulFix(face->ascender, face->size->metrics.y_scale)/64;
     descent = FT_MulFix(face->descender, face->size->metrics.y_scale)/64;
@@ -1222,6 +1270,22 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
       {
         if (font)
         {
+#ifdef SWELL_SKIA_GDI
+          if (sf && c != '\t')
+          {
+            float adv, ink_r;
+            SWELL_SkiaMeasureUnichar(sf, c, &adv, NULL, &ink_r);
+            int rext = xpos;
+            if ((align&(DT_BOTTOM|DT_VCENTER|DT_CENTER|DT_RIGHT))!=DT_RIGHT)
+              rext += (int)(ink_r + 0.5f);
+            xpos += (int)(adv + 0.5f);
+            if (rext<xpos) rext=xpos;
+            if (r->left+rext > r->right) r->right = r->left+rext;
+            int bext = r->top + ypos + ascent - descent;
+            if (bext > r->bottom) r->bottom = bext;
+            continue;
+          }
+#endif
 #ifdef SWELL_FREETYPE
           if (c != '\t' && !FT_Load_Char(face, c, SWELL_FREETYPE_LOAD_FLAGS) && face->glyph)
           {
@@ -1303,6 +1367,20 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
   bool in_prefix=false;
   bool is_start_of_line = !(align & DT_SINGLELINE);
 
+#ifdef SWELL_SKIA_GDI
+  const bool skia_canvas_ok = sf && SWELL_GetSkiaCanvasFromBitmap(surface);
+  enum { SWELL_SKIA_GLYPH_BATCH = 512 };
+  uint16_t batch_glyphs[SWELL_SKIA_GLYPH_BATCH];
+  float batch_xpos[SWELL_SKIA_GLYPH_BATCH];
+  int batch_n = 0;
+  const auto flush_glyphs = [&]() {
+    if (batch_n > 0)
+      SWELL_SkiaDrawGlyphRun(surface, sf, batch_glyphs, batch_xpos, batch_n,
+                              (float)(ypos + ascent), fgcol);
+    batch_n = 0;
+  };
+#endif
+
   while (buflen && *buf)
   {
     if (is_start_of_line)
@@ -1343,12 +1421,45 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
     if (c == '\n' && (align & DT_SINGLELINE)) c=' ';
 
-    if (c =='\n') { xpos=left_xpos; ypos+=lineh; is_start_of_line = true; }
+    if (c =='\n')
+    {
+#ifdef SWELL_SKIA_GDI
+      flush_glyphs();
+#endif
+      xpos=left_xpos; ypos+=lineh; is_start_of_line = true;
+    }
     else if (c=='\r')  {} 
     else 
     {
       bool needr=true;
-      if (font)
+#ifdef SWELL_SKIA_GDI
+      if (skia_canvas_ok && sf && c != '\t')
+      {
+        float adv, ink_r;
+        uint16_t gid = SWELL_SkiaMeasureUnichar(sf, c, &adv, NULL, &ink_r);
+        const int ha = (int)(adv + 0.5f);
+        if (bgmode==OPAQUE)
+          SWELL_SkiaFillRect(surface,xpos,ypos,ha,(align&DT_SINGLELINE)?(ascent-descent):lineh,bgcol,1.0f);
+        if (doUl)
+        {
+          const int xw = wdl_max(1, (int)(ink_r + 0.5f) - 1);
+          SWELL_SkiaDrawLine(surface,(float)xpos,(float)(ypos+ascent+1),
+                            (float)(xpos+xw),(float)(ypos+ascent+1),fgcol,1.0f,1);
+        }
+        if (batch_n >= SWELL_SKIA_GLYPH_BATCH) flush_glyphs();
+        batch_glyphs[batch_n] = gid;
+        batch_xpos[batch_n] = (float)xpos;
+        batch_n++;
+        int rext = xpos + (int)(ink_r + 0.5f);
+        if (rext <= xpos) rext = xpos + ha;
+        if (rext > max_xpos) max_xpos = rext;
+        xpos += ha;
+        const int bext = ypos + ascent - descent;
+        if (max_ypos < bext) max_ypos = bext;
+        needr = false;
+      }
+#endif
+      if (needr && font)
       {
 #ifdef SWELL_FREETYPE
         if (c != '\t' && !FT_Load_Char(face, c, FT_LOAD_RENDER | SWELL_FREETYPE_LOAD_FLAGS) && face->glyph)
@@ -1445,6 +1556,9 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
     }
     if(xpos>max_xpos)max_xpos=xpos;
   }
+#ifdef SWELL_SKIA_GDI
+  flush_glyphs();
+#endif
   if (surface==&clipbm)
     swell_DirtyContext(ct,clip_x1+left_xpos,clip_y1+start_ypos,clip_x1+max_xpos,clip_y1+max_ypos);
   else
