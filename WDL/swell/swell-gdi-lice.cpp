@@ -1199,7 +1199,6 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 {
   WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
-  // if DT_CALCRECT and DT_WORDBREAK, rect must be provided
   WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
     (r && r->right > r->left && r->bottom > r->top));
 
@@ -1369,10 +1368,13 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
 #ifdef SWELL_SKIA_GDI
   const bool skia_canvas_ok = sf && SWELL_GetSkiaCanvasFromBitmap(surface);
+  const bool use_skia = skia_canvas_ok;
+  
   enum { SWELL_SKIA_GLYPH_BATCH = 512 };
   uint16_t batch_glyphs[SWELL_SKIA_GLYPH_BATCH];
   float batch_xpos[SWELL_SKIA_GLYPH_BATCH];
   int batch_n = 0;
+  
   const auto flush_glyphs = [&]() {
     if (batch_n > 0)
       SWELL_SkiaDrawGlyphRun(surface, sf, batch_glyphs, batch_xpos, batch_n,
@@ -1424,41 +1426,72 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
     if (c =='\n')
     {
 #ifdef SWELL_SKIA_GDI
-      flush_glyphs();
+      if (use_skia) flush_glyphs();
 #endif
       xpos=left_xpos; ypos+=lineh; is_start_of_line = true;
     }
     else if (c=='\r')  {} 
     else 
     {
-      bool needr=true;
 #ifdef SWELL_SKIA_GDI
-      if (skia_canvas_ok && sf && c != '\t')
+      // ============================================================
+      // PURE SKIA PATH: Handles everything when Skia is available.
+      // ============================================================
+      if (use_skia)
       {
-        float adv, ink_r;
-        uint16_t gid = SWELL_SkiaMeasureUnichar(sf, c, &adv, NULL, &ink_r);
-        const int ha = (int)(adv + 0.5f);
-        if (bgmode==OPAQUE)
-          SWELL_SkiaFillRect(surface,xpos,ypos,ha,(align&DT_SINGLELINE)?(ascent-descent):lineh,bgcol,1.0f);
-        if (doUl)
+        if (c != '\t')
         {
-          const int xw = wdl_max(1, (int)(ink_r + 0.5f) - 1);
-          SWELL_SkiaDrawLine(surface,(float)xpos,(float)(ypos+ascent+1),
-                            (float)(xpos+xw),(float)(ypos+ascent+1),fgcol,1.0f,1);
+          float adv, ink_l, ink_r;
+          uint16_t gid = SWELL_SkiaMeasureUnichar(sf, c, &adv, &ink_l, &ink_r);
+          const int ha = (int)(adv + 0.5f);
+          const int char_h = (align&DT_SINGLELINE) ? (ascent-descent) : lineh;
+
+          // Background
+          if (bgmode==OPAQUE)
+            SWELL_SkiaFillRect(surface, xpos, ypos, ha, char_h, bgcol, 1.0f);
+
+          // Underline
+          if (doUl)
+          {
+            const int xw = wdl_max(1, (int)(ink_r - ink_l + 0.5f));
+            SWELL_SkiaDrawLine(surface, (float)xpos, (float)(ypos+ascent+1),
+                              (float)(xpos+xw), (float)(ypos+ascent+1), fgcol, 1.0f, 1);
+          }
+
+          // Batch glyph
+          if (batch_n >= SWELL_SKIA_GLYPH_BATCH) flush_glyphs();
+          batch_glyphs[batch_n] = gid;
+          batch_xpos[batch_n] = (float)xpos;
+          batch_n++;
+
+          // Bounding box
+          int rext = xpos + (int)(ink_r + 0.5f);
+          if (rext <= xpos) rext = xpos + ha;
+          if (rext > max_xpos) max_xpos = rext;
+          xpos += ha;
+
+          const int bext = ypos + ascent - descent;
+          if (max_ypos < bext) max_ypos = bext;
+          
+          continue; // Skip non-Skia path
         }
-        if (batch_n >= SWELL_SKIA_GLYPH_BATCH) flush_glyphs();
-        batch_glyphs[batch_n] = gid;
-        batch_xpos[batch_n] = (float)xpos;
-        batch_n++;
-        int rext = xpos + (int)(ink_r + 0.5f);
-        if (rext <= xpos) rext = xpos + ha;
-        if (rext > max_xpos) max_xpos = rext;
-        xpos += ha;
-        const int bext = ypos + ascent - descent;
-        if (max_ypos < bext) max_ypos = bext;
-        needr = false;
+        else // c == '\t'
+        {
+          const int char_h = (align&DT_SINGLELINE) ? (ascent-descent) : lineh;
+          if (bgmode==OPAQUE)
+            SWELL_SkiaFillRect(surface, xpos, ypos, charw*5, char_h, bgcol, 1.0f);
+          xpos += charw*5;
+          const int bext = ypos+ascent-descent;
+          if (max_ypos < bext) max_ypos=bext;
+          continue; // Skip non-Skia path
+        }
       }
 #endif
+
+      // ============================================================
+      // NON-SKIA PATH: Completely untouched as requested.
+      // ============================================================
+      bool needr=true;
       if (needr && font)
       {
 #ifdef SWELL_FREETYPE
