@@ -1026,7 +1026,7 @@ static void swell_sdl_send_mouse(HWND hwnd, UINT msg, WPARAM wParam, POINT scree
 static int swell_sdl_wheel_delta(double amt, double scale, int axis, bool smooth)
 {
   static double s_accum[2][2];
-  const double smooth_min_amt = 0.25;
+  const double smooth_min_amt = 0.125;
   if (scale <= 0.0) return 0;
   if (axis < 0 || axis > 1) axis = 0;
   double *accum = &s_accum[axis][smooth ? 1 : 0];
