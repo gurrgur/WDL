@@ -26,8 +26,9 @@
 #include "include/core/SkSpan.h"
 #include "include/core/SkSurface.h"
 #include "include/core/SkTypeface.h"
-#ifdef SWELL_FONTCONFIG
+#if defined(__linux__)
 #include "include/ports/SkFontMgr_fontconfig.h"
+#include "include/ports/SkFontScanner_FreeType.h"
 #endif
 
 #include "swell.h"
@@ -533,25 +534,37 @@ bool SWELL_SkiaPopClipRegion(LICE_IBitmap *bitmap)
 
 static sk_sp<SkFontMgr> SWELL_SkiaFontMgr()
 {
-#if defined(SK_FONTMGR_FREETYPE_EMPTY_AVAILABLE)
+#if defined(__linux__)
+  static SkFontMgr* s_mgr =
+    SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType()).release();
+  return sk_ref_sp(s_mgr);
+
+#elif defined(SK_FONTMGR_FREETYPE_EMPTY_AVAILABLE)
   static SkFontMgr* s_mgr = SkFontMgr_New_Custom_Empty().release();
   return sk_ref_sp(s_mgr);
+
 #else
-  // Prefer returning your app/platform font manager here.
-  // SkFontMgr::RefEmpty() generally won't load arbitrary font files.
   return nullptr;
 #endif
 }
-
 void *SWELL_SkiaFontFromFile(const char *path, int index, float pixel_size)
 {
   if (!path || !path[0] || pixel_size <= 0.0f) return nullptr;
 
   sk_sp<SkFontMgr> fm = SWELL_SkiaFontMgr();
-  if (!fm) return nullptr;
+  if (!fm)
+  {
+    fprintf(stderr, "SWELL_SKIA: no SkFontMgr for font '%s'\n", path);
+    return nullptr;
+  }
 
   sk_sp<SkTypeface> tf = fm->makeFromFile(path, index);
-  if (!tf) return nullptr;
+  if (!tf)
+  {
+    fprintf(stderr, "SWELL_SKIA: failed to load font '%s' index=%d size=%f\n",
+            path, index, pixel_size);
+    return nullptr;
+  }
 
   SkFont *font = new SkFont(std::move(tf), pixel_size);
   font->setEdging(SkFont::Edging::kAntiAlias);
