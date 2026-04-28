@@ -569,7 +569,7 @@ void *SWELL_SkiaFontFromFile(const char *path, int index, float pixel_size)
   SkFont *font = new SkFont(std::move(tf), pixel_size);
   font->setEdging(SkFont::Edging::kAntiAlias);
   font->setHinting(SkFontHinting::kSlight);
-  font->setSubpixel(true);
+  font->setSubpixel(false);
 
   return font;
 }
