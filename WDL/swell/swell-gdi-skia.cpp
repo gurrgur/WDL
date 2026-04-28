@@ -428,5 +428,35 @@ bool SWELL_SkiaDrawPolyPolyline(LICE_IBitmap *bitmap, const POINT *pts, const DW
   return true;
 }
 
+bool SWELL_SkiaPushClipRegion(LICE_IBitmap *bitmap)
+{
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, NULL, NULL, NULL, NULL);
+  if (!canvas) return false;
+  canvas->save();
+  return true;
+}
+
+bool SWELL_SkiaSetClipRegion(LICE_IBitmap *bitmap, const RECT *r, int addx, int addy)
+{
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
+  if (!canvas || !r) return false;
+
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
+  canvas->clipRect(SkRect::MakeLTRB((SkScalar)(r->left + addx + xoff),
+                                    (SkScalar)(r->top + addy + yoff),
+                                    (SkScalar)(r->right + addx + xoff),
+                                    (SkScalar)(r->bottom + addy + yoff)));
+  return true;
+}
+
+bool SWELL_SkiaPopClipRegion(LICE_IBitmap *bitmap)
+{
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, NULL, NULL, NULL, NULL);
+  if (!canvas) return false;
+  canvas->restore();
+  return true;
+}
+
 #endif
 #endif

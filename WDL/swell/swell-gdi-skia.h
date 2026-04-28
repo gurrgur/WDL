@@ -46,6 +46,9 @@ bool SWELL_SkiaDrawPolyBezierTo(LICE_IBitmap *bitmap, float startx, float starty
 bool SWELL_SkiaDrawPolyPolyline(LICE_IBitmap *bitmap, const POINT *pts, const DWORD *cnts, int nseg,
                                 int addx, int addy, unsigned int stroke_color, float stroke_alpha,
                                 int stroke_width);
+bool SWELL_SkiaPushClipRegion(LICE_IBitmap *bitmap);
+bool SWELL_SkiaSetClipRegion(LICE_IBitmap *bitmap, const RECT *r, int addx, int addy);
+bool SWELL_SkiaPopClipRegion(LICE_IBitmap *bitmap);
 #endif
 
 #endif

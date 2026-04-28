@@ -1671,21 +1671,26 @@ HGDIOBJ SWELL_CloneGDIObject(HGDIOBJ a)
 
 void SWELL_PushClipRegion(HDC ctx)
 {
-//  HDC__ *ct=(HDC__ *)ctx;
-//  if (ct && ct->ctx) CGContextSaveGState(ct->ctx);
+#ifdef SWELL_SKIA_GDI
+  HDC__ *ct=(HDC__ *)ctx;
+  if (HDC_VALID(ct) && SWELL_SkiaPushClipRegion(ct->surface)) return;
+#endif
 }
 
 void SWELL_SetClipRegion(HDC ctx, const RECT *r)
 {
-//  HDC__ *ct=(HDC__ *)ctx;
-//  if (ct && ct->ctx) CGContextClipToRect(ct->ctx,CGRectMake(r->left,r->top,r->right-r->left,r->bottom-r->top));
-
+#ifdef SWELL_SKIA_GDI
+  HDC__ *ct=(HDC__ *)ctx;
+  if (HDC_VALID(ct)) SWELL_SkiaSetClipRegion(ct->surface,r,ct->surface_offs.x,ct->surface_offs.y);
+#endif
 }
 
 void SWELL_PopClipRegion(HDC ctx)
 {
-//  HDC__ *ct=(HDC__ *)ctx;
-//  if (ct && ct->ctx) CGContextRestoreGState(ct->ctx);
+#ifdef SWELL_SKIA_GDI
+  HDC__ *ct=(HDC__ *)ctx;
+  if (HDC_VALID(ct)) SWELL_SkiaPopClipRegion(ct->surface);
+#endif
 }
 
 void *SWELL_GetCtxFrameBuffer(HDC ctx)
