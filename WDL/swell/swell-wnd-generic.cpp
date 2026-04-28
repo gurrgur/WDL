@@ -7657,6 +7657,11 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             { 
               if (msg == WM_NCLBUTTONDOWN) 
               {
+                if (PopupMenuIsActive() && g_menubar_active == hwnd && menu->sel_vis == x)
+                {
+                  DestroyPopupMenus();
+                  return 0;
+                }
                 runMenuBar(hwnd,menu,x,&r,0xbeef);
               }
             }
