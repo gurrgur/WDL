@@ -231,12 +231,16 @@ static bool swell_sdl_wants_dialog_treatment(HWND hwnd)
   return hwnd->m_owner && !(hwnd->m_style & WS_THICKFRAME);
 }
 
+static bool swell_sdl_is_menu_window(HWND hwnd);
+static HWND swell_sdl_top_owner(HWND hwnd);
+
 static Uint32 swell_sdl_window_flags(HWND hwnd)
 {
   Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_HIDDEN;
   if (hwnd->m_style & WS_THICKFRAME) flags |= SDL_WINDOW_RESIZABLE;
   if (!(hwnd->m_style & WS_CAPTION)) flags |= SDL_WINDOW_BORDERLESS;
   if (hwnd->m_style == WS_CHILD || swell_sdl_wants_dialog_treatment(hwnd)) flags |= SDL_WINDOW_SKIP_TASKBAR;
+  if (swell_sdl_is_menu_window(hwnd)) flags |= SDL_WINDOW_POPUP_MENU | SDL_WINDOW_SKIP_TASKBAR | SDL_WINDOW_ALWAYS_ON_TOP;
   if (hwnd->m_oswindow_fullscreen) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
   return flags;
 }
@@ -244,6 +248,52 @@ static Uint32 swell_sdl_window_flags(HWND hwnd)
 static bool swell_sdl_is_menu_window(HWND hwnd)
 {
   return hwnd && hwnd->m_classname && !strcmp(hwnd->m_classname, "__SWELL_MENU");
+}
+
+static void swell_sdl_get_menu_position_offset(HWND hwnd, int *xoffs, int *yoffs)
+{
+  if (xoffs) *xoffs = 0;
+  if (yoffs) *yoffs = 0;
+  if (!swell_sdl_is_menu_window(hwnd)) return;
+
+  int top = 0, left = 0, bottom = 0, right = 0;
+  if (hwnd->m_oswindow)
+    SDL_GetWindowBordersSize(hwnd->m_oswindow, &top, &left, &bottom, &right);
+
+  if (!top && !left)
+  {
+    HWND owner = swell_sdl_top_owner(hwnd);
+    if (owner && owner->m_oswindow)
+      SDL_GetWindowBordersSize(owner->m_oswindow, &top, &left, &bottom, &right);
+  }
+
+  if (xoffs) *xoffs = left;
+  if (yoffs) *yoffs = top;
+}
+
+static void swell_sdl_set_window_position(HWND hwnd, int x, int y)
+{
+  if (!hwnd || !hwnd->m_oswindow) return;
+  int xoffs = 0, yoffs = 0;
+  swell_sdl_get_menu_position_offset(hwnd, &xoffs, &yoffs);
+  SDL_SetWindowPosition(hwnd->m_oswindow, x - xoffs, y - yoffs);
+}
+
+static void swell_sdl_update_menu_position_from_window(HWND hwnd)
+{
+  if (!hwnd || !hwnd->m_oswindow) return;
+
+  int x = 0, y = 0, w = 0, h = 0;
+  SDL_GetWindowPosition(hwnd->m_oswindow, &x, &y);
+  SDL_GetWindowSize(hwnd->m_oswindow, &w, &h);
+
+  int xoffs = 0, yoffs = 0;
+  swell_sdl_get_menu_position_offset(hwnd, &xoffs, &yoffs);
+  hwnd->m_position.left = x + xoffs;
+  hwnd->m_position.top = y + yoffs;
+  hwnd->m_position.right = hwnd->m_position.left + w;
+  hwnd->m_position.bottom = hwnd->m_position.top + h;
+  hwnd->m_has_had_position = true;
 }
 
 class swell_sdl_x11_menu_hints
