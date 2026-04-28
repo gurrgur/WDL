@@ -1198,72 +1198,98 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
 int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 {
-#ifdef SWELL_SKIA_GDI
-  // ========================================================================
-  // PURE SKIA BACKEND (NO LICE / NO FALLBACK FONT INTERLEAVING)
-  // ========================================================================
   WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
+  // if DT_CALCRECT and DT_WORDBREAK, rect must be provided
   WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
     (r && r->right > r->left && r->bottom > r->top));
 
   HDC__ *ct=(HDC__ *)ctx;
   if (WDL_NOT_NORMALLY(!r)) return 0;
 
-  // Direct Skia font access; skip if unavailable to maintain pure Skia path
-  void *sf = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont, TYPE_FONT) ? ct->curfont->skia_font : NULL;
-  int lineh = 8, charw = 8, ascent = 8, descent = 0;
-  if (sf) {
+#if defined(SWELL_SKIA_GDI)
+
+  int lineh = 8;
+  int charw = 8;
+  int ascent = 8;
+  int descent = 0; // Skia path keeps this positive
+
+  HGDIOBJ__ *font = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont,TYPE_FONT) ? ct->curfont : SWELL_GetDefaultFont();
+  void *sf = font ? font->skia_font : NULL;
+
+  if (sf)
+  {
     SWELL_SkiaGetFontMetrics(sf, &ascent, &descent, &lineh, &charw);
-    descent = -descent; // negate to match sign convention
+    if (charw < 1) charw = 1;
+    if (lineh < 1) lineh = ascent + descent;
   }
 
-  // --- CALCRECT MEASUREMENT ---
-  if (align & DT_CALCRECT)
+  const int text_h = ascent + descent;
+
+  if (align&DT_CALCRECT)
   {
-    int xpos=0, ypos=0;
+    int xpos=0;
+    int ypos=0;
+
     r->bottom=r->top;
     r->right=r->left;
     bool in_prefix=false;
-    while (buflen && *buf)
+
+    while (buflen && *buf) // if buflen<0, go forever
     {
       int c=0, charlen = wdl_utf8_parsechar(buf,&c);
       buf+=charlen;
-      if (buflen > 0) {
+      if (buflen > 0)
+      {
         buflen -= charlen;
         if (buflen < 0) buflen=0;
       }
       if (!c) break;
 
-      if (c=='&' && !in_prefix && !(align&DT_NOPREFIX)) { in_prefix = true; continue; }
+      if (c=='&' && !in_prefix && !(align&DT_NOPREFIX))
+      {
+        in_prefix = true;
+        continue;
+      }
       in_prefix=false;
 
       if (c == '\n' && (align & DT_SINGLELINE)) c=' ';
- 
-      if (c == '\n') { ypos += lineh; xpos=0; }
+
+      if (c == '\n')
+      {
+        ypos += lineh;
+        xpos=0;
+      }
       else if (c != '\r')
       {
         if (sf && c != '\t')
         {
-          float adv, ink_r;
+          float adv = 0.0f, ink_r = 0.0f;
           SWELL_SkiaMeasureUnichar(sf, c, &adv, NULL, &ink_r);
+
+          int ha = (int)(adv + 0.5f);
+          if (ha <= 0) ha = charw;
+
           int rext = xpos;
           if ((align&(DT_BOTTOM|DT_VCENTER|DT_CENTER|DT_RIGHT))!=DT_RIGHT)
             rext += (int)(ink_r + 0.5f);
-          xpos += (int)(adv + 0.5f);
+
+          xpos += ha;
           if (rext<xpos) rext=xpos;
           if (r->left+rext > r->right) r->right = r->left+rext;
-          int bext = r->top + ypos + ascent - descent;
+
+          int bext = r->top + ypos + text_h;
           if (bext > r->bottom) r->bottom = bext;
           continue;
         }
-        // Pure Skia fallback for tabs or missing glyph
-        int w = (c=='\t') ? charw*5 : charw;
-        xpos += w;
-        int bext = r->top + ypos + ascent - descent;
+
+        xpos += c=='\t' ? charw*5 : charw;
+
+        int bext = r->top + ypos + text_h;
         if (bext > r->bottom) r->bottom = bext;
         if (r->left+xpos>r->right) r->right=r->left+xpos;
       }
     }
+
     return r->bottom-r->top;
   }
 
@@ -1275,6 +1301,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
     use_r.top = r->bottom;
     use_r.bottom = r->top;
   }
+
   use_r.left += ct->surface_offs.x;
   use_r.right += ct->surface_offs.x;
   use_r.top += ct->surface_offs.y;
@@ -1282,6 +1309,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
   int xpos = use_r.left;
   int ypos = use_r.top;
+
   if ((align & DT_SINGLELINE) && (align&(DT_CENTER|DT_VCENTER|DT_RIGHT|DT_BOTTOM)) )
   {
     RECT tr={0,};
@@ -1305,6 +1333,7 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
 
   int clip_x1=wdl_max(use_r.left,0), clip_y1 = wdl_max(use_r.top,0);
   int clip_w=0, clip_h=0;
+
   if (surface)
   {
     clip_w = wdl_min(use_r.right,surface->getWidth())-clip_x1;
@@ -1314,17 +1343,22 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
   }
 
   LICE_SubBitmap clipbm(surface,clip_x1,clip_y1,clip_w,clip_h);
-  if (surface && !(align&DT_NOCLIP)) { surface = &clipbm; xpos-=clip_x1; ypos-=clip_y1; }
+  if (surface && !(align&DT_NOCLIP))
+  {
+    surface = &clipbm;
+    xpos-=clip_x1;
+    ypos-=clip_y1;
+  }
 
-  int left_xpos = xpos, start_ypos = ypos, max_ypos=ypos, max_xpos=0;
+  int left_xpos = xpos,start_ypos = ypos, max_ypos=ypos,max_xpos=0;
   bool in_prefix=false;
   bool is_start_of_line = !(align & DT_SINGLELINE);
 
-  const bool skia_canvas_ok = sf && SWELL_GetSkiaCanvasFromBitmap(surface);
   enum { SWELL_SKIA_GLYPH_BATCH = 512 };
   uint16_t batch_glyphs[SWELL_SKIA_GLYPH_BATCH];
   float batch_xpos[SWELL_SKIA_GLYPH_BATCH];
   int batch_n = 0;
+
   const auto flush_glyphs = [&]() {
     if (batch_n > 0)
       SWELL_SkiaDrawGlyphRun(surface, sf, batch_glyphs, batch_xpos, batch_n,
@@ -1353,100 +1387,134 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
       }
       is_start_of_line = false;
     }
+
     int c=0, charlen = wdl_utf8_parsechar(buf,&c);
-    if (buflen>0) {
+    if (buflen>0)
+    {
       buflen -= charlen;
       if (buflen<0) buflen=0;
     }
     buf+=charlen;
 
     bool doUl=in_prefix;
-    if (c=='&' && !in_prefix && !(align&DT_NOPREFIX)) { in_prefix = true; continue; }
+
+    if (c=='&' && !in_prefix && !(align&DT_NOPREFIX))
+    {
+      in_prefix = true;
+      continue;
+    }
     in_prefix=false;
+
     if (c == '\n' && (align & DT_SINGLELINE)) c=' ';
 
     if (c =='\n')
     {
       flush_glyphs();
-      xpos=left_xpos; ypos+=lineh; is_start_of_line = true;
+      xpos=left_xpos;
+      ypos+=lineh;
+      is_start_of_line = true;
     }
-    else if (c=='\r') { }
-    else 
+    else if (c=='\r')
     {
-      // Pure Skia rendering path
-      if (skia_canvas_ok && sf && c != '\t')
+    }
+    else if (c=='\t')
+    {
+      if (bgmode==OPAQUE)
+        SWELL_SkiaFillRect(surface,xpos,ypos,charw*5,
+                           (align & DT_SINGLELINE) ? text_h : lineh,
+                           bgcol,1.0f);
+
+      xpos+=charw*5;
+
+      const int bext = ypos+text_h;
+      if (max_ypos < bext) max_ypos=bext;
+    }
+    else
+    {
+      if (sf)
       {
-        float adv, ink_r;
+        float adv = 0.0f, ink_r = 0.0f;
         uint16_t gid = SWELL_SkiaMeasureUnichar(sf, c, &adv, NULL, &ink_r);
-        const int ha = (int)(adv + 0.5f);
-        
+
+        int ha = (int)(adv + 0.5f);
+        if (ha <= 0) ha = charw;
+
         if (bgmode==OPAQUE)
-          SWELL_SkiaFillRect(surface,xpos,ypos,ha,(align&DT_SINGLELINE)?(ascent-descent):lineh,bgcol,1.0f);
-          
+          SWELL_SkiaFillRect(surface,xpos,ypos,ha,
+                             (align&DT_SINGLELINE) ? text_h : lineh,
+                             bgcol,1.0f);
+
         if (doUl)
         {
           const int xw = wdl_max(1, (int)(ink_r + 0.5f) - 1);
-          SWELL_SkiaDrawLine(surface,(float)xpos,(float)(ypos+ascent+1),
-                            (float)(xpos+xw),(float)(ypos+ascent+1),fgcol,1.0f,1);
+          SWELL_SkiaDrawLine(surface,
+                             (float)xpos,
+                             (float)(ypos+ascent+1),
+                             (float)(xpos+xw),
+                             (float)(ypos+ascent+1),
+                             fgcol,1.0f,1);
         }
-        
+
         if (batch_n >= SWELL_SKIA_GLYPH_BATCH) flush_glyphs();
+
         batch_glyphs[batch_n] = gid;
         batch_xpos[batch_n] = (float)xpos;
         batch_n++;
-        
+
         int rext = xpos + (int)(ink_r + 0.5f);
         if (rext <= xpos) rext = xpos + ha;
         if (rext > max_xpos) max_xpos = rext;
+
         xpos += ha;
-        const int bext = ypos + ascent - descent;
+
+        const int bext = ypos + text_h;
         if (max_ypos < bext) max_ypos = bext;
       }
       else
       {
-        // Skia-only fallback for tabs or missing sf (no LICE calls)
-        int w = (c=='\t') ? charw*5 : charw;
+        // Strict Skia path: no FreeType/LICE glyph fallback here.
+        // Advance/layout is still preserved for dirty rect behavior.
         if (bgmode==OPAQUE)
-          SWELL_SkiaFillRect(surface,xpos,ypos,w,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f);
+          SWELL_SkiaFillRect(surface,xpos,ypos,charw,
+                             (align & DT_SINGLELINE) ? text_h : lineh,
+                             bgcol,1.0f);
+
         if (doUl)
-          SWELL_SkiaDrawLine(surface,(float)xpos,(float)(ypos+(ascent-descent)+1),
-                            (float)(xpos+w),(float)(ypos+(ascent-descent)+1),fgcol,1.0f,1);
-        xpos += w;
-        const int bext = ypos + ascent - descent + (doUl ? 2 : 1);
-        if (max_ypos < bext) max_ypos = bext;
+          SWELL_SkiaDrawLine(surface,
+                             (float)xpos,
+                             (float)(ypos+text_h+1),
+                             (float)(xpos+charw),
+                             (float)(ypos+text_h+1),
+                             fgcol,1.0f,1);
+
+        const int bext=ypos+text_h+(doUl ? 2:1);
+        if (max_ypos < bext) max_ypos=bext;
+        xpos+=charw;
       }
     }
+
     if(xpos>max_xpos)max_xpos=xpos;
   }
+
   flush_glyphs();
-  
+
   if (surface==&clipbm)
     swell_DirtyContext(ct,clip_x1+left_xpos,clip_y1+start_ypos,clip_x1+max_xpos,clip_y1+max_ypos);
   else
     swell_DirtyContext(ct,left_xpos,start_ypos,max_xpos,max_ypos);
-    
+
   return max_ypos - start_ypos;
 
 #else
-  // ========================================================================
-  // ORIGINAL NON-SKIA CODE PATH (UNCHANGED)
-  // ========================================================================
-  WDL_ASSERT((align & DT_SINGLELINE) || !(align & (DT_VCENTER | DT_BOTTOM)));
-  WDL_ASSERT((align&(DT_CALCRECT|DT_WORDBREAK)) != (DT_CALCRECT|DT_WORDBREAK) ||
-    (r && r->right > r->left && r->bottom > r->top));
-
-  HDC__ *ct=(HDC__ *)ctx;
-  if (WDL_NOT_NORMALLY(!r)) return 0;
 
   int lineh = 8;
   int charw = 8;
 
   HGDIOBJ__  *font  = NULL;
   int ascent=8, descent=0;
-#if defined(SWELL_FREETYPE) || defined(SWELL_SKIA_GDI)
-  font  = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont,TYPE_FONT) ? ct->curfont : SWELL_GetDefaultFont();
-#endif
 #ifdef SWELL_FREETYPE
+  font  = HDC_VALID(ct) && HGDIOBJ_VALID(ct->curfont,TYPE_FONT) ? ct->curfont : SWELL_GetDefaultFont();
+
   FT_Face face = font && font->typedata ? (FT_Face)font->typedata : NULL;
   if (face)
   {
@@ -1553,7 +1621,6 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
   int bgcol = ct->curbkcol;
   int bgmode = ct->curbkmode;
 
-
   int clip_x1=wdl_max(use_r.left,0), clip_y1 = wdl_max(use_r.top,0);
   int clip_w=0, clip_h=0;
   if (surface)
@@ -1627,19 +1694,24 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
           FT_GlyphSlot g = face->glyph;
           const int ha = g->metrics.horiAdvance/64;
           if (bgmode==OPAQUE)
+          {
             LICE_FillRect(surface,xpos,ypos,ha,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          }
   
           if (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
+          {
             LICE_DrawMonoGlyph(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(const unsigned char*)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
-          else  // FT_PIXEL_MODE_GRAY
+          }
+          else  // FT_PIXEL_MODE_GRAY (hopefully!)
+          {
             LICE_DrawGlyphEx(surface,xpos+g->bitmap_left,ypos+ascent-g->bitmap_top,fgcol,(LICE_pixel_chan *)g->bitmap.buffer,g->bitmap.width,g->bitmap.pitch,g->bitmap.rows,1.0f,LICE_BLIT_MODE_COPY);
-            
+          }
           if (doUl) 
           {
             int xw = g->metrics.width/64;
             if (xw > 1) xw--;
             LICE_Line(surface,xpos + g->metrics.horiBearingX/64,ypos+ascent+1,
-                                  xpos + xw,ypos+ascent+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
+                              xpos + xw,ypos+ascent+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
           }
   
           int rext = xpos + (g->metrics.width + g->metrics.horiBearingX)/64;
@@ -1658,7 +1730,9 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
         if (c=='\t') 
         {
           if (bgmode==OPAQUE)
+          {
             LICE_FillRect(surface,xpos,ypos,charw*5,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          }
           xpos+=charw*5;
          
           const int bext = ypos+ascent-descent;
@@ -1667,10 +1741,14 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
         else 
         {
           if (bgmode==OPAQUE)
+          {
             LICE_FillRect(surface,xpos,ypos,charw,(align & DT_SINGLELINE) ? (ascent-descent) : lineh,bgcol,1.0f,LICE_BLIT_MODE_COPY);
+          }
           LICE_DrawChar(surface,xpos,ypos,c,fgcol,1.0f,LICE_BLIT_MODE_COPY);
           if (doUl)
+          {
             LICE_Line(surface,xpos,ypos+(ascent-descent)+1,xpos+charw,ypos+(ascent-descent)+1,fgcol,1.0f,LICE_BLIT_MODE_COPY,false);
+          }
   
           const int bext=ypos+ascent-descent+(doUl ? 2:1);
           if (max_ypos < bext) max_ypos=bext;
@@ -1680,11 +1758,13 @@ int DrawText(HDC ctx, const char *buf, int buflen, RECT *r, int align)
     }
     if(xpos>max_xpos)max_xpos=xpos;
   }
+
   if (surface==&clipbm)
     swell_DirtyContext(ct,clip_x1+left_xpos,clip_y1+start_ypos,clip_x1+max_xpos,clip_y1+max_ypos);
   else
     swell_DirtyContext(ct,left_xpos,start_ypos,max_xpos,max_ypos);
   return max_ypos - start_ypos;
+
 #endif
 }
 
