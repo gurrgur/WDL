@@ -1467,6 +1467,23 @@ void SetTextColor(HDC ctx, int col)
   
 }
 
+static LICE_IBitmap *swell_CreateGDIBitmap(int w, int h)
+{
+#ifdef SWELL_SKIA_GDI
+  LICE_IBitmap *bm = SWELL_CreateSkiaRasterBitmap(w,h);
+  if (bm) return bm;
+#endif
+  return new LICE_MemBitmap(w,h);
+}
+
+static LICE_IBitmap *swell_CloneGDIBitmap(LICE_IBitmap *src)
+{
+  if (!src) return NULL;
+  LICE_IBitmap *bm = swell_CreateGDIBitmap(src->getWidth(),src->getHeight());
+  if (bm) LICE_Copy(bm,src);
+  return bm;
+}
+
 
 ////////// todo: some sort of HICON emul
 
@@ -1482,7 +1499,7 @@ static HICON swell_load_lice_bitmap_from_sdl_surface(SDL_Surface *surf)
   HGDIOBJ__ *ret=NULL;
   if (conv->w > 0 && conv->h > 0 && conv->pixels)
   {
-    LICE_MemBitmap *bm = new LICE_MemBitmap(conv->w,conv->h);
+    LICE_IBitmap *bm = swell_CreateGDIBitmap(conv->w,conv->h);
     LICE_pixel_chan *wr = bm ? (LICE_pixel_chan*)bm->getBits() : NULL;
     if (wr)
     {
@@ -1555,8 +1572,8 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
     const guchar *rd = gdk_pixbuf_get_pixels(pb);
     if (bpc == 8 && (chan == 4 || chan == 3) && w > 0 && h>0 && rd)
     {
-      LICE_MemBitmap *bm = new LICE_MemBitmap(w,h);
-      LICE_pixel_chan *wr = (LICE_pixel_chan*)bm->getBits();
+      LICE_IBitmap *bm = swell_CreateGDIBitmap(w,h);
+      LICE_pixel_chan *wr = bm ? (LICE_pixel_chan*)bm->getBits() : NULL;
       if (wr)
       {
         const int rdadv = gdk_pixbuf_get_rowstride(pb);
@@ -2109,7 +2126,7 @@ void SWELL_internalLICEpaint(HWND hwnd, LICE_IBitmap *bmout, int bmout_xpos, int
 HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel, unsigned char* bits)
 {
   if (WDL_NOT_NORMALLY(width < 1 || height < 1 || numplanes != 1 || bitsperpixel != 32 || !bits)) return NULL;
-  LICE_MemBitmap *bm = new LICE_MemBitmap(width,height);
+  LICE_IBitmap *bm = swell_CreateGDIBitmap(width,height);
   if (WDL_NOT_NORMALLY(!bm->getBits())) { delete bm; return NULL; }
   int y;
   LICE_pixel *wr = bm->getBits();
@@ -2137,8 +2154,8 @@ HICON CreateIconIndirect(const ICONINFO* iconinfo)
 
   if (!i->typedata) return 0;
 
-  LICE_MemBitmap *bm = new LICE_MemBitmap;
-  LICE_Copy(bm,(LICE_IBitmap*)i->typedata);
+  LICE_IBitmap *bm = swell_CloneGDIBitmap((LICE_IBitmap*)i->typedata);
+  if (!bm) return 0;
 
   HGDIOBJ__* icon=GDP_OBJECT_NEW();
   icon->type=TYPE_BITMAP;
@@ -2197,8 +2214,8 @@ int ImageList_ReplaceIcon(HIMAGELIST list, int offset, HICON image)
   if (!HGDIOBJ_VALID(imgsrc,TYPE_BITMAP)) return -1;
 
   HGDIOBJ__* icon=GDP_OBJECT_NEW();
-  LICE_MemBitmap *bm = new LICE_MemBitmap;
-  LICE_Copy(bm,(LICE_IBitmap*)imgsrc->typedata);
+  LICE_IBitmap *bm = swell_CloneGDIBitmap((LICE_IBitmap*)imgsrc->typedata);
+  if (!bm) return -1;
 
   icon->type=TYPE_BITMAP;
   icon->alpha = 1.0f;
@@ -2230,8 +2247,8 @@ int ImageList_Add(HIMAGELIST list, HBITMAP image, HBITMAP mask)
   if (!HGDIOBJ_VALID(imgsrc,TYPE_BITMAP)) return -1;
   
   HGDIOBJ__* icon=GDP_OBJECT_NEW();
-  LICE_MemBitmap *bm = new LICE_MemBitmap;
-  LICE_Copy(bm,(LICE_IBitmap*)imgsrc->typedata);
+  LICE_IBitmap *bm = swell_CloneGDIBitmap((LICE_IBitmap*)imgsrc->typedata);
+  if (!bm) return -1;
 
   icon->type=TYPE_BITMAP;
   icon->wid=1;
