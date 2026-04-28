@@ -433,22 +433,61 @@ bool SWELL_SkiaDrawGlyphMask(LICE_IBitmap *bitmap, int x, int y, unsigned int li
 {
   if (!bitmap || !src || w <= 0 || h <= 0 || pitch == 0) return false;
 
-  LICE_pixel *tmp = (LICE_pixel *)malloc((size_t)w * h * sizeof(LICE_pixel));
+  int xoff = 0, yoff = 0, clipw = 0, cliph = 0;
+  SkCanvas *canvas = swell_skia_canvas_from_bitmap(bitmap, &xoff, &yoff, &clipw, &cliph);
+  if (!canvas) return false;
+
+  SkAutoCanvasRestore acr(canvas, true);
+  swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
+
+  SkPaint paint;
+  paint.setAntiAlias(false);
+  paint.setBlendMode(SkBlendMode::kSrcOver);
+  paint.setColor(swell_skia_color_from_lice(lice_color, 1.0f));
+
+  const SkScalar dx = (SkScalar)(x + xoff);
+  const SkScalar dy = (SkScalar)(y + yoff);
+  const SkImageInfo a8info = SkImageInfo::Make(w, h, kAlpha_8_SkColorType, kPremul_SkAlphaType);
+
+  if (!mono && pitch > 0 && pitch == w)
+  {
+    // Wrap the FreeType gray buffer directly — no allocation, no copy
+    const SkPixmap pixmap(a8info, src, (size_t)w);
+    sk_sp<SkImage> image = SkImages::RasterFromPixmap(pixmap, nullptr, nullptr);
+    if (image)
+    {
+      canvas->drawImage(image, dx, dy, SkSamplingOptions(), &paint);
+      return true;
+    }
+  }
+
+  // Unpack mono bits or non-contiguous gray rows into a contiguous alpha-8 buffer
+  unsigned char *tmp = (unsigned char *)malloc((size_t)w * h);
   if (!tmp) return false;
 
   for (int yy = 0; yy < h; yy ++)
   {
-    const unsigned char *in = pitch > 0 ? src + yy * pitch : src + (h - 1 - yy) * -pitch;
-    LICE_pixel *out = tmp + (size_t)yy * w;
-    for (int xx = 0; xx < w; xx ++)
+    const unsigned char *in = pitch > 0 ? src + (size_t)yy * pitch : src + (size_t)(h - 1 - yy) * -pitch;
+    unsigned char *out = tmp + (size_t)yy * w;
+    if (mono)
     {
-      const int a = mono ? ((in[xx >> 3] & (0x80 >> (xx & 7))) ? 255 : 0) : in[xx];
-      out[xx] = LICE_RGBA(LICE_GETR(lice_color), LICE_GETG(lice_color), LICE_GETB(lice_color), a);
+      for (int xx = 0; xx < w; xx ++)
+        out[xx] = (in[xx >> 3] & (0x80 >> (xx & 7))) ? 255 : 0;
+    }
+    else
+    {
+      memcpy(out, in, w);
     }
   }
 
-  LICE_WrapperBitmap glyphbm(tmp,w,h,w,false);
-  const bool ok = SWELL_SkiaDrawBitmap(bitmap,&glyphbm,x,y,w,h,0,0,w,h,true,1.0f,false);
+  const SkPixmap pixmap(a8info, tmp, (size_t)w);
+  sk_sp<SkImage> image = SkImages::RasterFromPixmap(pixmap, nullptr, nullptr);
+  bool ok = false;
+  if (image)
+  {
+    canvas->drawImage(image, dx, dy, SkSamplingOptions(), &paint);
+    ok = true;
+  }
   free(tmp);
   return ok;
 }
