@@ -6039,6 +6039,7 @@ static LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           NMHDR nm={hwnd,(UINT_PTR)hwnd->m_id,TCN_SELCHANGE};
           InvalidateRect(hwnd,NULL,FALSE);
           SendMessage(GetParent(hwnd),WM_NOTIFY,nm.idFrom,(LPARAM)&nm);
+          InvalidateRect(hwnd,NULL,FALSE);
         }
 
         return 0;
@@ -6071,12 +6072,16 @@ static LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           s->m_curtab = tabchg;
           NMHDR nm={hwnd,(UINT_PTR)hwnd->m_id,TCN_SELCHANGE};
           InvalidateRect(hwnd,NULL,FALSE);
+          ReleaseDC(hwnd,dc);
           SendMessage(GetParent(hwnd),WM_NOTIFY,nm.idFrom,(LPARAM)&nm);
+          InvalidateRect(hwnd,NULL,FALSE);
         }
         else
+        {
+          ReleaseDC(hwnd,dc);
           InvalidateRect(hwnd,NULL,FALSE);
+        }
  
-        ReleaseDC(hwnd,dc);
         return 1;
       }
     break;
