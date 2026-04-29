@@ -262,8 +262,15 @@ static void swell_sdl_get_menu_position_offset(HWND hwnd, int *xoffs, int *yoffs
   {
     if (hwnd->m_position.left >= owner->m_position.right-1)
     {
-      left = owner->m_position.left;
-      top = owner->m_position.top;
+      HWND root_menu = hwnd->m_owner;
+      while (root_menu && swell_sdl_is_menu_window(root_menu->m_owner))
+        root_menu = root_menu->m_owner;
+
+      if (root_menu && root_menu->m_oswindow)
+      {
+        left = root_menu->m_position.left;
+        top = root_menu->m_position.top;
+      }
     }
   }
   else if (owner && owner->m_oswindow)
@@ -283,9 +290,7 @@ static void swell_sdl_get_menu_position_offset(HWND hwnd, int *xoffs, int *yoffs
 static void swell_sdl_set_window_position(HWND hwnd, int x, int y)
 {
   if (!hwnd || !hwnd->m_oswindow) return;
-  int xoffs = 0, yoffs = 0;
-  swell_sdl_get_menu_position_offset(hwnd, &xoffs, &yoffs);
-  SDL_SetWindowPosition(hwnd->m_oswindow, x - xoffs, y - yoffs);
+  SDL_SetWindowPosition(hwnd->m_oswindow, x, y);
 }
 
 static void swell_sdl_update_menu_position_from_window(HWND hwnd)
@@ -1020,9 +1025,7 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
     break;
     case SDL_WINDOWEVENT_MOVED:
     {
-      if (swell_sdl_is_menu_window(hwnd))
-        swell_sdl_update_menu_position_from_window(hwnd);
-      else
+      if (!swell_sdl_is_menu_window(hwnd))
       {
         hwnd->m_position.right += we->data1 - hwnd->m_position.left;
         hwnd->m_position.bottom += we->data2 - hwnd->m_position.top;
