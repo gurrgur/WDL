@@ -257,30 +257,24 @@ static void swell_sdl_get_menu_position_offset(HWND hwnd, int *xoffs, int *yoffs
   if (!swell_sdl_is_menu_window(hwnd)) return;
 
   int top = 0, left = 0, bottom = 0, right = 0;
-  HWND owner = swell_sdl_top_owner(hwnd);
-  if (owner && owner->m_oswindow && swell_sdl_is_menu_window(hwnd->m_owner))
-  {
-    if (hwnd->m_position.left >= owner->m_position.right-1)
-    {
-      HWND root_menu = hwnd->m_owner;
-      while (root_menu && swell_sdl_is_menu_window(root_menu->m_owner))
-        root_menu = root_menu->m_owner;
-
-      if (root_menu && root_menu->m_oswindow)
-      {
-        left = root_menu->m_position.left;
-        top = root_menu->m_position.top;
-      }
-    }
-  }
-  else if (owner && owner->m_oswindow)
+  HWND owner = hwnd->m_owner;
+  if (swell_sdl_is_menu_window(owner) && owner->m_oswindow)
   {
     left = owner->m_position.left;
     top = owner->m_position.top;
   }
-  else if (hwnd->m_oswindow)
+  else
   {
-    SDL_GetWindowBordersSize(hwnd->m_oswindow, &top, &left, &bottom, &right);
+    owner = swell_sdl_top_owner(hwnd);
+    if (owner && owner->m_oswindow)
+    {
+      left = owner->m_position.left;
+      top = owner->m_position.top;
+    }
+    else if (hwnd->m_oswindow)
+    {
+      SDL_GetWindowBordersSize(hwnd->m_oswindow, &top, &left, &bottom, &right);
+    }
   }
 
   if (xoffs) *xoffs = left;
