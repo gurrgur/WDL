@@ -24,7 +24,55 @@
 #include "swell-internal.h"
 #ifdef SWELL_SKIA_GDI
 #include "swell-gdi-skia.h"
-#endif
+
+// GL constants and function pointers for PBO-based async texture upload.
+// We avoid pulling in <GL/glext.h> by defining the constants inline; the
+// function pointers are resolved at runtime via SDL_GL_GetProcAddress so
+// the feature degrades gracefully on software renderers.
+enum {
+  SWELL_GL_PIXEL_UNPACK_BUFFER       = 0x88EC,
+  SWELL_GL_STREAM_DRAW               = 0x88E0,
+  SWELL_GL_MAP_WRITE_BIT             = 0x0002,
+  SWELL_GL_MAP_INVALIDATE_BUFFER_BIT = 0x0008,
+  SWELL_GL_UNPACK_ROW_LENGTH         = 0x0CF2,
+  SWELL_GL_TEXTURE_2D                = 0x0DE1,
+  SWELL_GL_BGRA                      = 0x80E1,
+  SWELL_GL_UNSIGNED_BYTE             = 0x1401,
+};
+static struct {
+  void     (*GenBuffers   )(int n, unsigned *ids);
+  void     (*DeleteBuffers)(int n, const unsigned *ids);
+  void     (*BindBuffer   )(unsigned target, unsigned buf);
+  void     (*BufferData   )(unsigned target, size_t size, const void *data, unsigned usage);
+  void    *(*MapBufferRange)(unsigned target, size_t offset, size_t length, unsigned access);
+  int      (*UnmapBuffer  )(unsigned target);
+  void     (*TexSubImage2D)(unsigned target, int level, int xoff, int yoff, int w, int h,
+                            unsigned fmt, unsigned type, const void *pixels);
+  void     (*PixelStorei  )(unsigned pname, int param);
+} s_pbo_gl;
+static bool s_pbo_gl_checked, s_pbo_gl_ok;
+
+static bool swell_sdl_pbo_init()
+{
+  if (s_pbo_gl_checked) return s_pbo_gl_ok;
+  s_pbo_gl_checked = true;
+#define SWELL_LOAD(fn, name) s_pbo_gl.fn = (decltype(s_pbo_gl.fn))SDL_GL_GetProcAddress(name)
+  SWELL_LOAD(GenBuffers,    "glGenBuffers");
+  SWELL_LOAD(DeleteBuffers, "glDeleteBuffers");
+  SWELL_LOAD(BindBuffer,    "glBindBuffer");
+  SWELL_LOAD(BufferData,    "glBufferData");
+  SWELL_LOAD(MapBufferRange,"glMapBufferRange");
+  SWELL_LOAD(UnmapBuffer,   "glUnmapBuffer");
+  SWELL_LOAD(TexSubImage2D, "glTexSubImage2D");
+  SWELL_LOAD(PixelStorei,   "glPixelStorei");
+#undef SWELL_LOAD
+  s_pbo_gl_ok = s_pbo_gl.GenBuffers && s_pbo_gl.DeleteBuffers && s_pbo_gl.BindBuffer &&
+                s_pbo_gl.BufferData && s_pbo_gl.MapBufferRange && s_pbo_gl.UnmapBuffer &&
+                s_pbo_gl.TexSubImage2D && s_pbo_gl.PixelStorei;
+  return s_pbo_gl_ok;
+}
+#endif // SWELL_SKIA_GDI
+
 #include "swell-dlggen.h"
 #include "../wdlcstring.h"
 
@@ -44,6 +92,10 @@ struct swell_sdl_window_state
   RECT dirty;
   int dirty_rect_count;
   RECT dirty_rects[8];
+#ifdef SWELL_SKIA_GDI
+  unsigned m_pbo;       // GL pixel buffer object for async texture upload
+  int m_pbo_size;       // currently allocated PBO size in bytes
+#endif
 };
 
 static WDL_PtrList<swell_sdl_window_state> s_sdl_windows;
@@ -133,9 +185,67 @@ static bool swell_sdl_ensure_texture(swell_sdl_window_state *st, int w, int h)
   return st->texture != NULL;
 }
 
+#ifdef SWELL_SKIA_GDI
+// Upload one dirty rect via PBO so the CPU copy goes to write-combining GPU
+// memory and the GL upload is an async DMA rather than a blocking CPU copy.
+// SDL_GL_BindTexture activates the renderer's GL context as a side effect.
+static bool swell_sdl_upload_texture_rect_pbo(swell_sdl_window_state *st,
+                                              LICE_IBitmap *bm, const RECT *r)
+{
+  const int rw = r->right - r->left;
+  const int rh = r->bottom - r->top;
+  const int need = rw * rh * 4;
+
+  float tw = 0.0f, th = 0.0f;
+  if (SDL_GL_BindTexture(st->texture, &tw, &th) != 0) return false;
+
+  s_pbo_gl.BindBuffer(SWELL_GL_PIXEL_UNPACK_BUFFER, st->m_pbo);
+
+  if (st->m_pbo_size < need)
+  {
+    // Orphan and grow — gives driver fresh memory, avoiding GPU stall.
+    s_pbo_gl.BufferData(SWELL_GL_PIXEL_UNPACK_BUFFER, need, NULL, SWELL_GL_STREAM_DRAW);
+    st->m_pbo_size = need;
+  }
+
+  void *dst = s_pbo_gl.MapBufferRange(SWELL_GL_PIXEL_UNPACK_BUFFER, 0, need,
+                                       SWELL_GL_MAP_WRITE_BIT |
+                                       SWELL_GL_MAP_INVALIDATE_BUFFER_BIT);
+  bool ok = false;
+  if (dst)
+  {
+    // Copy the dirty rect row-by-row into write-combining PBO memory.
+    const int src_pitch = bm->getRowSpan() * 4;
+    const char *s = (const char *)bm->getBits() + r->top * src_pitch + r->left * 4;
+    char *d = (char *)dst;
+    const int row_bytes = rw * 4;
+    for (int y = 0; y < rh; y++, s += src_pitch, d += row_bytes)
+      memcpy(d, s, row_bytes);
+    s_pbo_gl.UnmapBuffer(SWELL_GL_PIXEL_UNPACK_BUFFER);
+
+    // PBO data is tightly packed; disable any lingering row-length hint.
+    s_pbo_gl.PixelStorei(SWELL_GL_UNPACK_ROW_LENGTH, 0);
+    // glTexSubImage2D with a NULL offset reads from the bound PBO — GPU DMA,
+    // no CPU memcpy.
+    s_pbo_gl.TexSubImage2D(SWELL_GL_TEXTURE_2D, 0,
+                           r->left, r->top, rw, rh,
+                           SWELL_GL_BGRA, SWELL_GL_UNSIGNED_BYTE, (void*)0);
+    ok = true;
+  }
+
+  s_pbo_gl.BindBuffer(SWELL_GL_PIXEL_UNPACK_BUFFER, 0);
+  SDL_GL_UnbindTexture(st->texture);
+  return ok;
+}
+#endif // SWELL_SKIA_GDI
+
 static bool swell_sdl_upload_texture_rect(swell_sdl_window_state *st, LICE_IBitmap *bm, const RECT *r)
 {
   if (!st || !st->texture || !bm || !r || r->left >= r->right || r->top >= r->bottom) return false;
+
+#ifdef SWELL_SKIA_GDI
+  if (st->m_pbo && swell_sdl_upload_texture_rect_pbo(st, bm, r)) return true;
+#endif
 
   SDL_Rect sr = { r->left, r->top, r->right-r->left, r->bottom-r->top };
   const int src_pitch = bm->getRowSpan() * (int)sizeof(LICE_pixel);
@@ -659,6 +769,15 @@ void swell_oswindow_destroy(HWND hwnd)
   if (st)
   {
     if (SWELL_focused_oswindow == st->window) SWELL_focused_oswindow = NULL;
+#ifdef SWELL_SKIA_GDI
+    if (st->m_pbo && st->renderer && s_pbo_gl.DeleteBuffers)
+    {
+      // Activate GL context via renderer before deleting the PBO object.
+      SDL_RenderSetClipRect(st->renderer, NULL);
+      s_pbo_gl.DeleteBuffers(1, &st->m_pbo);
+      st->m_pbo = 0;
+    }
+#endif
     if (st->texture) SDL_DestroyTexture(st->texture);
     if (st->renderer) SDL_DestroyRenderer(st->renderer);
     if (st->window) SDL_DestroyWindow(st->window);
@@ -785,6 +904,17 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
         st->window = window;
         st->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
         if (!st->renderer) st->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+#ifdef SWELL_SKIA_GDI
+        {
+          SDL_RendererInfo ri;
+          if (SDL_GetRendererInfo(st->renderer, &ri) == 0 &&
+              strncmp(ri.name, "opengl", 6) == 0 && swell_sdl_pbo_init())
+          {
+            s_pbo_gl.GenBuffers(1, &st->m_pbo);
+            st->m_pbo_size = 0;
+          }
+        }
+#endif
         s_sdl_windows.Add(st);
         hwnd->m_oswindow = window;
         const bool is_menu = swell_sdl_is_menu_window(hwnd);

@@ -571,6 +571,50 @@ static sk_sp<SkFontMgr> SWELL_SkiaFontMgr()
   return nullptr;
 #endif
 }
+// Wrapper that adds a lazy ASCII glyph-metric cache on top of SkFont.
+// SWELL_SkiaMeasureUnichar is called for every character in DrawText — the
+// Skia strike-cache lookup it triggers acquires a mutex and does a hash probe
+// on every call.  For the 96 printable ASCII characters that cover >99% of
+// REAPER's UI text we fill a direct-map cache on first use and hit it in O(1)
+// with no locks thereafter.
+struct SWELL_SkiaFont
+{
+  SkFont font;
+
+  struct GlyphEntry { uint16_t gid; float advance; float ink_l; float ink_r; };
+  GlyphEntry ascii[128];
+  bool        ascii_valid[128];
+
+  explicit SWELL_SkiaFont(sk_sp<SkTypeface> tf, float px)
+    : font(std::move(tf), px)
+  {
+    memset(ascii_valid, 0, sizeof(ascii_valid));
+  }
+
+  const GlyphEntry *measure(int codepoint)
+  {
+    if ((unsigned)codepoint < 128u)
+    {
+      if (!ascii_valid[codepoint])
+      {
+        GlyphEntry &e = ascii[codepoint];
+        e.gid = font.unicharToGlyph(codepoint);
+        SkRect bounds = SkRect::MakeEmpty();
+        SkScalar adv = 0.0f;
+        font.getWidthsBounds(SkSpan<const SkGlyphID>(&e.gid, 1),
+                             SkSpan<SkScalar>(&adv, 1),
+                             SkSpan<SkRect>(&bounds, 1), nullptr);
+        e.advance = adv;
+        e.ink_l   = bounds.fLeft;
+        e.ink_r   = bounds.fRight;
+        ascii_valid[codepoint] = true;
+      }
+      return &ascii[codepoint];
+    }
+    return nullptr; // caller falls back to direct Skia call
+  }
+};
+
 void *SWELL_SkiaFontFromFile(const char *path, int index, float pixel_size)
 {
   if (!path || !path[0] || pixel_size <= 0.0f) return nullptr;
@@ -590,24 +634,24 @@ void *SWELL_SkiaFontFromFile(const char *path, int index, float pixel_size)
     return nullptr;
   }
 
-  SkFont *font = new SkFont(std::move(tf), pixel_size);
-  font->setEdging(SkFont::Edging::kAntiAlias);
-  font->setHinting(SkFontHinting::kFull);
-  font->setSubpixel(false);
+  SWELL_SkiaFont *sf = new SWELL_SkiaFont(std::move(tf), pixel_size);
+  sf->font.setEdging(SkFont::Edging::kAntiAlias);
+  sf->font.setHinting(SkFontHinting::kFull);
+  sf->font.setSubpixel(false);
 
-  return font;
+  return sf;
 }
 
 void SWELL_SkiaReleaseFont(void *skia_font)
 {
-  delete (SkFont *)skia_font;
+  delete static_cast<SWELL_SkiaFont *>(skia_font);
 }
 
 bool SWELL_SkiaGetFontMetrics(void *skia_font, int *ascent, int *descent, int *lineh, int *charw)
 {
   if (!skia_font) return false;
 
-  const SkFont *font = static_cast<const SkFont *>(skia_font);
+  const SkFont *font = &static_cast<const SWELL_SkiaFont *>(skia_font)->font;
 
   SkFontMetrics m;
   font->getMetrics(&m);
@@ -643,14 +687,23 @@ uint16_t SWELL_SkiaMeasureUnichar(void *skia_font, int codepoint,
     return 0;
   }
 
-  const SkFont *font = static_cast<const SkFont *>(skia_font);
+  SWELL_SkiaFont *sf = static_cast<SWELL_SkiaFont *>(skia_font);
 
-  SkGlyphID gid = font->unicharToGlyph(codepoint);
+  // Fast path: ASCII characters hit the direct-map cache with no lock/hash overhead.
+  const SWELL_SkiaFont::GlyphEntry *cached = sf->measure(codepoint);
+  if (cached)
+  {
+    if (advance) *advance = cached->advance;
+    if (ink_l)   *ink_l   = cached->ink_l;
+    if (ink_r)   *ink_r   = cached->ink_r;
+    return cached->gid;
+  }
+
+  // Non-ASCII: fall back to direct Skia strike-cache lookup.
+  SkGlyphID gid = sf->font.unicharToGlyph(codepoint);
   SkRect bounds = SkRect::MakeEmpty();
   SkScalar adv = 0.0f;
-
-  // Measure glyph 0 too. It is the font's .notdef glyph and may have a valid advance.
-  font->getWidthsBounds(
+  sf->font.getWidthsBounds(
       SkSpan<const SkGlyphID>(&gid, 1),
       SkSpan<SkScalar>(&adv, 1),
       SkSpan<SkRect>(&bounds, 1),
@@ -694,7 +747,7 @@ bool SWELL_SkiaDrawGlyphRun(LICE_IBitmap *bitmap, void *skia_font,
       SkSpan<const SkGlyphID>((const SkGlyphID *)glyphs, count),
       SkSpan<const SkPoint>(positions, count),
       SkPoint::Make(0.0f, 0.0f),
-      *(const SkFont *)skia_font,
+      static_cast<const SWELL_SkiaFont *>(skia_font)->font,
       paint);
 
   if (positions != pos_buf) delete[] positions;
