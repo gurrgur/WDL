@@ -55,6 +55,13 @@ static bool s_pbo_gl_checked, s_pbo_gl_ok;
 static bool swell_sdl_pbo_init()
 {
   if (s_pbo_gl_checked) return s_pbo_gl_ok;
+  const char *enable = getenv("SWELL_SDL_ENABLE_PBO");
+  if (!enable || !atoi(enable))
+  {
+    s_pbo_gl_checked = true;
+    s_pbo_gl_ok = false;
+    return false;
+  }
   s_pbo_gl_checked = true;
 #define SWELL_LOAD(fn, name) s_pbo_gl.fn = (decltype(s_pbo_gl.fn))SDL_GL_GetProcAddress(name)
   SWELL_LOAD(GenBuffers,    "glGenBuffers");
@@ -87,8 +94,6 @@ struct swell_sdl_window_state
   bool invalidated;
   bool dirty_valid;
   bool dirty_needs_paint;
-  bool prepainted_before_show;
-  Uint32 prepaint_ticks;
   RECT dirty;
   int dirty_rect_count;
   RECT dirty_rects[8];
@@ -186,15 +191,24 @@ static bool swell_sdl_ensure_texture(swell_sdl_window_state *st, int w, int h)
 }
 
 #ifdef SWELL_SKIA_GDI
+static bool swell_sdl_make_renderer_current(swell_sdl_window_state *st)
+{
+  return st && st->renderer && SDL_RenderFlush(st->renderer) == 0;
+}
+
 // Upload one dirty rect via PBO so the CPU copy goes to write-combining GPU
 // memory and the GL upload is an async DMA rather than a blocking CPU copy.
-// SDL_GL_BindTexture activates the renderer's GL context as a side effect.
+// SDL renderers own implicit GL contexts, so every raw GL touch must first
+// flush the target renderer. Otherwise a previous window's renderer can still
+// be current and texture/buffer names can alias across windows.
 static bool swell_sdl_upload_texture_rect_pbo(swell_sdl_window_state *st,
                                               LICE_IBitmap *bm, const RECT *r)
 {
   const int rw = r->right - r->left;
   const int rh = r->bottom - r->top;
   const int need = rw * rh * 4;
+
+  if (!swell_sdl_make_renderer_current(st)) return false;
 
   float tw = 0.0f, th = 0.0f;
   if (SDL_GL_BindTexture(st->texture, &tw, &th) != 0) return false;
@@ -235,6 +249,7 @@ static bool swell_sdl_upload_texture_rect_pbo(swell_sdl_window_state *st,
 
   s_pbo_gl.BindBuffer(SWELL_GL_PIXEL_UNPACK_BUFFER, 0);
   SDL_GL_UnbindTexture(st->texture);
+  SDL_RenderFlush(st->renderer);
   return ok;
 }
 #endif // SWELL_SKIA_GDI
@@ -590,14 +605,6 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
     return;
   }
 
-  // Save dirty sub-rects before clearing them. After painting the bounding-box
-  // region r, we upload only those sub-rects instead of the full bounding box —
-  // this cuts GPU upload traffic when several small areas are dirty at once.
-  RECT saved_rects[8];
-  const int saved_rect_count = st->dirty_rect_count;
-  if (saved_rect_count > 0)
-    memcpy(saved_rects, st->dirty_rects, saved_rect_count * sizeof(RECT));
-
   st->invalidated = false;
   st->dirty_valid = false;
   st->dirty_needs_paint = false;
@@ -616,8 +623,7 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
     return;
   }
 
-  swell_sdl_upload_texture_rects(st, hwnd->m_backingstore, &r,
-                                 saved_rect_count > 0 ? saved_rects : NULL, saved_rect_count);
+  swell_sdl_upload_texture_rect(st, hwnd->m_backingstore, &r);
   swell_sdl_present_texture(st);
   s_sdl_paint_depth--;
   if (st->invalidated) swell_sdl_queue_paint_event();
@@ -708,18 +714,6 @@ static void swell_sdl_add_dirty_rect(swell_sdl_window_state *st, const RECT *r)
     st->dirty_rect_count = 0;
 }
 
-static bool swell_sdl_paint_initial(HWND hwnd)
-{
-#ifdef SWELL_LICE_GDI
-  swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
-  if (!st || !st->renderer) return false;
-  swell_sdl_paint(hwnd, NULL);
-  return st->texture != NULL;
-#else
-  return false;
-#endif
-}
-
 static void swell_sdl_mark_dirty(HWND hwnd, const RECT *r)
 {
   swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
@@ -772,9 +766,8 @@ void swell_oswindow_destroy(HWND hwnd)
 #ifdef SWELL_SKIA_GDI
     if (st->m_pbo && st->renderer && s_pbo_gl.DeleteBuffers)
     {
-      // Activate GL context via renderer before deleting the PBO object.
-      SDL_RenderSetClipRect(st->renderer, NULL);
-      s_pbo_gl.DeleteBuffers(1, &st->m_pbo);
+      if (swell_sdl_make_renderer_current(st))
+        s_pbo_gl.DeleteBuffers(1, &st->m_pbo);
       st->m_pbo = 0;
     }
 #endif
@@ -908,7 +901,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
         {
           SDL_RendererInfo ri;
           if (SDL_GetRendererInfo(st->renderer, &ri) == 0 &&
-              strncmp(ri.name, "opengl", 6) == 0 && swell_sdl_pbo_init())
+              strncmp(ri.name, "opengl", 6) == 0 && swell_sdl_pbo_init() &&
+              swell_sdl_make_renderer_current(st))
           {
             s_pbo_gl.GenBuffers(1, &st->m_pbo);
             st->m_pbo_size = 0;
@@ -929,13 +923,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
 #ifdef SDL_VIDEO_DRIVER_X11
         swell_sdl_x11_set_metadata(hwnd, window);
 #endif
-        if (!is_menu)
-        {
-          st->prepainted_before_show = swell_sdl_paint_initial(hwnd);
-          if (st->prepainted_before_show) st->prepaint_ticks = SDL_GetTicks();
-        }
         SDL_ShowWindow(window);
-        if (is_menu)
+        if (is_menu || !s_sdl_processing_events)
         {
           swell_sdl_mark_dirty(hwnd, NULL);
           swell_sdl_flush_paints();
@@ -1190,15 +1179,7 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
     break;
     case SDL_WINDOWEVENT_EXPOSED:
     case SDL_WINDOWEVENT_SHOWN:
-    {
-      swell_sdl_window_state *st = swell_sdl_state_from_hwnd(hwnd);
-      if (st && st->prepainted_before_show)
-      {
-        if (SDL_GetTicks() - st->prepaint_ticks < 100) break;
-        st->prepainted_before_show = false;
-      }
       swell_sdl_mark_dirty(hwnd, NULL);
-    }
     break;
   }
 }
