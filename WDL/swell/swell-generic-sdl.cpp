@@ -734,26 +734,30 @@ static void swell_sdl_mark_backingstore_dirty(HWND hwnd, const RECT *r)
   if (!s_sdl_processing_events) swell_sdl_queue_paint_event();
 }
 
+static void swell_sdl_flush_paint_state(swell_sdl_window_state *st)
+{
+  if (!st || !st->invalidated) return;
+
+  if (!st->dirty_needs_paint && swell_sdl_present_backingstore(st->hwnd, st->dirty_valid ? &st->dirty : NULL))
+  {
+    st->invalidated = false;
+    st->dirty_valid = false;
+    st->dirty_needs_paint = false;
+    st->dirty_rect_count = 0;
+  }
+  else
+  {
+    swell_sdl_paint(st->hwnd, st->dirty_valid ? &st->dirty : NULL);
+  }
+}
+
 static void swell_sdl_flush_paints()
 {
   s_sdl_paint_event_pending = false;
   for (int x = 0; x < s_sdl_windows.GetSize(); x ++)
   {
     swell_sdl_window_state *st = s_sdl_windows.Get(x);
-    if (st && st->invalidated)
-    {
-      if (!st->dirty_needs_paint && swell_sdl_present_backingstore(st->hwnd, st->dirty_valid ? &st->dirty : NULL))
-      {
-        st->invalidated = false;
-        st->dirty_valid = false;
-        st->dirty_needs_paint = false;
-        st->dirty_rect_count = 0;
-      }
-      else
-      {
-        swell_sdl_paint(st->hwnd, st->dirty_valid ? &st->dirty : NULL);
-      }
-    }
+    swell_sdl_flush_paint_state(st);
   }
 }
 
@@ -1040,7 +1044,13 @@ void UpdateWindow(HWND hwnd)
   {
     while (hwnd && !hwnd->m_oswindow) hwnd = hwnd->m_parent;
     if (!hwnd) return;
-    swell_sdl_flush_paints();
+    if (s_sdl_processing_events)
+    {
+      swell_sdl_queue_paint_event();
+      return;
+    }
+    s_sdl_paint_event_pending = false;
+    swell_sdl_flush_paint_state(swell_sdl_state_from_hwnd(hwnd));
   }
 }
 
