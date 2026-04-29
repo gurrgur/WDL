@@ -257,14 +257,12 @@ static void swell_sdl_get_menu_position_offset(HWND hwnd, int *xoffs, int *yoffs
   if (!swell_sdl_is_menu_window(hwnd)) return;
 
   int top = 0, left = 0, bottom = 0, right = 0;
-  if (hwnd->m_oswindow)
-    SDL_GetWindowBordersSize(hwnd->m_oswindow, &top, &left, &bottom, &right);
-
-  if (!top && !left)
+  HWND owner = swell_sdl_top_owner(hwnd);
+  if (owner && owner->m_oswindow)
+    SDL_GetWindowBordersSize(owner->m_oswindow, &top, &left, &bottom, &right);
+  else if (hwnd->m_oswindow)
   {
-    HWND owner = swell_sdl_top_owner(hwnd);
-    if (owner && owner->m_oswindow)
-      SDL_GetWindowBordersSize(owner->m_oswindow, &top, &left, &bottom, &right);
+    SDL_GetWindowBordersSize(hwnd->m_oswindow, &top, &left, &bottom, &right);
   }
 
   if (xoffs) *xoffs = left;
@@ -750,8 +748,16 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
       swell_sdl_position_if_unset(hwnd, &r);
       const int w = swell_sdl_max_int(1, r.right-r.left);
       const int h = swell_sdl_max_int(1, r.bottom-r.top);
+      int create_x = r.left, create_y = r.top;
+      if (swell_sdl_is_menu_window(hwnd))
+      {
+        int xoffs = 0, yoffs = 0;
+        swell_sdl_get_menu_position_offset(hwnd, &xoffs, &yoffs);
+        create_x -= xoffs;
+        create_y -= yoffs;
+      }
       swell_sdl_x11_menu_hints menu_hints(swell_sdl_is_menu_window(hwnd));
-      SDL_Window *window = SDL_CreateWindow(hwnd->m_title.Get(), r.left, r.top, w, h, swell_sdl_window_flags(hwnd));
+      SDL_Window *window = SDL_CreateWindow(hwnd->m_title.Get(), create_x, create_y, w, h, swell_sdl_window_flags(hwnd));
       if (window)
       {
         swell_sdl_window_state *st = new swell_sdl_window_state;
@@ -762,12 +768,18 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
         if (!st->renderer) st->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
         s_sdl_windows.Add(st);
         hwnd->m_oswindow = window;
-        swell_sdl_update_position_from_window(hwnd);
+        const bool is_menu = swell_sdl_is_menu_window(hwnd);
+        if (is_menu)
+        {
+          hwnd->m_position = r;
+          hwnd->m_has_had_position = true;
+        }
+        else
+          swell_sdl_update_position_from_window(hwnd);
         if (s_sdl_program_icon_surface) SDL_SetWindowIcon(window, s_sdl_program_icon_surface);
 #ifdef SDL_VIDEO_DRIVER_X11
         swell_sdl_x11_set_metadata(hwnd, window);
 #endif
-        const bool is_menu = swell_sdl_is_menu_window(hwnd);
         if (!is_menu)
         {
           st->prepainted_before_show = swell_sdl_paint_initial(hwnd);
@@ -866,8 +878,17 @@ void swell_oswindow_begin_resize(SWELL_OSWINDOW wnd)
 void swell_oswindow_resize(SWELL_OSWINDOW wnd, int reposflag, RECT f)
 {
   if (!wnd) return;
-  if ((reposflag&3) == 3) SDL_SetWindowPosition(wnd, f.left, f.top);
-  else if (reposflag&1) SDL_SetWindowPosition(wnd, f.left, f.top);
+  swell_sdl_window_state *st = swell_sdl_state_from_window(wnd);
+  if ((reposflag&3) == 3)
+  {
+    if (st && swell_sdl_is_menu_window(st->hwnd)) swell_sdl_set_window_position(st->hwnd, f.left, f.top);
+    else SDL_SetWindowPosition(wnd, f.left, f.top);
+  }
+  else if (reposflag&1)
+  {
+    if (st && swell_sdl_is_menu_window(st->hwnd)) swell_sdl_set_window_position(st->hwnd, f.left, f.top);
+    else SDL_SetWindowPosition(wnd, f.left, f.top);
+  }
   if (reposflag&2) SDL_SetWindowSize(wnd, swell_sdl_max_int(1, f.right-f.left), swell_sdl_max_int(1, f.bottom-f.top));
 }
 
@@ -988,11 +1009,16 @@ static void swell_sdl_on_window_event(const SDL_WindowEvent *we)
     break;
     case SDL_WINDOWEVENT_MOVED:
     {
-      hwnd->m_position.right += we->data1 - hwnd->m_position.left;
-      hwnd->m_position.bottom += we->data2 - hwnd->m_position.top;
-      hwnd->m_position.left = we->data1;
-      hwnd->m_position.top = we->data2;
-      hwnd->m_has_had_position = true;
+      if (swell_sdl_is_menu_window(hwnd))
+        swell_sdl_update_menu_position_from_window(hwnd);
+      else
+      {
+        hwnd->m_position.right += we->data1 - hwnd->m_position.left;
+        hwnd->m_position.bottom += we->data2 - hwnd->m_position.top;
+        hwnd->m_position.left = we->data1;
+        hwnd->m_position.top = we->data2;
+        hwnd->m_has_had_position = true;
+      }
       SendMessage(hwnd, WM_MOVE, 0, 0);
     }
     break;
