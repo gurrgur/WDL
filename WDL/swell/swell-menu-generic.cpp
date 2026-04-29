@@ -1161,8 +1161,11 @@ static LRESULT WINAPI submenuWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
               m_trackingMenus.Delete(nextidx);
               int a = m_trackingMenus.GetSize();
               while (a > nextidx) DestroyWindow(m_trackingMenus.Get(--a));
+              DestroyWindow(hh);
+              hh = NULL;
             }
-            else
+
+            if (!hh)
             {
               hh = new HWND__(NULL,0,NULL,"menu",false,submenuWndProc,NULL, hwnd);
               SetProp(hh,"SWELL_MenuOwner",GetProp(hwnd,"SWELL_MenuOwner"));

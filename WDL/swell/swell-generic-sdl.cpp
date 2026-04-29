@@ -1485,6 +1485,52 @@ struct swell_sdl_bridge_state
 static WDL_PtrList<swell_sdl_bridge_state> s_sdl_bridge_windows;
 static swell_sdl_bridge_state *s_last_gl_ctx;
 
+static int swell_sdl_xbridge_ignore_xerror(Display *display, XErrorEvent *event)
+{
+  return 0;
+}
+
+class swell_sdl_xbridge_xerror_guard
+{
+public:
+  swell_sdl_xbridge_xerror_guard(Display *display)
+  {
+    m_display = display;
+    m_old_handler = m_display ? XSetErrorHandler(swell_sdl_xbridge_ignore_xerror) : NULL;
+  }
+
+  ~swell_sdl_xbridge_xerror_guard()
+  {
+    if (m_display)
+    {
+      XSync(m_display, False);
+      XSetErrorHandler(m_old_handler);
+    }
+  }
+
+private:
+  Display *m_display;
+  XErrorHandler m_old_handler;
+};
+
+static void swell_sdl_xbridge_detach_children(Display *display, Window native_w)
+{
+  if (!display || !native_w) return;
+
+  Window root = 0, par = 0, *list = NULL;
+  unsigned int nlist = 0;
+  if (XQueryTree(display, native_w, &root, &par, &list, &nlist) && list)
+  {
+    Window root_w = DefaultRootWindow(display);
+    for (unsigned int x = 0; x < nlist; x ++)
+    {
+      XUnmapWindow(display, list[x]);
+      XReparentWindow(display, list[x], root_w, 0, 0);
+    }
+    XFree(list);
+  }
+}
+
 swell_sdl_bridge_state::swell_sdl_bridge_state(bool needrep, Display *disp, Window native, Window curpar, HWND child)
 {
   display = disp;
@@ -1513,9 +1559,10 @@ swell_sdl_bridge_state::~swell_sdl_bridge_state()
   }
   if (display && native_w)
   {
+    swell_sdl_xbridge_xerror_guard guard(display);
+    swell_sdl_xbridge_detach_children(display, native_w);
     if (!need_reparent) XReparentWindow(display, native_w, DefaultRootWindow(display), 0, 0);
     XDestroyWindow(display, native_w);
-    XFlush(display);
   }
 }
 
@@ -1541,6 +1588,7 @@ static void swell_sdl_xbridge_map_children(swell_sdl_bridge_state *bs)
 {
   if (!bs || !bs->display || !bs->native_w) return;
 
+  swell_sdl_xbridge_xerror_guard guard(bs->display);
   Window root, par, *list = NULL;
   unsigned int nlist = 0;
   if (!XQueryTree(bs->display, bs->native_w, &root, &par, &list, &nlist)) return;
@@ -1557,6 +1605,7 @@ static void swell_sdl_xbridge_fit_child(swell_sdl_bridge_state *bs, HWND hwnd, b
 {
   if (!bs || !bs->display || !bs->native_w) return;
 
+  swell_sdl_xbridge_xerror_guard guard(bs->display);
   RECT r;
   GetClientRect(hwnd, &r);
   if (r.right <= 0 || r.bottom <= 0) return;
@@ -1704,6 +1753,7 @@ static LRESULT swell_sdl_xbridge_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
 
         if (bs->need_reparent || vis != bs->lastvis || (vis && memcmp(&tr, &bs->lastrect, sizeof(RECT))))
         {
+          swell_sdl_xbridge_xerror_guard guard(bs->display);
           if (bs->lastvis && !vis)
           {
             XUnmapWindow(bs->display, bs->native_w);
@@ -1730,7 +1780,6 @@ static LRESULT swell_sdl_xbridge_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
             swell_sdl_xbridge_fit_child(bs, hwnd, false);
             bs->lastvis = true;
           }
-          XFlush(bs->display);
         }
       }
     break;
