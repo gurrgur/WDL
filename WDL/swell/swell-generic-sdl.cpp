@@ -258,7 +258,7 @@ static void swell_sdl_get_menu_position_offset(HWND hwnd, int *xoffs, int *yoffs
 
   int top = 0, left = 0, bottom = 0, right = 0;
   HWND owner = swell_sdl_top_owner(hwnd);
-  if (owner && owner->m_oswindow)
+  if (owner && owner->m_oswindow && !swell_sdl_is_menu_window(hwnd->m_owner))
   {
     left = owner->m_position.left;
     top = owner->m_position.top;
