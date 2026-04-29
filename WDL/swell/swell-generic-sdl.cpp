@@ -190,6 +190,23 @@ static bool swell_sdl_ensure_texture(swell_sdl_window_state *st, int w, int h)
   return st->texture != NULL;
 }
 
+static SDL_Renderer *swell_sdl_create_renderer(SDL_Window *window)
+{
+  if (!window) return NULL;
+
+  Uint32 flags = SDL_RENDERER_ACCELERATED;
+  const char *disable_vsync = getenv("SWELL_SDL_DISABLE_VSYNC");
+  if (!disable_vsync || !atoi(disable_vsync))
+    flags |= SDL_RENDERER_PRESENTVSYNC;
+
+  SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, flags);
+  if (!renderer && (flags & SDL_RENDERER_PRESENTVSYNC))
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+  if (!renderer)
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+  return renderer;
+}
+
 #ifdef SWELL_SKIA_GDI
 static bool swell_sdl_make_renderer_current(swell_sdl_window_state *st)
 {
@@ -967,8 +984,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantfocus)
         memset(st, 0, sizeof(*st));
         st->hwnd = hwnd;
         st->window = window;
-        st->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-        if (!st->renderer) st->renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+        st->renderer = swell_sdl_create_renderer(window);
 #ifdef SWELL_SKIA_GDI
         {
           SDL_RendererInfo ri;
