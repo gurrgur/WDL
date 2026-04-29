@@ -282,9 +282,18 @@ bool SWELL_SkiaDrawBitmap(LICE_IBitmap *dst, LICE_IBitmap *src,
   swell_skia_clip_to_bitmap(canvas, xoff, yoff, clipw, cliph);
 
   const SkAlphaType alpha_type = use_alpha ? kUnpremul_SkAlphaType : kOpaque_SkAlphaType;
-  SkImageInfo info = SkImageInfo::Make(src->getWidth(), src->getHeight(), kBGRA_8888_SkColorType, alpha_type);
-  SkPixmap pixmap(info, src->getBits(), (size_t)src->getRowSpan() * 4);
-  sk_sp<SkImage> image = SkImages::RasterFromPixmapCopy(pixmap);
+
+  // Point pixmap at the source sub-region (sx,sy,sw,sh) directly so the raster
+  // pipeline sees origin (0,0) — avoids a matrix_translate stage and the
+  // implicit gather-gather loop that kStrict_SrcRectConstraint induces.
+  const int src_row_bytes = src->getRowSpan() * 4;
+  const unsigned char *src_ptr = (const unsigned char *)src->getBits()
+                                  + (size_t)sy * src_row_bytes + sx * 4;
+  SkImageInfo info = SkImageInfo::Make(sw, sh, kBGRA_8888_SkColorType, alpha_type);
+  // RasterFromPixmap wraps the existing pixels without copying — safe because
+  // raster canvases flush draws synchronously before returning.
+  const SkPixmap pixmap(info, src_ptr, src_row_bytes);
+  sk_sp<SkImage> image = SkImages::RasterFromPixmap(pixmap, nullptr, nullptr);
   if (!image) return false;
 
   if (opacity < 0.0f) opacity = 0.0f;
@@ -294,10 +303,25 @@ bool SWELL_SkiaDrawBitmap(LICE_IBitmap *dst, LICE_IBitmap *src,
   paint.setAlphaf(opacity);
   paint.setBlendMode(use_alpha || opacity < 1.0f ? SkBlendMode::kSrcOver : SkBlendMode::kSrc);
   const SkSamplingOptions sampling(filter ? SkFilterMode::kLinear : SkFilterMode::kNearest);
-  canvas->drawImageRect(image,
-                        SkRect::MakeXYWH((SkScalar)sx, (SkScalar)sy, (SkScalar)sw, (SkScalar)sh),
-                        SkRect::MakeXYWH((SkScalar)(x + xoff), (SkScalar)(y + yoff), (SkScalar)w, (SkScalar)h),
-                        sampling, &paint, SkCanvas::kStrict_SrcRectConstraint);
+
+  const SkScalar dx = (SkScalar)(x + xoff), dy = (SkScalar)(y + yoff);
+  if (sw == w && sh == h)
+  {
+    // 1:1 blit: drawImage lets Skia pick SkSpriteBlitter (memcpy fast path for kSrc).
+    canvas->drawImage(image, dx, dy, sampling, &paint);
+  }
+  else
+  {
+    // Scaled blit: source rect is now (0,0,sw,sh). For nearest-neighbour, kFast
+    // is identical to kStrict — no edge clamping needed. Keep kStrict for linear
+    // to avoid sub-pixel bleeding at the source boundary.
+    const auto constraint = filter ? SkCanvas::kStrict_SrcRectConstraint
+                                   : SkCanvas::kFast_SrcRectConstraint;
+    canvas->drawImageRect(image,
+                          SkRect::MakeIWH(sw, sh),
+                          SkRect::MakeXYWH(dx, dy, (SkScalar)w, (SkScalar)h),
+                          sampling, &paint, constraint);
+  }
   return true;
 }
 

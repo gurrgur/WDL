@@ -480,6 +480,14 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
     return;
   }
 
+  // Save dirty sub-rects before clearing them. After painting the bounding-box
+  // region r, we upload only those sub-rects instead of the full bounding box —
+  // this cuts GPU upload traffic when several small areas are dirty at once.
+  RECT saved_rects[8];
+  const int saved_rect_count = st->dirty_rect_count;
+  if (saved_rect_count > 0)
+    memcpy(saved_rects, st->dirty_rects, saved_rect_count * sizeof(RECT));
+
   st->invalidated = false;
   st->dirty_valid = false;
   st->dirty_needs_paint = false;
@@ -498,7 +506,8 @@ static void swell_sdl_paint(HWND hwnd, const RECT *dirty)
     return;
   }
 
-  swell_sdl_upload_texture_rect(st, hwnd->m_backingstore, &r);
+  swell_sdl_upload_texture_rects(st, hwnd->m_backingstore, &r,
+                                 saved_rect_count > 0 ? saved_rects : NULL, saved_rect_count);
   swell_sdl_present_texture(st);
   s_sdl_paint_depth--;
   if (st->invalidated) swell_sdl_queue_paint_event();
