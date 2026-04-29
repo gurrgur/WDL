@@ -183,7 +183,7 @@ static bool swell_sdl_ensure_texture(swell_sdl_window_state *st, int w, int h)
   {
     if (st->texture) SDL_DestroyTexture(st->texture);
     st->texture = SDL_CreateTexture(st->renderer, SDL_PIXELFORMAT_ARGB8888,
-                                    SDL_TEXTUREACCESS_STATIC, w, h);
+                                    SDL_TEXTUREACCESS_STREAMING, w, h);
     st->texw = st->texture ? w : 0;
     st->texh = st->texture ? h : 0;
   }
@@ -265,6 +265,19 @@ static bool swell_sdl_upload_texture_rect(swell_sdl_window_state *st, LICE_IBitm
   SDL_Rect sr = { r->left, r->top, r->right-r->left, r->bottom-r->top };
   const int src_pitch = bm->getRowSpan() * (int)sizeof(LICE_pixel);
   const unsigned char *src = (const unsigned char *)bm->getBits() + r->top * src_pitch + r->left * (int)sizeof(LICE_pixel);
+
+  void *pixels = NULL;
+  int dst_pitch = 0;
+  if (SDL_LockTexture(st->texture, &sr, &pixels, &dst_pitch) == 0)
+  {
+    unsigned char *dst = (unsigned char *)pixels;
+    const int row_bytes = sr.w * (int)sizeof(LICE_pixel);
+    for (int y = 0; y < sr.h; y ++)
+      memcpy(dst + y * dst_pitch, src + y * src_pitch, row_bytes);
+    SDL_UnlockTexture(st->texture);
+    return true;
+  }
+
   return SDL_UpdateTexture(st->texture, &sr, src, src_pitch) == 0;
 }
 
@@ -734,16 +747,71 @@ static void swell_sdl_mark_backingstore_dirty(HWND hwnd, const RECT *r)
   if (!s_sdl_processing_events) swell_sdl_queue_paint_event();
 }
 
+static bool swell_sdl_rect_contains(const RECT *outer, const RECT *inner)
+{
+  return outer && inner &&
+         outer->left <= inner->left && outer->top <= inner->top &&
+         outer->right >= inner->right && outer->bottom >= inner->bottom;
+}
+
+static bool swell_sdl_window_update_obscured(swell_sdl_window_state *st)
+{
+  if (!st || !st->hwnd || !st->window) return false;
+
+  const Uint32 flags = SDL_GetWindowFlags(st->window);
+  if (flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) return true;
+
+  RECT dirty;
+  if (st->dirty_valid) dirty = st->dirty;
+  else
+  {
+    dirty.left = dirty.top = 0;
+    dirty.right = st->hwnd->m_position.right - st->hwnd->m_position.left;
+    dirty.bottom = st->hwnd->m_position.bottom - st->hwnd->m_position.top;
+  }
+  if (dirty.left >= dirty.right || dirty.top >= dirty.bottom) return true;
+
+  WinOffsetRect(&dirty, st->hwnd->m_position.left, st->hwnd->m_position.top);
+
+  for (HWND h = SWELL_topwindows; h && h != st->hwnd; h = h->m_next)
+  {
+    if (!h->m_oswindow || !h->m_visible || h->m_hashaddestroy) continue;
+
+    swell_sdl_window_state *ost = swell_sdl_state_from_hwnd(h);
+    if (ost && ost->window)
+    {
+      const Uint32 oflags = SDL_GetWindowFlags(ost->window);
+      if (oflags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) continue;
+    }
+
+    RECT wr = h->m_position;
+    if (swell_sdl_rect_contains(&wr, &dirty)) return true;
+  }
+  return false;
+}
+
+static void swell_sdl_clear_paint_state(swell_sdl_window_state *st)
+{
+  if (!st) return;
+  st->invalidated = false;
+  st->dirty_valid = false;
+  st->dirty_needs_paint = false;
+  st->dirty_rect_count = 0;
+}
+
 static void swell_sdl_flush_paint_state(swell_sdl_window_state *st)
 {
   if (!st || !st->invalidated) return;
 
+  if (swell_sdl_window_update_obscured(st))
+  {
+    swell_sdl_clear_paint_state(st);
+    return;
+  }
+
   if (!st->dirty_needs_paint && swell_sdl_present_backingstore(st->hwnd, st->dirty_valid ? &st->dirty : NULL))
   {
-    st->invalidated = false;
-    st->dirty_valid = false;
-    st->dirty_needs_paint = false;
-    st->dirty_rect_count = 0;
+    swell_sdl_clear_paint_state(st);
   }
   else
   {
