@@ -259,7 +259,10 @@ static void swell_sdl_get_menu_position_offset(HWND hwnd, int *xoffs, int *yoffs
   int top = 0, left = 0, bottom = 0, right = 0;
   HWND owner = swell_sdl_top_owner(hwnd);
   if (owner && owner->m_oswindow)
-    SDL_GetWindowBordersSize(owner->m_oswindow, &top, &left, &bottom, &right);
+  {
+    left = owner->m_position.left;
+    top = owner->m_position.top;
+  }
   else if (hwnd->m_oswindow)
   {
     SDL_GetWindowBordersSize(hwnd->m_oswindow, &top, &left, &bottom, &right);
