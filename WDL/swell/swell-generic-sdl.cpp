@@ -1040,7 +1040,6 @@ void UpdateWindow(HWND hwnd)
   {
     while (hwnd && !hwnd->m_oswindow) hwnd = hwnd->m_parent;
     if (!hwnd) return;
-    swell_sdl_mark_dirty(hwnd, NULL);
     swell_sdl_flush_paints();
   }
 }
