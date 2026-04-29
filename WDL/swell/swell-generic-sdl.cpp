@@ -1170,7 +1170,7 @@ static void swell_sdl_flush_smooth_wheel()
     swell_sdl_pending_wheel *p = &s_sdl_pending_smooth_wheel[axis];
     if (p->hwnd)
     {
-      swell_sdl_send_wheel(p->hwnd, msgs[axis], swell_sdl_wheel_delta(p->amt, 32.0, axis, true), p->screen_pt);
+      swell_sdl_send_wheel(p->hwnd, msgs[axis], swell_sdl_wheel_delta(p->amt, 40.0, axis, true), p->screen_pt);
       p->hwnd->Release();
       memset(p, 0, sizeof(*p));
     }
@@ -1253,7 +1253,7 @@ static void swell_sdl_on_event(const SDL_Event *evt)
         {
           x = evt->wheel.preciseX;
           y = evt->wheel.preciseY;
-          scale = 16.0;
+          scale = 32.0;
           smooth = true;
         }
 #endif
