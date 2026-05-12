@@ -18,7 +18,7 @@ explicitly noted.
 | `SWELL_TARGET_OSX` | macOS (Cocoa) backend |
 | `SWELL_TARGET_OSX_COCOA` | Cocoa (set together with above) |
 | `SWELL_TARGET_SDL3` | SDL3 backend |
-| `SWELL_LICE_GDI` | Use LICE for GDI rendering (generic) |
+| `SWELL_SKIA_GDI` | Use Skia for GDI rendering (generic) |
 | `SWELL_FORCE_GENERIC` | Force generic backend even on macOS |
 | `SWELL_PROVIDED_BY_APP` | API is function-pointer table, loaded at runtime |
 | `SWELL_LOAD_SWELL_DYLIB` | Synonym for above |
@@ -1485,7 +1485,7 @@ void SWELL_SetClipRegion(HDC ctx, const RECT *r)
 void SWELL_PopClipRegion(HDC ctx)
 ```
 
-On LICE backend only one item on the stack.
+Only one item on the clip stack.
 
 ### 8.4 GDI objects
 

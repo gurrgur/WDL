@@ -32,7 +32,7 @@ swell2/
   docs/
     SPEC.md                ← complete API surface (types, constants, functions)
     PROTOCOLS.md           ← message encodings, call contracts, ordering guarantees
-    RENDERING.md           ← GDI model, HDC state, LICE/paint pipeline, fonts
+    RENDERING.md           ← GDI model, HDC state, Skia/paint pipeline, fonts
     EVENT-LOOP.md          ← message loop, OS backend, WM_PAINT synthesis
     CONTROLS.md            ← built-in control state and behavior
 
@@ -75,7 +75,7 @@ Read these before implementing anything in their domain. They are authoritative.
 |---|---|
 | `docs/SPEC.md` | Every type, constant, macro, and function signature. Deviations from Win32 are listed in §31. |
 | `docs/PROTOCOLS.md` | Exact wParam/lParam encoding for 40+ messages. WNDPROC/DLGPROC contracts. Dialog/focus/timer/menu/PostMessage protocols. |
-| `docs/RENDERING.md` | HDC state machine. HGDIOBJ types. SelectObject semantics. LICE surface model. Paint pipeline. FreeType font system. |
+| `docs/RENDERING.md` | HDC state machine. HGDIOBJ types. SelectObject semantics. Skia surface model. Paint pipeline. FreeType font system. |
 | `docs/EVENT-LOOP.md` | SWELL_RunMessageLoop steps. GDK event translation. WM_PAINT synthesis. OS window lifecycle. Window creation without dialog template. |
 | `docs/CONTROLS.md` | Internal state structs and behavior for Button, Edit, Static, ListBox, ListView, TreeView, ComboBox, TabControl, Trackbar, ProgressBar. |
 
@@ -134,10 +134,10 @@ HWND__          window node: parent/children/next/prev/owner/owned linked lists,
 
 HMENU__         menu: WDL_PtrList of SWELL_MenuItem
 
-HGDIOBJ__       GDI object: type (TYPE_PEN/BRUSH/FONT/BITMAP), color (LICE_RGBA),
+HGDIOBJ__       GDI object: type (TYPE_PEN/BRUSH/FONT/BITMAP), color (SkColor),
                 wid, alpha, typedata, additional_refcnt, _infreelist, _next
 
-HDC__           device context: surface (LICE_IBitmap*), surface_offs,
+HDC__           device context: canvas (SkCanvas*), surface (sk_sp<SkSurface>), surface_offs,
                 dirty_rect, curpen, curbrush, curfont, cur_text_color_int,
                 curbkcol, curbkmode, lastpos_x/y, _infreelist, _next
 
@@ -158,7 +158,7 @@ Timer types: TimerInfoRec (hwnd, timerid, interval, lastFire, tProc, refcnt, _ne
 PostMessage queue types: PMQ_rec (hwnd, msg, wParam, lParam, _next)
 
 Internal function declarations (not in swell-functions.h):
-    SWELL_internalLICEpaint, swell_oswindow_*, DefWindowProc internals, etc.
+    SWELL_internalSkiaPaint, swell_oswindow_*, DefWindowProc internals, etc.
 ```
 
 See `docs/RENDERING.md §1-2` and `docs/EVENT-LOOP.md §3` for field details.
@@ -209,7 +209,7 @@ Everything GDI. Sections:
 - Clip: `SWELL_PushClipRegion`, `SWELL_SetClipRegion`, `SWELL_PopClipRegion`
 - Context info: `SWELL_GetCtxGC`, `SWELL_GetCtxFrameBuffer`
 - Font: `AddFontResourceEx`, `SWELL_GetDefaultFont`
-- Paint pipeline: `SWELL_internalLICEpaint`
+- Paint pipeline: `SWELL_internalSkiaPaint`
 
 See `docs/RENDERING.md` for full behavioral spec.
 
@@ -357,13 +357,13 @@ GDK OS backend. Everything that touches GdkWindow directly:
 - `SWELL_initargs` — `gdk_init`
 - `SWELL_CreateXBridgeWindow`, `SWELL_GetOSWindow`, `SWELL_GetOSEvent`
 - `SWELL_GetScaling256`
-- `SWELL_internalLICEpaint` entry from expose events
+- `SWELL_internalSkiaPaint` entry from expose events
 - `swell_oswindow_to_hwnd`, `swell_oswindow_from_hwnd`
 
 ### `swell-backend-headless.cpp`
 
 Headless backend (no display). Stubs `swell_oswindow_*` to no-ops. WM_PAINT
-is never synthesized by OS expose; call `SWELL_internalLICEpaint` explicitly in
+is never synthesized by OS expose; call `SWELL_internalSkiaPaint` explicitly in
 tests. Useful for unit-testing window logic without a display.
 
 ### `swell-modstub.cpp`
@@ -427,7 +427,7 @@ comparisons against `int` return values. See `docs/SPEC.md §2.1`.
 ### RGB byte order
 
 Default (non-Win32): `RGB(r,g,b) = (r<<16)|(g<<8)|b`. All GDI internals use
-LICE_RGBA format (`LICE_RGBA_FROMNATIVE` converts). See `docs/SPEC.md §4.2`
+SkColor format (`SWELL_TO_SKCOLOR` converts). See `docs/SPEC.md §4.2`
 and `docs/RENDERING.md §2.3`.
 
 ### SW_* constant values differ from Win32
@@ -448,8 +448,8 @@ See `docs/PROTOCOLS.md §19`.
 swell2 depends on the WDL library (`../../` from this directory):
 
 ```
-../../lice/        LICE bitmap rendering (LICE_IBitmap, LICE_MemBitmap, LICE_SubBitmap,
-                   LICE_FillRect, LICE_Blit, etc.)
+Skia              Skia 2D graphics library (SkCanvas, SkSurface, SkPaint, SkBitmap,
+                   SkBlendMode, sk_sp<>, etc.)
 ../../mutex.h      WDL_Mutex, WDL_MutexLock
 ../../faststring.h WDL_FastString (UTF-8 string with efficient append)
 ../../ptrlist.h    WDL_PtrList<T>, WDL_PtrList_DeleteOnDestroy<T>
@@ -470,7 +470,7 @@ Implement in this order to keep each step independently testable:
 1. `swell-internal.h` — all internal type definitions
 2. `swell-gdi-internalpool.h` — pool infrastructure
 3. `swell-ini.cpp` — no dependencies; self-contained; easy to test
-4. `swell-gdi.cpp` — depends on LICE and pool only
+4. `swell-gdi.cpp` — depends on Skia and pool only
 5. `swell-wnd.cpp` (partial) — HWND__ lifecycle, SendMessage, PostMessage queue, timers
 6. `swell-backend-headless.cpp` — lets you test window logic without GDK
 7. `swell-controls.cpp` — depends on wnd + gdi

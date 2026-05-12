@@ -1,24 +1,24 @@
 # SWELL GDI Rendering Model
 
 This document specifies the GDI subsystem implementation: HDC state machine,
-HGDIOBJ internals, LICE integration, paint pipeline, and font system. It is
+HGDIOBJ internals, Skia integration, paint pipeline, and font system. It is
 required reading before implementing any drawing function.
 
 ---
 
 ## 1. Object Type System
 
-### 1.1 HGDIOBJ__ fields (generic/LICE backend)
+### 1.1 HGDIOBJ__ fields (Skia backend)
 
 ```c
 struct HGDIOBJ__ {
   int   type;               // TYPE_PEN=1, TYPE_BRUSH=2, TYPE_FONT=3, TYPE_BITMAP=4
   int   additional_refcnt;  // 0=single owner; >0 = that many additional owners
-  int   color;              // LICE_RGBA format (R,G,B,A each 0-255)
+  int   color;              // SkColor format (0xAARRGGBB)
   int   wid;                // pen: stroke width (pixels); -1=null/no-op
                             // brush: 0=filled, -1=null/no-op
   float alpha;              // pen/brush: opacity 0.0–1.0
-  void *typedata;           // font: FT_Face; bitmap: LICE_IBitmap*
+  void *typedata;           // font: FT_Face; bitmap: SkBitmap*
   bool  _infreelist;        // object is in the free pool, not in use
   struct HGDIOBJ__ *_next;  // free-list chain pointer
 };
@@ -58,21 +58,21 @@ Objects in the free pool (`_infreelist==true`) must not be used.
 
 ```c
 struct HDC__ {
-  LICE_IBitmap *surface;        // render target (owned by context, or SubBitmap for clipping)
-  POINT surface_offs;           // offset: drawing coord (x,y) maps to surface pixel (x+surface_offs.x, y+surface_offs.y)
+  SkCanvas    *canvas;          // drawing target; not owned (owned by surface below)
+  sk_sp<SkSurface> surface;     // backing surface (non-null when context owns its pixel buffer)
+  POINT surface_offs;           // offset: drawing coord (x,y) maps to canvas pixel (x+surface_offs.x, y+surface_offs.y)
 
   RECT  dirty_rect;             // union of all drawn areas, in surface coordinates
   bool  dirty_rect_valid;       // false = no draws yet; true = dirty_rect is valid
 
-  LICE_IBitmap *surface_save;   // saved surface before SWELL_PushClipRgn
-  POINT surface_offs_save;      // saved surface_offs before SWELL_PushClipRgn
+  int   clip_save_count;        // canvas save depth at SWELL_PushClipRgn; restored on Pop
 
   HGDIOBJ__ *curpen;            // selected pen; NULL = no pen selected
   HGDIOBJ__ *curbrush;          // selected brush; NULL = no brush selected
   HGDIOBJ__ *curfont;           // selected font; NULL = use SWELL default font
 
-  int   cur_text_color_int;     // text color in LICE_RGBA format
-  int   curbkcol;               // background color in LICE_RGBA format
+  int   cur_text_color_int;     // text color as SkColor (0xAARRGGBB)
+  int   curbkcol;               // background color as SkColor
   int   curbkmode;              // TRANSPARENT(0) or OPAQUE(1)
   float lastpos_x, lastpos_y;   // current position (set by MoveToEx, updated by LineTo)
 
@@ -85,32 +85,32 @@ struct HDC__ {
 
 | Field | Default |
 |---|---|
-| `surface` | new `LICE_MemBitmap(w, h)`, cleared to LICE_RGBA(0,0,0,0) |
+| `surface` | `SkSurface::MakeRasterN32Premul(w, h)`, cleared to `SK_ColorTRANSPARENT` |
 | `surface_offs` | {0, 0} |
 | `dirty_rect_valid` | false |
 | `curpen` | NULL (no pen selected) |
 | `curbrush` | NULL (no brush selected) |
 | `curfont` | NULL (use SWELL_GetDefaultFont()) |
-| `cur_text_color_int` | LICE_RGBA_FROMNATIVE(0, 255) → black, full alpha |
+| `cur_text_color_int` | `SK_ColorBLACK` (0xFF000000) — black, full alpha |
 | `curbkcol` | uninitialized (SetBkColor not called; do not rely on value) |
 | `curbkmode` | TRANSPARENT(0) — default |
 | `lastpos_x/y` | 0.0, 0.0 |
 
 After `BeginPaint` / `GetDC`: curfont is set to `hwnd->m_font` (the window's stored font).
 
-### 2.3 LICE color format
+### 2.3 Skia color format
 
-SWELL internally stores colors in LICE_RGBA format, not native RGB:
+SWELL internally stores colors as `SkColor` (0xAARRGGBB), not native RGB:
 
 ```c
-LICE_RGBA_FROMNATIVE(col, alpha=255)
+SWELL_TO_SKCOLOR(col, alpha=255)
 ```
 
 Converts native SWELL RGB (`r<<16|g<<8|b` or Win32 `b<<16|g<<8|r` depending on
-`SWELL_USE_WIN32_RGB`) to LICE's `LICE_RGBA(r,g,b,a)` packed format.
+`SWELL_USE_WIN32_RGB`) to Skia's `SkColorSetARGB(a, r, g, b)` packed format.
 
-**All color fields in HDC__ are in LICE_RGBA format, not native RGB.**  
-`SetTextColor(ctx, col)` — `col` is native RGB; converted to LICE_RGBA on store.  
+**All color fields in HDC__ are SkColor (0xAARRGGBB), not native RGB.**  
+`SetTextColor(ctx, col)` — `col` is native RGB; converted to SkColor on store.  
 `SetBkColor(ctx, col)` — same.
 
 ---
@@ -157,7 +157,7 @@ Passing a TYPE_BITMAP object into SelectObject returns 0 (not supported for sele
 Drawing operations that use the pen (`LineTo`, outline of `Rectangle`, `Ellipse`,
 `RoundRect`, `PolyPolyline`, `PolyBezierTo`):
 - Check `HGDIOBJ_VALID(c->curpen, TYPE_PEN) && c->curpen->wid >= 0` before drawing.
-- Use `c->curpen->color` (LICE_RGBA) and `c->curpen->alpha` for color.
+- Use `c->curpen->color` (SkColor) and `c->curpen->alpha` for color.
 
 ### 4.2 Brush behavior
 
@@ -174,23 +174,26 @@ LineTo(ctx, x, y)             // draws from lastpos to (x,y); updates lastpos
 PolyBezierTo(ctx, pts, n)     // draws bezier from lastpos; updates lastpos
 ```
 
-`LineTo` uses `LICE_Line` with `c->curpen->color/alpha/wid`.
+`LineTo` calls `canvas->drawLine()` with an `SkPaint` built from `c->curpen->color/alpha/wid`.
 
 ### 4.4 Rectangle
 
 Draws filled rect (with brush) then outline (with pen):
 ```c
-LICE_FillRect(surface, l, t, r-l, b-t, brush->color, brush->alpha, COPY)
-LICE_DrawRect(surface, l, t, r-l-1, b-t-1, pen->color, pen->alpha, COPY)
+SkPaint fill; fill.setStyle(SkPaint::kFill_Style); fill.setColor(brush->color); fill.setAlphaf(brush->alpha);
+canvas->drawRect(SkRect::MakeLTRB(l, t, r, b), fill);
+
+SkPaint stroke; stroke.setStyle(SkPaint::kStroke_Style); stroke.setColor(pen->color); stroke.setAlphaf(pen->alpha); stroke.setStrokeWidth(pen->wid);
+canvas->drawRect(SkRect::MakeLTRB(l, t, r-1, b-1), stroke);
 ```
-Note: `DrawRect` is one pixel smaller on each edge than `FillRect` (standard Win32
+Note: stroke rect is one pixel smaller on each edge than fill rect (standard Win32
 convention: right/bottom are exclusive for fill, inclusive for outline).
 
 ### 4.5 BitBlt / StretchBlt modes
 
 ```c
-mode = SRCCOPY (0)              → LICE_BLIT_MODE_COPY
-mode = SRCCOPY_USEALPHACHAN     → LICE_BLIT_MODE_COPY with alpha compositing
+mode = SRCCOPY (0)              → SkBlendMode::kSrc   (replace destination)
+mode = SRCCOPY_USEALPHACHAN     → SkBlendMode::kSrcOver (alpha compositing)
 ```
 
 ### 4.6 Dirty rect tracking
@@ -203,19 +206,20 @@ Each drawing operation that touches the surface calls `swell_DirtyContext`:
 
 ## 5. Clip Region
 
-SWELL's LICE backend supports exactly **one level** of clip stack:
+SWELL's Skia backend supports exactly **one level** of clip stack:
 
 ```c
-SWELL_PushClipRgn(ctx)         // saves current surface/offs; replaces with LICE_SubBitmap clipped to r
-SWELL_SetClipRegion(ctx, &r)   // sets the clipping rectangle
-SWELL_PopClipRegion(ctx)       // restores saved surface/offs; frees the SubBitmap
+SWELL_PushClipRgn(ctx)         // canvas->save(); records save count in clip_save_count
+SWELL_SetClipRegion(ctx, &r)   // canvas->clipRect(r)
+SWELL_PopClipRegion(ctx)       // canvas->restoreToCount(clip_save_count)
 ```
 
 Implementation:
-- `surface_save` stores the pre-push surface.
-- `surface_offs_save` stores the pre-push offset.
-- The clip region is implemented as a `LICE_SubBitmap` whose origin is within the parent.
-- Only one push is supported; nested pushes overwrite the saved state.
+- `clip_save_count` stores the canvas save depth before the push.
+- `SWELL_PushClipRgn` calls `canvas->save()` and records the depth.
+- `SWELL_SetClipRegion` intersects the current clip with `r` via `canvas->clipRect`.
+- `SWELL_PopClipRegion` restores to `clip_save_count` via `canvas->restoreToCount`.
+- Only one push is supported; nested pushes overwrite the saved count.
 
 **Do not push twice without popping.**
 
@@ -233,10 +237,10 @@ Implementation:
 
 ### 6.2 Paint entry (SDL3 backend: window expose event)
 
-On `SDL_EVENT_WINDOW_EXPOSED` callback from SDL3, the backend calls `SWELL_internalLICEpaint`:
+On `SDL_EVENT_WINDOW_EXPOSED` callback from SDL3, the backend calls `SWELL_internalSkiaPaint`:
 
 ```
-SWELL_internalLICEpaint(hwnd, bmout, bmout_xpos, bmout_ypos, forceref)
+SWELL_internalSkiaPaint(hwnd, bmout, bmout_xpos, bmout_ypos, forceref)
 ```
 
 Steps:
@@ -250,9 +254,9 @@ Steps:
    f. Set `ctx.ctx.curfont = hwnd->m_font`.
    g. If `forceref` and clip rect non-empty: call `hwnd->m_wndproc(hwnd, WM_PAINT, (WPARAM)&ctx, 0)`.
    h. Clear `hwnd->m_paintctx`; set `hwnd->m_invalidated = false`.
-3. Recurse into visible children (each in its own LICE_SubBitmap).
+3. Recurse into visible children (each in a canvas save/clip/translate layer).
 
-### 6.3 BeginPaint / EndPaint (LICE backend)
+### 6.3 BeginPaint / EndPaint (Skia backend)
 
 `BeginPaint(hwnd, &ps)`:
 - Returns `&hwnd->m_paintctx->ctx` as the HDC.
@@ -260,18 +264,18 @@ Steps:
 - Window proc draws into this HDC.
 
 `EndPaint(hwnd, &ps)`:
-- No-op in the LICE backend (screen update is driven by `swell_oswindow_updatetoscreen`,
+- No-op in the Skia backend (screen update is driven by `swell_oswindow_updatetoscreen`,
   called after the full paint tree completes).
 
 `GetDC(hwnd)` / `GetWindowDC(hwnd)`:
-- Creates a new `swell_gdpLocalContext` backed by a fresh `LICE_SubBitmap` of the
-  window surface.
+- Creates a new `swell_gdpLocalContext` with a canvas derived from the window's
+  backing surface via `canvas->save()` + clip to the window rect.
 - `ReleaseDC` flushes dirty region to screen via `swell_oswindow_updatetoscreen`.
 
 ### 6.4 Screen update
 
 `swell_oswindow_updatetoscreen(hwnd, &rect)`:
-- Copies the rendered LICE bitmap region to the OS window's pixel buffer.
+- Reads Skia surface pixel data and copies to the OS window's pixel buffer.
 - On SDL3: uploads via `SDL_UpdateTexture` and presents via `SDL_RenderPresent`.
 
 ---
@@ -348,7 +352,7 @@ tmAscent=8, tmDescent=0, tmHeight=8, tmInternalLeading=0, tmAveCharWidth=4
 
 ### 7.7 DrawText / SWELL_DrawText
 
-Text is rendered glyph-by-glyph using FreeType bitmaps, blended into the LICE surface.
+Text is rendered glyph-by-glyph using FreeType bitmaps, blended into the Skia canvas.
 
 - `DT_CALCRECT`: measures without drawing; fills `r->right`/`r->bottom`.
 - `DT_SINGLELINE` + `DT_VCENTER`: vertical centering.
@@ -363,16 +367,16 @@ Text color from `cur_text_color_int`; background from `curbkcol`/`curbkmode`.
 ## 8. Bitmap Objects
 
 `CreateBitmap(w, h, planes, bpp, bits)`:
-- Creates `LICE_MemBitmap(w, h)` stored in `typedata`.
+- Creates `SkBitmap(w, h)` stored in `typedata`.
 - If `bits != NULL`: copies pixel data in (format depends on `bpp`; 32bpp = BGRA or RGBA).
 
 `BitBlt` / `StretchBlt`:
-- Renders via `LICE_Blit` or `LICE_ScaledBlit`.
-- Source HDC's LICE_IBitmap is used directly.
+- Renders via `canvas->drawImage()` or `canvas->drawImageRect()`.
+- Source HDC's `SkSurface` is snapshotted to `sk_sp<SkImage>` for drawing.
 
 `DrawImageInRect(ctx, hicon, &r)`:
 - `hicon` is `HGDIOBJ__` with `type=TYPE_BITMAP`.
-- Scales the bitmap to fit `r` via LICE_ScaledBlit.
+- Scales the bitmap to fit `r` via `canvas->drawImageRect()`.
 
 ---
 
@@ -397,7 +401,7 @@ Objects must not be used after being passed to `DeleteObject` / `SWELL_DeleteGfx
 
 | Feature | SWELL_CreateMemContext | BeginPaint HDC |
 |---|---|---|
-| Owns surface | Yes (LICE_MemBitmap) | No (borrows from window) |
+| Owns surface | Yes (`sk_sp<SkSurface>`) | No (borrows from window) |
 | Must free | `SWELL_DeleteGfxContext` | `EndPaint` |
 | Initial color | transparent black | inherits window surface |
 | curfont | NULL (default font used) | hwnd->m_font |

@@ -84,7 +84,7 @@ firing of the same timer in one pass).
 | `SDL_EVENT_KEY_UP` | `WM_KEYUP` |
 | `SDL_EVENT_WINDOW_FOCUS_GAINED` | `WM_ACTIVATE`, `WM_SETFOCUS` on focused child |
 | `SDL_EVENT_WINDOW_FOCUS_LOST` | `WM_ACTIVATE` (WA_INACTIVE), `WM_KILLFOCUS` |
-| `SDL_EVENT_WINDOW_EXPOSED` | triggers `SWELL_internalLICEpaint` |
+| `SDL_EVENT_WINDOW_EXPOSED` | triggers `SWELL_internalSkiaPaint` |
 | `SDL_EVENT_WINDOW_RESIZED` / `SDL_EVENT_WINDOW_MOVED` | `SetWindowPos`-equivalent, `WM_SIZE` / `WM_MOVE` |
 | `SDL_EVENT_WINDOW_CLOSE_REQUESTED` | `WM_CLOSE` (→ `DestroyWindow` if unhandled) |
 
@@ -113,7 +113,7 @@ int m_oswindow_fullscreen;         // saved style flags for fullscreen toggle
 
 Only **top-level** windows have an SDL_Window (`m_oswindow`). Child windows (those
 with a parent) do not have their own OS window; they paint into the top-level's
-SDL_Window via `SWELL_internalLICEpaint`.
+SDL_Window via `SWELL_internalSkiaPaint`.
 
 ### 3.2 swell_oswindow_manage(hwnd, wantFocus)
 
@@ -154,7 +154,7 @@ Called when `WS_CAPTION` changes (via `SetWindowLong(GWL_STYLE, ...)`):
 
 ---
 
-## 4. WM_PAINT Synthesis (LICE backend)
+## 4. WM_PAINT Synthesis (Skia backend)
 
 ### 4.1 Invalidation
 
@@ -169,21 +169,21 @@ Called when `WS_CAPTION` changes (via `SetWindowLong(GWL_STYLE, ...)`):
 
 On SDL3 expose event (`SDL_EVENT_WINDOW_EXPOSED`):
 1. SDL3 calls the SWELL expose handler.
-2. Handler calls `SWELL_internalLICEpaint(topLevel, bitmap, 0, 0, false)`.
+2. Handler calls `SWELL_internalSkiaPaint(topLevel, canvas, 0, 0, false)`.
 3. After paint, `swell_oswindow_updatetoscreen(topLevel, &dirtyRect)`:
-   - Copies the LICE bitmap region to the SDL_Window via `SDL_UpdateTexture`
+   - Reads Skia surface pixel data and presents to SDL_Window via `SDL_UpdateTexture`
      and `SDL_RenderPresent`.
 
-### 4.3 SWELL_internalLICEpaint (recursive)
+### 4.3 SWELL_internalSkiaPaint (recursive)
 
 ```
-SWELL_internalLICEpaint(hwnd, bmout, bmout_xpos, bmout_ypos, forceref):
+SWELL_internalSkiaPaint(hwnd, canvas, canvas_xpos, canvas_ypos, forceref):
   if hwnd->m_invalidated: forceref = true
   if forceref or hwnd->m_child_invalidated:
     create swell_gdpLocalContext ctx with:
-      ctx.surface = bmout
-      ctx.surface_offs = {-bmout_xpos, -bmout_ypos}
-      ctx.clipr = {bmout_xpos, bmout_ypos, bmout_xpos+w, bmout_ypos+h}
+      ctx.canvas = canvas
+      ctx.surface_offs = {-canvas_xpos, -canvas_ypos}
+      ctx.clipr = {canvas_xpos, canvas_ypos, canvas_xpos+w, canvas_ypos+h}
     hwnd->m_paintctx = &ctx
 
     // non-client area
@@ -202,8 +202,9 @@ SWELL_internalLICEpaint(hwnd, bmout, bmout_xpos, bmout_ypos, forceref):
   // recurse into children
   for each child (in z-order, first = bottom):
     if child->m_visible and (forceref or child->m_invalidated or child->m_child_invalidated):
-      create LICE_SubBitmap for child's area
-      SWELL_internalLICEpaint(child, subbm, -xoffset, -yoffset, forceref)
+      canvas->save(); canvas->clipRect(childRect); canvas->translate(xoffset, yoffset)
+      SWELL_internalSkiaPaint(child, canvas, -xoffset, -yoffset, forceref)
+      canvas->restore()
 
   if no child extends outside clip: hwnd->m_child_invalidated = false
 ```
@@ -214,7 +215,7 @@ last visible child is painted last = on top).
 
 ### 4.4 Backing store
 
-Top-level windows maintain a `LICE_MemBitmap *m_backingstore`.  
+Top-level windows maintain a `sk_sp<SkSurface> m_backingstore`.  
 `GetDC`/`GetWindowDC`/`ReleaseDC` use this backing store for immediate rendering
 outside of a WM_PAINT cycle.
 
