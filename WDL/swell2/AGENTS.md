@@ -1,0 +1,498 @@
+# SWELL2 — Agent Primer
+
+SWELL2 is a clean-room reimplementation of Cockos SWELL (Simple/Small Win32
+Emulation Layer). The goal is a correct, readable, maintainable codebase that
+passes the same behavioral contracts as the original, built from scratch using
+modern C++17 practices.
+
+This file is the entry point for any agent or developer starting work here.
+Read it before touching any code.
+
+---
+
+## What This Project Is
+
+SWELL is a Win32 subset emulation layer for Linux and macOS. It lets Win32
+GUI applications (plugins, DAW UIs, etc.) run unmodified on non-Windows
+platforms by providing Win32 API functions (`CreateWindow`, `SendMessage`,
+`CreateFont`, `TrackPopupMenu`, etc.) as thin wrappers over platform APIs.
+
+This directory is the reimplementation. The original SWELL lives in
+`../swell/`. Do not read implementation code from there — use the specs in
+`docs/` instead. Reading the original for reference is acceptable when a spec
+is incomplete, but the new code must be independently written.
+
+---
+
+## Directory Layout
+
+```
+swell2/
+  AGENTS.md                ← this file
+  docs/
+    SPEC.md                ← complete API surface (types, constants, functions)
+    PROTOCOLS.md           ← message encodings, call contracts, ordering guarantees
+    RENDERING.md           ← GDI model, HDC state, LICE/paint pipeline, fonts
+    EVENT-LOOP.md          ← message loop, OS backend, WM_PAINT synthesis
+    CONTROLS.md            ← built-in control state and behavior
+
+  # --- Kept headers (do not rewrite) ---
+  swell.h                  ← main include; platform detection; top-level macros
+  swell-types.h            ← all public types, structs, constants (Win32 subset)
+  swell-functions.h        ← all ~200 API function declarations via SWELL_API_DEFINE
+  swell-dlggen.h           ← dialog resource registration macros
+  swell-menugen.h          ← menu resource registration macros
+  swell-win32.h            ← Win32 passthrough helpers (not used on Linux)
+  swellappmain.h           ← macOS NSApplication/NSAppController interface (macOS only)
+  gtkimcontextsimpleseqs.h ← GTK IM context key sequence table (GDK backend data)
+  swell_resgen.{pl,php,sh} ← resource compiler scripts (.rc → .rc_mac_dlg etc.)
+
+  # --- To be written ---
+  swell-internal.h         ← internal types: HWND__, HDC__, HGDIOBJ__, etc.
+  swell-gdi-internalpool.h ← GDI object pool (HDC/HGDIOBJ free lists)
+  swell-ini.cpp            ← INI file read/write
+  swell-gdi.cpp            ← GDI: drawing, fonts, bitmaps, text
+  swell-wnd.cpp            ← window management: HWND lifecycle, messages, timers
+  swell-dlg.cpp            ← dialog creation and modal loop
+  swell-controls.cpp       ← built-in control WNDPROCs
+  swell-menu.cpp           ← HMENU, TrackPopupMenu, menu bar
+  swell-misc.cpp           ← clipboard, drag-drop, monitors, MessageBox, file dialogs
+  swell-kb.cpp             ← keyboard routing, accelerator handling
+  swell-backend-gdk.cpp    ← GDK OS backend (Linux)
+  swell-backend-headless.cpp ← headless backend (no display, for testing)
+  swell-modstub.cpp        ← DllMain shim for plugin mode
+  swell-appstub.cpp        ← standalone app entry (SWELLAppMain dispatch)
+  Makefile
+```
+
+---
+
+## Normative References
+
+Read these before implementing anything in their domain. They are authoritative.
+
+| Doc | Covers |
+|---|---|
+| `docs/SPEC.md` | Every type, constant, macro, and function signature. Deviations from Win32 are listed in §31. |
+| `docs/PROTOCOLS.md` | Exact wParam/lParam encoding for 40+ messages. WNDPROC/DLGPROC contracts. Dialog/focus/timer/menu/PostMessage protocols. |
+| `docs/RENDERING.md` | HDC state machine. HGDIOBJ types. SelectObject semantics. LICE surface model. Paint pipeline. FreeType font system. |
+| `docs/EVENT-LOOP.md` | SWELL_RunMessageLoop steps. GDK event translation. WM_PAINT synthesis. OS window lifecycle. Window creation without dialog template. |
+| `docs/CONTROLS.md` | Internal state structs and behavior for Button, Edit, Static, ListBox, ListView, TreeView, ComboBox, TabControl, Trackbar, ProgressBar. |
+
+When a spec and the original source conflict, the spec wins. If the spec is
+silent on something important, consult the original source and update the spec
+before writing code.
+
+---
+
+## Kept Headers — What They Are
+
+### `swell-types.h`
+All public types. **Do not modify.** This is the ABI contract: `HWND__`,
+`HMENU__`, `HDC__`, `HGDIOBJ__` are forward-declared here as opaque structs;
+they are completed in `swell-internal.h`. All Win32 integer types, callback
+types, struct types (RECT, MSG, LVITEM, etc.), and constants (WM_*, VK_*, etc.)
+are defined here.
+
+### `swell-functions.h`
+All ~200 API functions declared via `SWELL_API_DEFINE(ret, name, parms)`. When
+`SWELL_PROVIDED_BY_APP` is defined, these become `extern` function pointers
+(plugin mode). Otherwise they are direct function declarations. **Do not
+modify.**
+
+### `swell.h`
+Main include. Pulls in `swell-types.h` and `swell-functions.h`. Defines
+`SWELL_POSTMESSAGE_DELEGATE_IMPL` (macOS), `SWELL_CB_*` / `SWELL_TB_*`
+convenience macros, and `SWELL_AutoReleaseHelper`. **Minimize modifications.**
+
+### `swell-dlggen.h`
+Macros that let `.rc`-derived files register dialog resources at static-init
+time. Defines `SWELL_DialogResourceIndex`, `SWELL_DlgResourceEntry`,
+`SWELL_DialogRegHelper`, `SWELL_DEFINE_DIALOG_RESOURCE_BEGIN/END`, and
+`SWELL_DLG_WS_*` flags. **Do not modify.**
+
+### `swell-menugen.h`
+Same pattern for menus: `SWELL_MenuResourceIndex`, `SWELL_MenuGenHelper`,
+`SWELL_DEFINE_MENU_RESOURCE_BEGIN/END`. **Do not modify.**
+
+---
+
+## To-Write Headers
+
+### `swell-internal.h`
+Defines the implementation side of all opaque types. Only included by swell2
+implementation files, never by app code.
+
+Must define:
+```
+HWND__          window node: parent/children/next/prev/owner/owned linked lists,
+                m_title, m_position, m_style, m_exstyle, m_id, m_wndproc,
+                m_dlgproc, m_classname, m_font, m_private_data, m_invalidated,
+                m_child_invalidated, m_visible, m_enabled, m_wantfocus,
+                m_focused_child, m_menu, m_paintctx, m_hashaddestroy,
+                m_backingstore, m_oswindow, m_userdata, m_extra[64]
+
+HMENU__         menu: WDL_PtrList of SWELL_MenuItem
+
+HGDIOBJ__       GDI object: type (TYPE_PEN/BRUSH/FONT/BITMAP), color (LICE_RGBA),
+                wid, alpha, typedata, additional_refcnt, _infreelist, _next
+
+HDC__           device context: surface (LICE_IBitmap*), surface_offs,
+                dirty_rect, curpen, curbrush, curfont, cur_text_color_int,
+                curbkcol, curbkmode, lastpos_x/y, _infreelist, _next
+
+HTREEITEM__     tree node: m_value, m_param, m_state, m_haschildren,
+                m_image/m_selimage, m_children[]
+
+SWELL_OSWINDOW  typedef GdkWindow* (GDK backend) or void* (headless)
+
+swell_gdpLocalContext   paint context passed as WM_PAINT wParam: ctx (HDC__),
+                        clipr (RECT)
+
+Control state types: buttonWindowState, __SWELL_editControlState,
+    listViewState, SWELL_ListView_Row, SWELL_ListView_Col,
+    treeViewState, __SWELL_ComboBoxInternalState, tabControlState
+
+Timer types: TimerInfoRec (hwnd, timerid, interval, lastFire, tProc, refcnt, _next)
+
+PostMessage queue types: PMQ_rec (hwnd, msg, wParam, lParam, _next)
+
+Internal function declarations (not in swell-functions.h):
+    SWELL_internalLICEpaint, swell_oswindow_*, DefWindowProc internals, etc.
+```
+
+See `docs/RENDERING.md §1-2` and `docs/EVENT-LOOP.md §3` for field details.
+
+### `swell-gdi-internalpool.h`
+Free-list pools for HDC__ and HGDIOBJ__ to avoid per-draw allocation.
+
+```c
+HDC__*     SWELL_GDP_CTX_NEW();
+void       SWELL_GDP_CTX_DELETE(HDC__*);
+HGDIOBJ__* GDP_OBJECT_NEW();
+void       GDP_OBJECT_DELETE(HGDIOBJ__*);
+bool       HGDIOBJ_VALID(HGDIOBJ__* p, int reqType = 0);
+bool       HDC_VALID(HDC__* ct);
+```
+
+Caps: 100 HDC, 200 HGDIOBJ. Mutex-protected. See `docs/RENDERING.md §9`.
+
+---
+
+## Module Responsibilities
+
+### `swell-ini.cpp`
+
+`GetPrivateProfileString/Int/Struct`, `WritePrivateProfileString/Struct/Section`,
+`GetPrivateProfileSection`.
+
+Rules: absolute path only; empty string → `~/.libSwell.ini`; thread-safe and
+inter-process-safe via file locking; `GetPrivateProfileStruct` stores binary as
+hex + CRC checksum. See `docs/SPEC.md §5.3`.
+
+### `swell-gdi.cpp`
+
+Everything GDI. Sections:
+- HDC lifecycle: `SWELL_CreateMemContext`, `SWELL_DeleteGfxContext`, `BeginPaint`,
+  `EndPaint`, `GetDC`, `GetWindowDC`, `ReleaseDC`
+- GDI objects: `CreatePen`, `CreatePenAlpha`, `CreateSolidBrush`,
+  `CreateSolidBrushAlpha`, `CreateFont`, `CreateFontIndirect`, `CreateBitmap`,
+  `CreateIconIndirect`, `LoadNamedImage`, `SelectObject`, `DeleteObject`,
+  `GetStockObject`, `SWELL_CloneGDIObject`, `GetObject`
+- Drawing: `Rectangle`, `Ellipse`, `RoundRect`, `SWELL_FillRect`, `SWELL_Polygon`,
+  `MoveToEx`, `LineTo` (=`SWELL_LineTo`), `SetPixel`, `PolyBezierTo`, `PolyPolyline`
+- Blit: `BitBlt`, `StretchBlt`, `StretchBltFromMem`, `DrawImageInRect`
+- State: `SetTextColor`, `GetTextColor`, `SetBkColor`, `SetBkMode`
+- Text: `SWELL_DrawText` (=`DrawText`), `GetTextMetrics`, `GetTextFace`,
+  `GetGlyphIndicesW`
+- Colors: `GetSysColor`
+- Clip: `SWELL_PushClipRegion`, `SWELL_SetClipRegion`, `SWELL_PopClipRegion`
+- Context info: `SWELL_GetCtxGC`, `SWELL_GetCtxFrameBuffer`
+- Font: `AddFontResourceEx`, `SWELL_GetDefaultFont`
+- Paint pipeline: `SWELL_internalLICEpaint`
+
+See `docs/RENDERING.md` for full behavioral spec.
+
+### `swell-wnd.cpp`
+
+Window management. Sections:
+- `HWND__` constructor/destructor (sends WM_NCDESTROY from destructor)
+- `DestroyWindow`, `RecurseDestroyWindow`
+- `SendMessage`, `DefWindowProc`, `SwellDialogDefaultWindowProc`
+- `PostMessage`, `SWELL_MessageQueue_Flush`, `SWELL_MessageQueue_Clear`,
+  `SWELL_Internal_PostMessage*`
+- `SetTimer`, `KillTimer`
+- `SWELL_RunMessageLoop`
+- `ShowWindow`, `EnableWindow`, `IsWindowEnabled`, `IsWindowVisible`, `IsWindow`
+- `SetFocus`, `GetFocus`, `SetForegroundWindow`, `GetForegroundWindow`
+- `GetClientRect`, `GetWindowRect`, `SetWindowPos`, `GetWindowContentViewRect`
+- `ClientToScreen`, `ScreenToClient`, `WindowFromPoint`
+- `GetWindowLong`, `SetWindowLong`, `ScrollWindow`, `InvalidateRect`, `UpdateWindow`
+- `GetParent`, `SetParent`, `GetWindow`, `IsChild`, `EnumWindows`,
+  `EnumChildWindows`, `FindWindowEx`, `GetDlgItem`
+- `GetProp`, `SetProp`, `RemoveProp`, `EnumPropsEx`
+- `GetClassName`, `SWELL_SetClassName`
+- `SetCapture`, `GetCapture`, `ReleaseCapture`
+- `SWELL_BroadcastMessage`
+- `SetDlgItemText`, `GetDlgItemText`, `SetDlgItemInt`, `GetDlgItemInt`,
+  `GetWindowTextLength`, `CheckDlgButton`, `IsDlgButtonChecked`
+- `SWELL_RegisterCustomControlCreator`, `SWELL_UnregisterCustomControlCreator`
+- `SWELL_GenerateDialogFromList`
+- `SWELL_SetWindowLevel`, `SWELL_GetWindowWantRaiseAmt`, `SWELL_SetWindowWantRaiseAmt`
+- `SWELL_GetDefaultButtonID`
+- `SWELL_DrawFocusRect`
+- `SWELL_IsGroupBox`, `SWELL_IsButton`, `SWELL_IsStaticText`
+- `SWELL_GetDesiredControlSize`, `SWELL_DisableContextMenu`
+- `MulDiv`, `lstrcpyn`
+
+See `docs/PROTOCOLS.md §1-3, §10` and `docs/EVENT-LOOP.md §5`.
+
+### `swell-dlg.cpp`
+
+Dialog creation and lifecycle:
+- `SWELL_DialogBox`, `SWELL_CreateDialog`, `EndDialog`
+- `SWELL_MakeSetCurParms`, `SWELL_MakeButton`, `SWELL_MakeEditField`,
+  `SWELL_MakeLabel`, `SWELL_MakeControl`, `SWELL_MakeCombo`, `SWELL_MakeGroupBox`,
+  `SWELL_MakeCheckBox`, `SWELL_MakeListBox`
+- `swell_makeButton` (internal helper)
+- Dialog coordinate scaling (`SWELL_UI_SCALE`, `g_swell_ui_scale`)
+- `SWELL_ModalWindowStart/Run/End`, `SWELL_CloseWindow`
+
+See `docs/PROTOCOLS.md §2` and `docs/EVENT-LOOP.md §5`.
+
+### `swell-controls.cpp`
+
+All built-in control WNDPROCs. One WNDPROC per control type:
+
+```
+buttonWindowProc      Button, CheckBox, RadioButton, GroupBox
+editWindowProc        Edit (single-line and multi-line, UTF-8)
+labelWindowProc       Static
+listViewWindowProc    ListView AND ListBox (m_is_listbox flag distinguishes)
+treeViewWindowProc    TreeView
+comboWindowProc       ComboBox (CBS_DROPDOWNLIST and CBS_DROPDOWN)
+tabControlWindowProc  Tab control
+trackbarWindowProc    Trackbar
+progressWindowProc    Progress bar
+```
+
+Also: `SWELL_MakeControl` dispatcher — maps classnames to the right WNDPROC or
+calls the registered `SWELL_ControlCreatorProc` chain.
+
+See `docs/CONTROLS.md` for state structs and per-control behavior.
+
+### `swell-menu.cpp`
+
+- `CreatePopupMenu`, `CreatePopupMenuEx`, `DestroyMenu`, `SWELL_DuplicateMenu`
+- `AddMenuItem`, `SWELL_InsertMenu`, `InsertMenuItem`, `GetMenuItemInfo`,
+  `SetMenuItemInfo`, `SetMenuItemModifier`, `SetMenuItemText`, `EnableMenuItem`,
+  `DeleteMenu`, `CheckMenuItem`
+- `GetSubMenu`, `GetMenuItemCount`, `GetMenuItemID`
+- `SetMenu`, `GetMenu`, `DrawMenuBar`
+- `TrackPopupMenu`
+- `SWELL_LoadMenu`, `SWELL_Menu_AddMenuItem`, `SWELL_GenerateMenuFromList`
+- `SWELL_GetDefaultWindowMenu`, `SWELL_SetDefaultWindowMenu`,
+  `SWELL_GetDefaultModalWindowMenu`, `SWELL_SetDefaultModalWindowMenu`,
+  `SWELL_GetCurrentMenu`, `SWELL_SetCurrentMenu`
+- Menu bar painting (WM_NCPAINT), hit-testing (WM_NCHITTEST), NC mouse handling
+
+See `docs/PROTOCOLS.md §11` and `docs/SPEC.md §10`.
+
+### `swell-misc.cpp`
+
+Catch-all for subsystems not large enough for their own file:
+- Clipboard: `OpenClipboard`, `CloseClipboard`, `EmptyClipboard`, `GetClipboardData`,
+  `SetClipboardData`, `RegisterClipboardFormat`, `EnumClipboardFormats`,
+  `GlobalAlloc`, `GlobalLock`, `GlobalSize`, `GlobalUnlock`, `GlobalFree`
+- Drag-drop: `DragQueryFile`, `DragQueryPoint`, `DragFinish`,
+  `SWELL_InitiateDragDrop`, `SWELL_InitiateDragDropOfFileList`, `SWELL_FinishDragDrop`,
+  `SWELL_DDrop_*` global callbacks
+- Monitors: `SWELL_GetViewPort`, `EnumDisplayMonitors`, `GetMonitorInfo`,
+  `GetSystemMetrics`
+- Dialogs: `MessageBox`, `BrowseForFiles`, `BrowseForSaveFile`,
+  `BrowseForDirectory`, `BrowseFile_SetTemplate`
+- Shell: `ShellExecute`, `GetTempPath`
+- Colors/fonts: `SWELL_ChooseColor`, `SWELL_ChooseFont`
+- Notify icon: `NOTIFYICONDATA` handling (stub or GDK system tray)
+- Misc: `SWELL_HideApp`, `SetOpaque`, `SetAllowNoMiddleManRendering`,
+  `SWELL_ExtendedAPI`, `_controlfp`
+- Time: `Sleep`, `GetTickCount`, `GetFileTime`
+- Module: `GetModuleFileName`, `LoadLibrary`, `LoadLibraryGlobals`,
+  `GetProcAddress`, `FreeLibrary`, `SWELL_GetBundle`
+- Process: `SWELL_CreateProcess`, `SWELL_GetProcessExitCode`
+- Threads: `CreateThread`, `GetCurrentThreadId`, `SetThreadPriority`, `CloseHandle`,
+  `CreateEvent`, `CreateEventAsSocket`, `SetEvent`, `ResetEvent`,
+  `WaitForSingleObject`, `WaitForAnySocketObject`
+- GUID: `SWELL_GenerateGUID`
+- Rect: `SWELL_PtInRect`, `WinOffsetRect`, `WinSetRect`, `WinUnionRect`,
+  `WinIntersectRect`
+- Cursor: all `SWELL_*Cursor*` functions, `SWELL_Register_Cursor_Resource`
+- Input: `GetCursorPos`, `GetMessagePos`, `GetAsyncKeyState`,
+  `SWELL_KeyToASCII`, `SWELL_GetGestureInfo`
+- ListView helpers (non-WNDPROC): all `ListView_*`, `Header_*`,
+  `SWELL_GetListViewHeaderHeight`, `SWELL_SetListViewFastClickMask`
+- TreeView helpers: all `TreeView_*`
+- Tab control helpers: all `TabCtrl_*`
+- ImageList: `ImageList_CreateEx`, `ImageList_Remove`, `ImageList_ReplaceIcon`,
+  `ImageList_Add`, `ImageList_Destroy`
+- GL/Metal: `SWELL_SetViewGL`, `SWELL_GetViewGL`, `SWELL_SetGLContextToView`,
+  `SWELL_FillDialogBackground`
+
+### `swell-kb.cpp`
+
+Keyboard handling:
+- `SWELL_KeyToASCII`: translates VK + modifier flags to ASCII character.
+- Accelerator table processing (called from `SwellDialogDefaultWindowProc`).
+- `SWELL_EnableRightClickEmulate` (macOS Ctrl+click → right-click).
+
+### `swell-backend-gdk.cpp`
+
+GDK OS backend. Everything that touches GdkWindow directly:
+- `swell_oswindow_manage`, `swell_oswindow_destroy`, `swell_oswindow_resize`,
+  `swell_oswindow_focus`, `swell_oswindow_update_style`, `swell_oswindow_update_enable`,
+  `swell_oswindow_update_text`, `swell_oswindow_invalidate`,
+  `swell_oswindow_updatetoscreen`, `swell_oswindow_maximize`
+- `SWELL_RunEvents` — `g_main_context_iteration` loop
+- `swell_gdkEventHandler` — GDK event → SWELL message translation
+- `SWELL_initargs` — `gdk_init`
+- `SWELL_CreateXBridgeWindow`, `SWELL_GetOSWindow`, `SWELL_GetOSEvent`
+- `SWELL_GetScaling256`
+- `SWELL_internalLICEpaint` entry from expose events
+- `swell_oswindow_to_hwnd`, `swell_oswindow_from_hwnd`
+
+### `swell-backend-headless.cpp`
+
+Headless backend (no display). Stubs `swell_oswindow_*` to no-ops. WM_PAINT
+is never synthesized by OS expose; call `SWELL_internalLICEpaint` explicitly in
+tests. Useful for unit-testing window logic without a display.
+
+### `swell-modstub.cpp`
+
+For plugin mode (`SWELL_PROVIDED_BY_APP`): defines a `DllMain` that receives
+the `SWELLAPI_GetFunc` pointer and resolves all function pointers from
+`swell-functions.h`. See `docs/PROTOCOLS.md §18`.
+
+### `swell-appstub.cpp`
+
+For standalone app mode: provides a `main()` that calls `SWELL_initargs`,
+dispatches `SWELLAppMain` lifecycle messages, runs `SWELL_RunMessageLoop`, and
+handles shutdown. See `docs/EVENT-LOOP.md §11`.
+
+---
+
+## Key Design Constraints
+
+### ABI compatibility
+
+Public structs in `swell-types.h` are fixed. Do not add fields, reorder fields,
+or change sizes of any type declared there. All changes to internal
+representation happen in `swell-internal.h` only.
+
+Function signatures in `swell-functions.h` are fixed. The implementation must
+match them exactly.
+
+### No CreatWindow / RegisterClass
+
+SWELL has no `RegisterClass` or `CreateWindowEx`. Windows are created only via:
+- `SWELL_CreateDialog` / `SWELL_DialogBox` (resource-based)
+- `SWELL_CreateDialog(head, NULL, parent, (DLGPROC)wndproc, param)` (bare WNDPROC)
+- `new HWND__(...)` within control creator callbacks (internal only)
+
+Document this constraint clearly in comments wherever window allocation occurs.
+
+### Thread safety rules
+
+Only `PostMessage` and `GetTickCount` are thread-safe. Everything else is
+main-thread only. Use `WDL_Mutex` from `../../mutex.h` for the PostMessage queue
+and timer list. See `docs/PROTOCOLS.md §16`.
+
+### String encoding
+
+All text is UTF-8. Internal storage is `WDL_FastString`. `HWND__::m_title`
+holds the window/control text. Character positions (cursor, selection) are
+Unicode character indices, not byte offsets. Convert with
+`WDL_utf8_charpos_to_bytepos`.
+
+### Message delivery invariants
+
+`SendMessage` is synchronous and non-reentrant per HWND (unless the proc
+itself calls SendMessage recursively). After `m_hashaddestroy == 2`, SendMessage
+returns 0 without calling the proc. See `docs/PROTOCOLS.md §1.1`.
+
+### BOOL type
+
+`BOOL` is `signed char`. Return `TRUE` (1) or `FALSE` (0). Never `!= FALSE`
+comparisons against `int` return values. See `docs/SPEC.md §2.1`.
+
+### RGB byte order
+
+Default (non-Win32): `RGB(r,g,b) = (r<<16)|(g<<8)|b`. All GDI internals use
+LICE_RGBA format (`LICE_RGBA_FROMNATIVE` converts). See `docs/SPEC.md §4.2`
+and `docs/RENDERING.md §2.3`.
+
+### SW_* constant values differ from Win32
+
+`SW_SHOW=2`, `SW_SHOWNA=1`, etc. Never hardcode numeric values; use the
+named constants from `swell-types.h`. See `docs/SPEC.md §3.5`.
+
+### Keyboard lParam is not Win32
+
+`lParam` for `WM_KEYDOWN`/`WM_KEYUP` is modifier flags (`FVIRTKEY|FSHIFT|
+FCONTROL|FALT|FLWIN|0x1000000`), NOT the Win32 scan-code/repeat-count format.
+See `docs/PROTOCOLS.md §19`.
+
+---
+
+## WDL Dependencies
+
+swell2 depends on the WDL library (`../../` from this directory):
+
+```
+../../lice/        LICE bitmap rendering (LICE_IBitmap, LICE_MemBitmap, LICE_SubBitmap,
+                   LICE_FillRect, LICE_Blit, etc.)
+../../mutex.h      WDL_Mutex, WDL_MutexLock
+../../faststring.h WDL_FastString (UTF-8 string with efficient append)
+../../ptrlist.h    WDL_PtrList<T>, WDL_PtrList_DeleteOnDestroy<T>
+../../typedbuf.h   WDL_TypedBuf<T>
+../../wdlcstring.h lstrcpyn_safe, WDL_stricmp, etc.
+../../wdlutf8.h    WDL_utf8_charpos_to_bytepos, WDL_utf8_get_charlen, etc.
+```
+
+GDK backend additionally requires GDK 2 or 3 (`gdk/gdk.h`).
+FreeType and fontconfig are required for text rendering on Linux.
+
+---
+
+## Suggested Implementation Order
+
+Implement in this order to keep each step independently testable:
+
+1. `swell-internal.h` — all internal type definitions
+2. `swell-gdi-internalpool.h` — pool infrastructure
+3. `swell-ini.cpp` — no dependencies; self-contained; easy to test
+4. `swell-gdi.cpp` — depends on LICE and pool only
+5. `swell-wnd.cpp` (partial) — HWND__ lifecycle, SendMessage, PostMessage queue, timers
+6. `swell-backend-headless.cpp` — lets you test window logic without GDK
+7. `swell-controls.cpp` — depends on wnd + gdi
+8. `swell-dlg.cpp` — depends on controls + wnd
+9. `swell-menu.cpp` — depends on wnd + gdi
+10. `swell-misc.cpp` — depends on everything above
+11. `swell-kb.cpp` — depends on wnd
+12. `swell-backend-gdk.cpp` — OS integration; depends on everything
+13. `swell-modstub.cpp` — thin; implement last
+14. `swell-appstub.cpp` — thin; implement last
+15. `Makefile` — wire it all together
+
+---
+
+## What "Done" Looks Like for a Module
+
+A module is done when:
+1. All functions listed in `swell-functions.h` for that module compile and link.
+2. Behavior matches the relevant spec doc section exactly, including edge cases.
+3. No undefined behavior (valgrind or ASAN clean).
+4. No references to original `../swell/` source in the implementation.
+
+---
+
+*End of AGENTS.md*
