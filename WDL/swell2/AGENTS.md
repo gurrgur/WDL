@@ -35,6 +35,7 @@ swell2/
     RENDERING.md           ← GDI model, HDC state, Skia/paint pipeline, fonts
     EVENT-LOOP.md          ← message loop, OS backend, WM_PAINT synthesis
     CONTROLS.md            ← built-in control state and behavior
+    DEBUGGING.md           ← common crash patterns, symbol auditing, REAPER testing
 
   # --- Kept headers (do not rewrite) ---
   swell.h                  ← main include; platform detection; top-level macros
@@ -50,19 +51,20 @@ swell2/
   # --- To be written ---
   swell-internal.h         ← internal types: HWND__, HDC__, HGDIOBJ__, etc.
   swell-gdi-internalpool.h ← GDI object pool (HDC/HGDIOBJ free lists)
-  swell-ini.cpp            ← INI file read/write
-  swell-gdi.cpp            ← GDI: drawing, fonts, bitmaps, text
-  swell-wnd.cpp            ← window management: HWND lifecycle, messages, timers
+  swell-ini.cpp            ← INI file read/write (done)
+  swell-gdi.cpp            ← GDI: drawing, fonts, bitmaps, text (stubs)
+  swell-wnd.cpp            ← window management: HWND lifecycle, messages, timers (done)
+  swell-stubs.cpp          ← stubs for all remaining SWELL_API_DEFINE functions
+  swell-appstub.cpp        ← SWELLAPI_GetFunc export (needed by REAPER)
+  swell-backend-headless.cpp ← headless backend (no display, for testing; done)
+  swell-backend-sdl3.cpp   ← SDL3 OS backend (Linux) — NOT YET STARTED
   swell-dlg.cpp            ← dialog creation and modal loop
   swell-controls.cpp       ← built-in control WNDPROCs
   swell-menu.cpp           ← HMENU, TrackPopupMenu, menu bar
   swell-misc.cpp           ← clipboard, drag-drop, monitors, MessageBox, file dialogs
   swell-kb.cpp             ← keyboard routing, accelerator handling
-  swell-backend-gdk.cpp    ← GDK OS backend (Linux)
-  swell-backend-headless.cpp ← headless backend (no display, for testing)
   swell-modstub.cpp        ← DllMain shim for plugin mode
-  swell-appstub.cpp        ← standalone app entry (SWELLAppMain dispatch)
-  Makefile
+  CMakeLists.txt           ← build system (done)
 ```
 
 ---
@@ -378,6 +380,11 @@ For standalone app mode: provides a `main()` that calls `SWELL_initargs`,
 dispatches `SWELLAppMain` lifecycle messages, runs `SWELL_RunMessageLoop`, and
 handles shutdown. See `docs/EVENT-LOOP.md §11`.
 
+**CRITICAL:** Also exports `SWELLAPI_GetFunc(const char *name)` — the function
+pointer lookup table required by REAPER and other apps that resolve SWELL
+functions dynamically. Without this, REAPER crashes at startup (null function
+pointer → SIGSEGV at 0x0). See `docs/DEBUGGING.md`.
+
 ---
 
 ## Key Design Constraints
@@ -445,21 +452,59 @@ See `docs/PROTOCOLS.md §19`.
 
 ## WDL Dependencies
 
-swell2 depends on the WDL library (`../../` from this directory):
+swell2 depends on the WDL library (`../` from this directory — the parent of `swell2/`):
 
 ```
 Skia              Skia 2D graphics library (SkCanvas, SkSurface, SkPaint, SkBitmap,
                    SkBlendMode, sk_sp<>, etc.)
-../../mutex.h      WDL_Mutex, WDL_MutexLock
-../../faststring.h WDL_FastString (UTF-8 string with efficient append)
-../../ptrlist.h    WDL_PtrList<T>, WDL_PtrList_DeleteOnDestroy<T>
-../../typedbuf.h   WDL_TypedBuf<T>
-../../wdlcstring.h lstrcpyn_safe, WDL_stricmp, etc.
-../../wdlutf8.h    WDL_utf8_charpos_to_bytepos, WDL_utf8_get_charlen, etc.
+../mutex.h        WDL_Mutex, WDL_MutexLock
+../wdlstring.h    WDL_FastString (= WDL_String alias, UTF-8 string)
+../ptrlist.h      WDL_PtrList<T>, WDL_PtrList_DeleteOnDestroy<T>
+../heapbuf.h      WDL_TypedBuf<T> (templated typed buffer)
+../wdlcstring.h   lstrcpyn_safe, WDL_stricmp, etc.
+../wdlutf8.h      WDL_utf8_charpos_to_bytepos, WDL_utf8_get_charlen, etc.
 ```
 
-GDK backend additionally requires GDK 2 or 3 (`gdk/gdk.h`).
-FreeType and fontconfig are required for text rendering on Linux.
+### Skia version notes
+
+The installed Skia may be a recent version (m118+) where the API differs from
+older docs:
+
+| Old API | New API |
+|---------|---------|
+| `SkSurface::MakeRasterN32Premul(w,h)` | `SkSurfaces::Raster(SkImageInfo::MakeN32Premul(w,h))` |
+| `SkSurface::MakeNull(w,h)` | `SkSurfaces::Null(w,h)` |
+
+Check `/usr/include/include/core/SkSurface.h` for the exact signatures in your
+installation. Use `pkg-config --cflags skia` for include paths.
+
+### NOMINMAX
+
+`swell-types.h` defines `min`/`max` macros that conflict with Skia and STL.
+Always define `NOMINMAX` before including `swell.h` (CMake does this via
+`target_compile_definitions`). Implementation files that include `swell.h`
+before STL headers should `#undef min` / `#undef max` after the include.
+
+---
+
+## swell.h Double-Include Trick
+
+`swell.h` includes `swell-functions.h` **outside** the `_WDL_SWELL_H_` include
+guard. This is intentional — it allows `swell-appstub.cpp` to generate a
+name→function-pointer lookup table:
+
+```cpp
+#include "swell.h"                    // 1st pass: normal declarations
+#undef _WDL_SWELL_H_API_DEFINED_
+#undef SWELL_API_DEFINE
+#define SWELL_API_DEFINE(ret,fn,parms) {#fn, (void *)fn},
+static struct api_ent { const char *name; void *func; } api_table[] = {
+  #include "swell-functions.h"        // 2nd pass: table entries
+};
+```
+
+`SWELLAPI_GetFunc` does a binary search on `api_table`. This is how REAPER
+resolves all ~240 SWELL function pointers at load time.
 
 ---
 
@@ -473,15 +518,26 @@ Implement in this order to keep each step independently testable:
 4. `swell-gdi.cpp` — depends on Skia and pool only
 5. `swell-wnd.cpp` (partial) — HWND__ lifecycle, SendMessage, PostMessage queue, timers
 6. `swell-backend-headless.cpp` — lets you test window logic without GDK
-7. `swell-controls.cpp` — depends on wnd + gdi
-8. `swell-dlg.cpp` — depends on controls + wnd
-9. `swell-menu.cpp` — depends on wnd + gdi
-10. `swell-misc.cpp` — depends on everything above
-11. `swell-kb.cpp` — depends on wnd
-12. `swell-backend-gdk.cpp` — OS integration; depends on everything
-13. `swell-modstub.cpp` — thin; implement last
-14. `swell-appstub.cpp` — thin; implement last
-15. `Makefile` — wire it all together
+7. **`swell-appstub.cpp`** — SWELLAPI_GetFunc export (needed by REAPER to resolve fn pointers)
+8. **`swell-stubs.cpp`** — stubs for ALL remaining SWELL_API_DEFINE functions; every declared
+   function must have a definition or REAPER crashes with null pointer calls
+9. `swell-controls.cpp` — depends on wnd + gdi
+10. `swell-dlg.cpp` — depends on controls + wnd
+11. `swell-menu.cpp` — depends on wnd + gdi
+12. `swell-misc.cpp` — depends on everything above
+13. `swell-kb.cpp` — depends on wnd
+14. `swell-backend-gdk.cpp` — OS integration; depends on everything
+15. `swell-modstub.cpp` — thin; implement last
+16. `CMakeLists.txt` — wire it all together (C++17, Skia via pkg-config)
+
+**Critical:** You MUST provide a definition for every function declared via
+`SWELL_API_DEFINE` in `swell-functions.h`. Even stub no-ops are sufficient.
+A missing symbol means REAPER gets NULL from `SWELLAPI_GetFunc` → crash.
+Use `comm -23 <(grep SWELL_API_DEFINE swell-functions.h declarations) <(nm -D libSwell.so defined)` to audit.
+
+Note: some functions in `swell-functions.h` are declared unconditionally
+despite "macOS only" comments in the source. Check the actual preprocessor
+scope, not the comment. Example: `SWELL_SetMenuDestination`.
 
 ---
 
