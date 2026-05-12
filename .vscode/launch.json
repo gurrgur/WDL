@@ -1,0 +1,71 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug REAPER replacement libSwell.so",
+      "type": "cppdbg",
+      "request": "launch",
+
+      "program": "/usr/lib/REAPER/reaper",
+      "args": [],
+
+      "cwd": "${workspaceFolder}",
+
+      "MIMode": "gdb",
+
+      "pipeTransport": {
+        "pipeProgram": "/usr/bin/bwrap",
+        "pipeArgs": [
+          "--ro-bind", "/", "/",
+
+          "--bind", "${workspaceFolder}/WDL/swell2/build/libSwell.so", "/usr/lib/REAPER/libSwell.so",
+
+          "--bind", "${env:HOME}/.config/REAPER", "${env:HOME}/.config/REAPER",
+          "--bind", "${env:HOME}/.cache", "${env:HOME}/.cache",
+
+          "--tmpfs", "/tmp",
+          "--bind", "/tmp/.X11-unix", "/tmp/.X11-unix",
+
+          "--dev", "/dev",
+          "--proc", "/proc",
+
+          "--setenv", "GDK_BACKEND", "x11",
+
+          "--"
+        ],
+        "debuggerPath": "/usr/bin/gdb",
+        "pipeCwd": "${workspaceFolder}",
+        "quoteArgs": false
+      },
+
+      "stopAtEntry": false,
+
+      "setupCommands": [
+        {
+          "text": "set pagination off",
+          "ignoreFailures": true
+        },
+        {
+          "text": "set breakpoint pending on",
+          "ignoreFailures": true
+        },
+        {
+          "text": "set solib-search-path ${workspaceFolder}/build",
+          "ignoreFailures": true
+        },
+        {
+          "text": "sharedlibrary libSwell",
+          "ignoreFailures": true
+        },
+        {
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ],
+
+      "logging": {
+        "engineLogging": true
+      }
+    }
+  ]
+}
