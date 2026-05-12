@@ -10,7 +10,8 @@
 | 4 | `swell-gdi.cpp` | done | HDC lifecycle (CreateMemContext/BeginPaint/EndPaint/GetDC/ReleaseDC), GDI object create/delete (CreatePen/Font/Bitmap/SelectObject/DeleteObject/GetStockObject, SelectObject sentinel pattern per RENDERING.md §3), drawing/blit stubs (no-ops), text metrics (fallback vals), color conversion (native↔SkColor), clip stubs, pool impl. |
 | 5 | `swell-wnd.cpp` | done | HWND__ ctor/dtor, SendMessage, DefWindowProc, SwellDialogDefaultWindowProc, PostMessage queue (thread-safe, max 1024), timers (SetTimer/KillTimer/fireTimers), focus chain (SetFocus/GetFocus), DestroyWindow protocol (WM_DESTROY→NCDESTROY), ShowWindow/EnableWindow/IsWindow*, window hierarchy (GetParent/SetParent/GetWindow/IsChild/EnumWindows/EnumChildWindows/FindWindowEx/GetDlgItem), GetWindowLong/SetWindowLong, Prop list, coordinate conv (ClientToScreen/ScreenToClient/GetClientRect/GetWindowRect/SetWindowPos/WindowFromPoint), InvalidateRect/UpdateWindow, ScrollWindow, GetClassName/SWELL_SetClassName, SWELL_BroadcastMessage, custom control creator registration, SWELL_GetDefaultButtonID, helper functions (SWELL_DrawFocusRect/IsGroupBox/IsButton/IsStaticText), MulDiv/lstrcpyn, Sleep/GetTickCount/GetFileTime, SWELL_RunMessageLoop (flush→events→timers). |
 | 6 | `swell-backend-headless.cpp` | done | All swell_oswindow_* no-ops, SWELL_initargs stub, SWELL_RunEvents stub, SWELL_CreateXBridgeWindow/SWELL_GetOSWindow/SWELL_GetOSEvent stubs. |
-| 7 | `CMakeLists.txt` | done | C++17, links Skia (pkg-config), pthread, dl. Defines NOMINMAX. Builds libSwell.so (5.9MB). |
+| 7 | `CMakeLists.txt` | done | C++17, links Skia (pkg-config), pthread, dl. Defines NOMINMAX. Builds libSwell.so. |
+| 8 | `swell-stubs.cpp` | done | ~237 stub functions covering all remaining SWELL_API_DEFINE declarations. No undefined symbols. |
 
 ## Remaining (not started)
 

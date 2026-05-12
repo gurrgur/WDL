@@ -15,6 +15,7 @@ set(SWELL2_SOURCES
   swell-gdi.cpp
   swell-wnd.cpp
   swell-backend-headless.cpp
+  swell-stubs.cpp
 )
 
 # ---- swell2 library ----
