@@ -16,6 +16,7 @@ set(SWELL2_SOURCES
   swell-wnd.cpp
   swell-backend-headless.cpp
   swell-stubs.cpp
+  swell-appstub.cpp
 )
 
 # ---- swell2 library ----

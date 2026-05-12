@@ -1144,10 +1144,6 @@ int SWELL_EnableMetal(HWND h, int mode)
   return 0;
 }
 
-void SWELL_SetMenuDestination(HMENU menu, HWND hwnd)
-{
-}
-
 int SWELL_MacKeyToWindowsKey(void *nsevent, int *flags)
 {
   return 0;
@@ -1249,6 +1245,11 @@ void *GetNSImageFromHICON(HICON icon)
 }
 
 #endif // SWELL_TARGET_OSX
+
+// SWELL_SetMenuDestination is declared unconditionally but marked macOS-only in docs
+void SWELL_SetMenuDestination(HMENU menu, HWND hwnd)
+{
+}
 
 // ============================================================================
 // Non-OSX only
