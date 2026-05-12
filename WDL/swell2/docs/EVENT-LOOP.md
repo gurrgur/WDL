@@ -28,23 +28,18 @@ void SWELL_RunMessageLoop()
 - Thread-safe dequeue; `SendMessage` itself must be on main thread.
 - Messages to destroyed windows are silently dropped.
 
-### Step 2: OS event dispatch (GDK backend)
+### Step 2: OS event dispatch (SDL3 backend)
 
-`SWELL_RunEvents()` (GDK):
+`SWELL_RunEvents()` (SDL3):
 ```c
-GMainContext *ctx = g_main_context_default();
-while (g_main_context_iteration(ctx, FALSE))
+SDL_Event evt;
+while (SDL_PollEvent(&evt))
 {
-  GdkEvent *evt;
-  while (gdk_events_pending() && (evt = gdk_event_get()))
-  {
-    swell_gdkEventHandler(evt, (gpointer)1);
-    gdk_event_free(evt);
-  }
+  swell_sdlEventHandler(&evt);
 }
 ```
 
-This processes all pending GDK events without blocking.
+This processes all pending SDL3 events without blocking.
 
 ### Step 3: Timer processing
 
@@ -71,30 +66,30 @@ firing of the same timer in one pass).
 
 ---
 
-## 2. GDK Event Translation
+## 2. SDL3 Event Translation
 
-`swell_gdkEventHandler` translates raw GDK events into SWELL messages:
+`swell_sdlEventHandler` translates raw SDL3 events into SWELL messages:
 
-| GDK event | SWELL message |
+| SDL3 event | SWELL message |
 |---|---|
-| `GDK_BUTTON_PRESS` (button=1) | `WM_LBUTTONDOWN` |
-| `GDK_BUTTON_RELEASE` (button=1) | `WM_LBUTTONUP` |
-| `GDK_2BUTTON_PRESS` (button=1) | `WM_LBUTTONDBLCLK` |
-| `GDK_BUTTON_PRESS` (button=3) | `WM_RBUTTONDOWN` |
-| `GDK_BUTTON_RELEASE` (button=3) | `WM_RBUTTONUP` |
-| `GDK_BUTTON_PRESS` (button=2) | `WM_MBUTTONDOWN` |
-| `GDK_MOTION_NOTIFY` | `WM_MOUSEMOVE` |
-| `GDK_SCROLL` | `WM_MOUSEWHEEL` or `WM_MOUSEHWHEEL` |
-| `GDK_KEY_PRESS` | `WM_KEYDOWN` (+ possibly `WM_CHAR`) |
-| `GDK_KEY_RELEASE` | `WM_KEYUP` |
-| `GDK_FOCUS_CHANGE` (in) | `WM_ACTIVATE`, `WM_SETFOCUS` on focused child |
-| `GDK_FOCUS_CHANGE` (out) | `WM_ACTIVATE` (WA_INACTIVE), `WM_KILLFOCUS` |
-| `GDK_EXPOSE` / `GDK_DAMAGE` | triggers `SWELL_internalLICEpaint` |
-| `GDK_CONFIGURE` | `SetWindowPos`-equivalent, `WM_SIZE` / `WM_MOVE` |
-| `GDK_DELETE` | `WM_CLOSE` (→ `DestroyWindow` if unhandled) |
+| `SDL_EVENT_MOUSE_BUTTON_DOWN` (button=LEFT) | `WM_LBUTTONDOWN` |
+| `SDL_EVENT_MOUSE_BUTTON_UP` (button=LEFT) | `WM_LBUTTONUP` |
+| `SDL_EVENT_MOUSE_BUTTON_DOWN` (button=LEFT, clicks=2) | `WM_LBUTTONDBLCLK` |
+| `SDL_EVENT_MOUSE_BUTTON_DOWN` (button=RIGHT) | `WM_RBUTTONDOWN` |
+| `SDL_EVENT_MOUSE_BUTTON_UP` (button=RIGHT) | `WM_RBUTTONUP` |
+| `SDL_EVENT_MOUSE_BUTTON_DOWN` (button=MIDDLE) | `WM_MBUTTONDOWN` |
+| `SDL_EVENT_MOUSE_MOTION` | `WM_MOUSEMOVE` |
+| `SDL_EVENT_MOUSE_WHEEL` | `WM_MOUSEWHEEL` or `WM_MOUSEHWHEEL` |
+| `SDL_EVENT_KEY_DOWN` | `WM_KEYDOWN` (+ possibly `WM_CHAR`) |
+| `SDL_EVENT_KEY_UP` | `WM_KEYUP` |
+| `SDL_EVENT_WINDOW_FOCUS_GAINED` | `WM_ACTIVATE`, `WM_SETFOCUS` on focused child |
+| `SDL_EVENT_WINDOW_FOCUS_LOST` | `WM_ACTIVATE` (WA_INACTIVE), `WM_KILLFOCUS` |
+| `SDL_EVENT_WINDOW_EXPOSED` | triggers `SWELL_internalLICEpaint` |
+| `SDL_EVENT_WINDOW_RESIZED` / `SDL_EVENT_WINDOW_MOVED` | `SetWindowPos`-equivalent, `WM_SIZE` / `WM_MOVE` |
+| `SDL_EVENT_WINDOW_CLOSE_REQUESTED` | `WM_CLOSE` (→ `DestroyWindow` if unhandled) |
 
 Mouse coordinate translation:
-- GDK reports screen coordinates; converted to HWND client coords via `ScreenToClient`.
+- SDL3 reports window-relative coordinates; converted to HWND client coords via `ScreenToClient`.
 - Hit-testing via `ChildWindowFromPoint` routes events to the correct child HWND.
 
 Mouse routing:
@@ -103,51 +98,50 @@ Mouse routing:
 
 ---
 
-## 3. OS Window Lifecycle (GDK backend)
+## 3. OS Window Lifecycle (SDL3 backend)
 
 ### 3.1 Data structures
 
 ```c
-typedef GdkWindow* SWELL_OSWINDOW;
+typedef SDL_Window* SWELL_OSWINDOW;
 
 // In HWND__:
-SWELL_OSWINDOW m_oswindow;         // the GDkWindow, or NULL for child windows
+SWELL_OSWINDOW m_oswindow;         // the SDL_Window, or NULL for child windows
 int m_oswindow_private;            // PRIVATE_NEEDSHOW, PRIVATE_NEEDHIDE, etc.
 int m_oswindow_fullscreen;         // saved style flags for fullscreen toggle
 ```
 
-Only **top-level** windows have a GdkWindow (`m_oswindow`). Child windows (those
+Only **top-level** windows have an SDL_Window (`m_oswindow`). Child windows (those
 with a parent) do not have their own OS window; they paint into the top-level's
-GdkWindow via `SWELL_internalLICEpaint`.
+SDL_Window via `SWELL_internalLICEpaint`.
 
 ### 3.2 swell_oswindow_manage(hwnd, wantFocus)
 
-Creates the GdkWindow for a top-level HWND. Called by `ShowWindow`/`SWELL_CreateDialog`
+Creates the SDL_Window for a top-level HWND. Called by `ShowWindow`/`SWELL_CreateDialog`
 when a window becomes visible for the first time.
 
 Sequence:
-1. Determine window attributes from `hwnd->m_style`:
-   - `WS_CAPTION | WS_THICKFRAME` → decorated with resize
-   - `WS_CAPTION` → decorated, fixed size
-   - neither → undecorated (tool window)
-2. `gdk_window_new(parent, &attr, mask)` — creates GdkWindow.
-3. Connect GDK event handlers (expose, configure, key, button, motion, etc.).
-4. `gdk_window_show(hwnd->m_oswindow)` if wantFocus.
-5. Registers in the HWND → GdkWindow mapping for hit-testing.
+1. Determine window flags from `hwnd->m_style`:
+   - `WS_CAPTION | WS_THICKFRAME` → `SDL_WINDOW_RESIZABLE`
+   - `WS_CAPTION` → default decorations, no resize
+   - neither → `SDL_WINDOW_BORDERLESS`
+2. `SDL_CreateWindow(title, w, h, flags)` — creates SDL_Window.
+3. `SDL_ShowWindow(hwnd->m_oswindow)` if wantFocus.
+4. Registers in the HWND → SDL_Window mapping for hit-testing.
 
 ### 3.3 swell_oswindow_destroy(hwnd)
 
 1. Unregisters from the global window map.
-2. `gdk_window_destroy(hwnd->m_oswindow)`.
+2. `SDL_DestroyWindow(hwnd->m_oswindow)`.
 3. Clears `hwnd->m_oswindow = NULL`.
 
 Called from `RecurseDestroyWindow` as part of `DestroyWindow`.
 
 ### 3.4 swell_oswindow_resize(wnd, reposflag, rect)
 
-Updates GdkWindow position/size to match `HWND__::m_position`:
-- `reposflag & 1` (move): `gdk_window_move(wnd, x, y)`
-- `reposflag & 2` (size): `gdk_window_resize(wnd, w, h)`
+Updates SDL_Window position/size to match `HWND__::m_position`:
+- `reposflag & 1` (move): `SDL_SetWindowPosition(wnd, x, y)`
+- `reposflag & 2` (size): `SDL_SetWindowSize(wnd, w, h)`
 
 Called by `SetWindowPos` after updating `m_position`.
 
@@ -155,7 +149,7 @@ Called by `SetWindowPos` after updating `m_position`.
 
 Called when `WS_CAPTION` changes (via `SetWindowLong(GWL_STYLE, ...)`):
 - Hides owned windows transiently.
-- Calls `gdk_window_hide`, changes decorations, sets `PRIVATE_NEEDSHOW`.
+- Calls `SDL_HideWindow`, changes border flags, sets `PRIVATE_NEEDSHOW`.
 - The actual show happens on the next event loop iteration.
 
 ---
@@ -168,17 +162,17 @@ Called when `WS_CAPTION` changes (via `SetWindowLong(GWL_STYLE, ...)`):
 1. Sets `hwnd->m_invalidated = true`.
 2. Walks up ancestor chain: sets `m_child_invalidated = true` on each parent.
 3. Calls `swell_oswindow_invalidate(topLevel, &screenRect)`:
-   - GDK: `gdk_window_invalidate_rect(oswindow, &gdkRect, FALSE)` — schedules
-     an expose event.
+   - SDL3: marks the window dirty; `SDL_EVENT_WINDOW_EXPOSED` is synthesized or
+     paint is triggered directly on next event loop pass.
 
 ### 4.2 Paint dispatch
 
-On GDK expose event (`GDK_EXPOSE`):
-1. GDK calls the SWELL expose handler.
+On SDL3 expose event (`SDL_EVENT_WINDOW_EXPOSED`):
+1. SDL3 calls the SWELL expose handler.
 2. Handler calls `SWELL_internalLICEpaint(topLevel, bitmap, 0, 0, false)`.
 3. After paint, `swell_oswindow_updatetoscreen(topLevel, &dirtyRect)`:
-   - Copies the LICE bitmap region to the GdkWindow via `gdk_draw_rgb_32_image`
-     or Cairo surface.
+   - Copies the LICE bitmap region to the SDL_Window via `SDL_UpdateTexture`
+     and `SDL_RenderPresent`.
 
 ### 4.3 SWELL_internalLICEpaint (recursive)
 
@@ -271,50 +265,50 @@ hwnd->m_wndproc(hwnd, WM_CREATE, 0, 0);
 
 ---
 
-## 6. Window Style → GDK Decorations Mapping
+## 6. Window Style → SDL3 Window Flags Mapping
 
-| HWND style | GDK decorations |
+| HWND style | SDL3 flags |
 |---|---|
-| `WS_CAPTION | WS_THICKFRAME` | `GDK_DECOR_ALL | GDK_DECOR_MENU` |
-| `WS_CAPTION` (no resize) | `GDK_DECOR_BORDER | GDK_DECOR_TITLE | GDK_DECOR_MINIMIZE` |
-| neither | `GdkWMDecoration(0)` (undecorated) |
+| `WS_CAPTION | WS_THICKFRAME` | `SDL_WINDOW_RESIZABLE` (decorated by default) |
+| `WS_CAPTION` (no resize) | default decorations, no `SDL_WINDOW_RESIZABLE` |
+| neither | `SDL_WINDOW_BORDERLESS` |
 
 ---
 
-## 7. Focus Routing (GDK backend)
+## 7. Focus Routing (SDL3 backend)
 
-On `GDK_FOCUS_CHANGE (in)`:
-1. Find the HWND for the newly focused GdkWindow.
+On `SDL_EVENT_WINDOW_FOCUS_GAINED`:
+1. Find the HWND for the newly focused SDL_Window.
 2. Set `SWELL_focused_oswindow = oswindow`.
 3. Send `WM_ACTIVATE(WA_ACTIVE, ...)` to the hwnd.
 4. Send `WM_SETFOCUS` to `GetFocus()` (the hwnd's focused child, if any).
 
-On `GDK_FOCUS_CHANGE (out)`:
+On `SDL_EVENT_WINDOW_FOCUS_LOST`:
 1. Send `WM_KILLFOCUS` to current `GetFocus()`.
 2. Send `WM_ACTIVATE(WA_INACTIVE, ...)`.
 3. Clear `SWELL_focused_oswindow`.
 
 ---
 
-## 8. Keyboard Routing (GDK backend)
+## 8. Keyboard Routing (SDL3 backend)
 
-On `GDK_KEY_PRESS`:
-1. Translate GDK keyval + modifiers → `wParam` (VK_*) and `lParam` (modifier flags).
+On `SDL_EVENT_KEY_DOWN`:
+1. Translate SDL_Keycode + SDL_Keymod → `wParam` (VK_*) and `lParam` (modifier flags).
 2. Dispatch to `GetFocus()` as `WM_KEYDOWN`.
 3. If handled (returns non-zero): done.
 4. If not handled: `DefWindowProc` bubbles to parent.
 5. For printable characters: also send `WM_CHAR(charcode, lParam)`.
 
-GDK → VK mapping: `GDK_KEY_Return` → `VK_RETURN`, `GDK_KEY_Tab` → `VK_TAB`, etc.
+SDL3 → VK mapping: `SDLK_RETURN` → `VK_RETURN`, `SDLK_TAB` → `VK_TAB`, etc.
 
 Modifier flag construction:
 ```c
 lParam = FVIRTKEY;
-if (shift)   lParam |= FSHIFT;
-if (ctrl)    lParam |= FCONTROL;
-if (alt)     lParam |= FALT;
-if (super)   lParam |= FLWIN;
-if (is_extended_key(keyval)) lParam |= 0x1000000;
+if (mod & SDL_KMOD_SHIFT) lParam |= FSHIFT;
+if (mod & SDL_KMOD_CTRL)  lParam |= FCONTROL;
+if (mod & SDL_KMOD_ALT)   lParam |= FALT;
+if (mod & SDL_KMOD_GUI)   lParam |= FLWIN;
+if (is_extended_key(sym)) lParam |= 0x1000000;
 ```
 
 ---
@@ -339,7 +333,7 @@ client space.
 
 To reduce OS window flicker in rapid dialog open/close sequences:
 
-After `EndDialog`, the GdkWindow can be saved in a spare pool for 100ms (500ms if
+After `EndDialog`, the SDL_Window can be saved in a spare pool for 100ms (500ms if
 app is inactive). The next `SWELL_DialogBox` call will reuse the pooled window:
 - `SW_SHOWNA` (show without focus steal) is used when reusing.
 - Pooled window is destroyed by `swell_dlg_destroyspare()` when the TTL expires.
@@ -348,11 +342,11 @@ Pool size: 1 window (the most recently closed modal dialog).
 
 ---
 
-## 11. App Startup Sequence (generic/GDK)
+## 11. App Startup Sequence (generic/SDL3)
 
 ```
 main()
-  SWELL_initargs(&argc, &argv)     // GDK init: gdk_init()
+  SWELL_initargs(&argc, &argv)     // SDL3 init: SDL_Init(SDL_INIT_VIDEO)
   SWELLAppMain(SWELLAPP_ONLOAD, 0, 0)
   SWELLAppMain(SWELLAPP_LOADED, 0, 0)
   while (!quit):

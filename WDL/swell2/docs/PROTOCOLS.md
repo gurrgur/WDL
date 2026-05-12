@@ -399,7 +399,7 @@ Sent by `SetWindowPos` whenever size changes (reposflag & 2).
 ### 4.7 WM_MOVE
 
 Not explicitly sent by SWELL generic (position changes happen via OS window
-manager callback). macOS/GDK send it from their resize callbacks.
+manager callback). macOS/SDL3 send it from their resize callbacks.
 
 ### 4.8 WM_ACTIVATE
 
@@ -1105,7 +1105,7 @@ the parent chain to accumulate coordinate offsets.
 
 ## 14. Coordinate System Protocols
 
-### 14.1 Generic/GDK
+### 14.1 Generic/SDL3
 
 Standard top-left origin. `r.bottom > r.top` always. Client and screen coords
 are straightforward.

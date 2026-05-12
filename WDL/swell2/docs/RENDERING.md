@@ -231,9 +231,9 @@ Implementation:
 - Calls `swell_oswindow_invalidate(topLevel, &screenRect)` — tells the OS to
   schedule a redraw of the OS window.
 
-### 6.2 Paint entry (GDK backend: expose/draw event)
+### 6.2 Paint entry (SDL3 backend: window expose event)
 
-On expose/draw callback from GDK, the backend calls `SWELL_internalLICEpaint`:
+On `SDL_EVENT_WINDOW_EXPOSED` callback from SDL3, the backend calls `SWELL_internalLICEpaint`:
 
 ```
 SWELL_internalLICEpaint(hwnd, bmout, bmout_xpos, bmout_ypos, forceref)
@@ -272,7 +272,7 @@ Steps:
 
 `swell_oswindow_updatetoscreen(hwnd, &rect)`:
 - Copies the rendered LICE bitmap region to the OS window's pixel buffer.
-- On GDK: renders via `gdk_pixbuf`/`cairo_surface` to the GdkWindow.
+- On SDL3: uploads via `SDL_UpdateTexture` and presents via `SDL_RenderPresent`.
 
 ---
 

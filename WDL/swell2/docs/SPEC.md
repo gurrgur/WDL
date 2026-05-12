@@ -2,7 +2,7 @@
 
 **SWELL** — Simple/Small Win32 Emulation Layer  
 Version: derived from Cockos swell (2006–2026)  
-Target: Linux/macOS, generic (headless) and GDK backends
+Target: Linux/macOS, generic (headless) and SDL3 backends
 
 This document is a complete, normative specification of the SWELL API surface,
 intended as the sole reference for a clean reimplementation. Everything the
@@ -17,7 +17,7 @@ explicitly noted.
 |---|---|
 | `SWELL_TARGET_OSX` | macOS (Cocoa) backend |
 | `SWELL_TARGET_OSX_COCOA` | Cocoa (set together with above) |
-| `SWELL_TARGET_GDK` | GDK/GTK backend |
+| `SWELL_TARGET_SDL3` | SDL3 backend |
 | `SWELL_LICE_GDI` | Use LICE for GDI rendering (generic) |
 | `SWELL_FORCE_GENERIC` | Force generic backend even on macOS |
 | `SWELL_PROVIDED_BY_APP` | API is function-pointer table, loaded at runtime |
@@ -1194,7 +1194,7 @@ DWORD  WaitForAnySocketObject(int numObjs, HANDLE *objs, DWORD msTO)
 ```
 
 `CreateEventAsSocket` creates an event backed by a socket pair (for use in
-select()-based event loops on generic/GDK).
+select()-based event loops on generic/SDL3).
 
 `_beginthreadex` is defined as `(UINT_PTR)CreateThread(...)`.
 
@@ -1473,7 +1473,7 @@ void ReleaseDC(HWND, HDC)
 ### 8.2 Context info
 
 ```c
-void *SWELL_GetCtxGC(HDC ctx)          // macOS: CGContextRef; GDK: NULL
+void *SWELL_GetCtxGC(HDC ctx)          // macOS: CGContextRef; SDL3: NULL
 void *SWELL_GetCtxFrameBuffer(HDC ctx) // raw pixel buffer or NULL
 ```
 
@@ -1749,7 +1749,7 @@ void    GlobalFree(HANDLE h)
 ```
 
 macOS: setting multiple types may not be supported.
-GDK: only `CF_TEXT` is shared with the system clipboard; other types are
+SDL3: only `CF_TEXT` is shared with the system clipboard; other types are
 stored internally.
 
 `GlobalAlloc` with `GMEM_ZEROINIT` zeroes the block. `GMEM_FIXED`,
@@ -1991,8 +1991,8 @@ Hint to the window manager about how much to raise a window when clicked.
 void SWELL_initargs(int *argc, char ***argv)
 void SWELL_RunMessageLoop()
 HWND SWELL_CreateXBridgeWindow(HWND viewpar, void **wref, const RECT *)
-void *SWELL_GetOSWindow(HWND hwnd, const char *type)   // type="GdkWindow"
-void *SWELL_GetOSEvent(const char *type)               // type="GdkEvent"
+void *SWELL_GetOSWindow(HWND hwnd, const char *type)   // type="SDL_Window"
+void *SWELL_GetOSEvent(const char *type)               // type="SDL_Event"
 ```
 
 ---
@@ -2289,11 +2289,11 @@ bool SWELL_ChooseFont(HWND, LOGFONT *)
 
 ---
 
-## 35. GDK-specific (Linux GDK backend)
+## 35. SDL3-specific (Linux SDL3 backend)
 
 ```c
-void *SWELL_GetOSWindow(HWND hwnd, const char *type)  // type="GdkWindow"
-void *SWELL_GetOSEvent(const char *type)              // type="GdkEvent"
+void *SWELL_GetOSWindow(HWND hwnd, const char *type)  // type="SDL_Window"
+void *SWELL_GetOSEvent(const char *type)              // type="SDL_Event"
 HWND  SWELL_CreateXBridgeWindow(HWND viewpar, void **wref, const RECT *)
 ```
 
