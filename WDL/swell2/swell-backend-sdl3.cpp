@@ -356,11 +356,13 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
 
   SDL_UpdateTexture(e->texture, &sdlr, pixels, pixmap.rowBytes());
 
-  SDL_FRect fsrc = { (float)sdlr.x, (float)sdlr.y, (float)sdlr.w, (float)sdlr.h };
-  SDL_FRect fdst = { (float)sdlr.x, (float)sdlr.y, (float)sdlr.w, (float)sdlr.h };
+  // Always render full texture — partial updates only touch sub-region,
+  // but the texture retains old content elsewhere.  Clear ensures
+  // undefined regions don't show through.
+  SDL_FRect full = { 0, 0, (float)pw, (float)ph };
   SDL_SetRenderDrawColor(e->renderer, 0, 0, 0, 255);
   SDL_RenderClear(e->renderer);
-  SDL_RenderTexture(e->renderer, e->texture, &fsrc, &fdst);
+  SDL_RenderTexture(e->renderer, e->texture, &full, &full);
   SDL_RenderPresent(e->renderer);
 }
 
