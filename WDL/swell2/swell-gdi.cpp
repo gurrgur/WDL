@@ -1019,6 +1019,8 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h,
   SkPaint paint;
   if (mode == SRCCOPY) {
     paint.setBlendMode(SkBlendMode::kSrc);
+  } else if (mode == (int)SRCCOPY_USEALPHACHAN) {
+    paint.setBlendMode(SkBlendMode::kSrcOver);
   }
 
   hdcOut->canvas->drawImageRect(img, srcRect, dstRect, SkSamplingOptions(),
@@ -1045,6 +1047,8 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
   SkPaint paint;
   if (mode == SRCCOPY) {
     paint.setBlendMode(SkBlendMode::kSrc);
+  } else if (mode == (int)SRCCOPY_USEALPHACHAN) {
+    paint.setBlendMode(SkBlendMode::kSrcOver);
   }
 
   hdcOut->canvas->drawImageRect(img, srcRect, dstRect, SkSamplingOptions(),
