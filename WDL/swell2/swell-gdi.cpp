@@ -436,6 +436,40 @@ HDC GetWindowDC(HWND hwnd)
   return ctx;
 }
 
+void ReleaseDC(HWND hwnd, HDC ctx)
+{
+  fprintf(stderr, "SWELL_CALL: ReleaseDC\n");
+  if (!ctx || !HDC_VALID(ctx)) return;
+
+  // If not inside a WM_PAINT cycle, blit the dirty region to screen
+  if (hwnd && !hwnd->m_paintctx && ctx->dirty_rect_valid)
+  {
+    RECT r = ctx->dirty_rect;
+    r.left   += ctx->surface_offs.x;
+    r.top    += ctx->surface_offs.y;
+    r.right  += ctx->surface_offs.x;
+    r.bottom += ctx->surface_offs.y;
+
+    // Find the window that owns the backing store
+    HWND par = hwnd;
+    while (par && !par->m_backingstore) par = (HWND)par->m_parent;
+    if (par && r.top < r.bottom && r.left < r.right)
+      swell_oswindow_updatetoscreen(par, &r);
+  }
+
+  // Restore canvas to pre-GetDC state
+  if (ctx->canvas && ctx->getdc_savecount > 0)
+  {
+    ctx->canvas->restoreToCount(ctx->getdc_savecount);
+    ctx->getdc_savecount = 0;
+    ctx->clip_save_count = 0;
+  }
+
+  ctx->surface.reset();
+  ctx->canvas = nullptr;
+  SWELL_GDP_CTX_DELETE(ctx);
+}
+
 // ---------------------------------------------------------------------------
 // GDI objects
 // ---------------------------------------------------------------------------
