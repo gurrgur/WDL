@@ -732,9 +732,13 @@ void Rectangle(HDC ctx, int l, int t, int r, int b)
     strokePaint.setStyle(SkPaint::kStroke_Style);
     strokePaint.setColor(ctx->curpen->color);
     strokePaint.setAlphaf(ctx->curpen->alpha);
-    strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+    float sw = ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f;
+    strokePaint.setStrokeWidth(sw);
     strokePaint.setAntiAlias(true);
-    ctx->canvas->drawRect(rect, strokePaint);
+    float hsw = sw * 0.5f;
+    SkRect strokeRect = SkRect::MakeLTRB((float)l + hsw, (float)t + hsw,
+                                         (float)r - hsw, (float)b - hsw);
+    ctx->canvas->drawRect(strokeRect, strokePaint);
   }
 }
 
@@ -760,9 +764,13 @@ void Ellipse(HDC ctx, int l, int t, int r, int b)
     strokePaint.setStyle(SkPaint::kStroke_Style);
     strokePaint.setColor(ctx->curpen->color);
     strokePaint.setAlphaf(ctx->curpen->alpha);
-    strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+    float sw = ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f;
+    strokePaint.setStrokeWidth(sw);
     strokePaint.setAntiAlias(true);
-    ctx->canvas->drawOval(rect, strokePaint);
+    float hsw = sw * 0.5f;
+    SkRect ovalRect = SkRect::MakeLTRB((float)l + hsw, (float)t + hsw,
+                                       (float)r - hsw, (float)b - hsw);
+    ctx->canvas->drawOval(ovalRect, strokePaint);
   }
 }
 
@@ -789,9 +797,14 @@ void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
     strokePaint.setStyle(SkPaint::kStroke_Style);
     strokePaint.setColor(ctx->curpen->color);
     strokePaint.setAlphaf(ctx->curpen->alpha);
-    strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+    float sw = ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f;
+    strokePaint.setStrokeWidth(sw);
     strokePaint.setAntiAlias(true);
-    ctx->canvas->drawRRect(rr, strokePaint);
+    float hsw = sw * 0.5f;
+    SkRect strokeRect = SkRect::MakeLTRB((float)x + hsw, (float)y + hsw,
+                                         (float)x2 - hsw, (float)y2 - hsw);
+    SkRRect strokeRR = SkRRect::MakeRectXY(strokeRect, (float)xrnd, (float)yrnd);
+    ctx->canvas->drawRRect(strokeRR, strokePaint);
   }
 }
 
