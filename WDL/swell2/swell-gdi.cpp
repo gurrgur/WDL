@@ -1270,8 +1270,11 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     ctx_local.ctx.lastpos_x = 0.0f;
     ctx_local.ctx.lastpos_y = 0.0f;
 
-    ctx_local.clipr = hwnd->m_position;
-    RECT ncr = hwnd->m_position;
+    RECT local = { 0, 0,
+      hwnd->m_position.right - hwnd->m_position.left,
+      hwnd->m_position.bottom - hwnd->m_position.top };
+    ctx_local.clipr = local;
+    RECT ncr = local;
 
     hwnd->m_paintctx = &ctx_local;
 
@@ -1283,8 +1286,8 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     }
 
     // Adjust surface_offs and clipr by NC inset
-    ctx_local.ctx.surface_offs.x += (ncr.left - hwnd->m_position.left);
-    ctx_local.ctx.surface_offs.y += (ncr.top - hwnd->m_position.top);
+    ctx_local.ctx.surface_offs.x = bmout_xpos + ncr.left;
+    ctx_local.ctx.surface_offs.y = bmout_ypos + ncr.top;
     ctx_local.clipr = ncr;
 
     ctx_local.ctx.curfont = hwnd->m_font;
@@ -1313,9 +1316,7 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     }
 
     SWELL_internalSkiaPaint(child, canvas,
-      bmout_xpos + child->m_position.left,
-      bmout_ypos + child->m_position.top,
-      forceref);
+      bmout_xpos, bmout_ypos, forceref);
 
     if (canvas) canvas->restoreToCount(saveCount);
   }

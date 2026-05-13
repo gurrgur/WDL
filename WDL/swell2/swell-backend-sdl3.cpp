@@ -328,6 +328,7 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
     if (!e->texture) return;
     e->tex_w = pw;
     e->tex_h = ph;
+    SDL_SetTextureBlendMode(e->texture, SDL_BLENDMODE_NONE);
   }
 
   SDL_Rect sdlr;
@@ -357,6 +358,8 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
 
   SDL_FRect fsrc = { (float)sdlr.x, (float)sdlr.y, (float)sdlr.w, (float)sdlr.h };
   SDL_FRect fdst = { (float)sdlr.x, (float)sdlr.y, (float)sdlr.w, (float)sdlr.h };
+  SDL_SetRenderDrawColor(e->renderer, 0, 0, 0, 255);
+  SDL_RenderClear(e->renderer);
   SDL_RenderTexture(e->renderer, e->texture, &fsrc, &fdst);
   SDL_RenderPresent(e->renderer);
 }
@@ -489,7 +492,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         sk_sp<SkSurface> bs = e->hwnd->m_backingstore;
         SkCanvas *canvas = bs ? bs->getCanvas() : nullptr;
         if (canvas) {
-          canvas->clear(SK_ColorTRANSPARENT);
+          canvas->clear(SWELL_TO_SKCOLOR(g_swell_ctheme._3dface, 255));
           SWELL_internalSkiaPaint(e->hwnd, canvas, 0, 0, false);
           swell_oswindow_updatetoscreen(e->hwnd, NULL);
         }
