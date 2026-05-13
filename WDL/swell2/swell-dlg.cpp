@@ -410,6 +410,13 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
   hwnd->m_style   = style;
   hwnd->m_exstyle = exstyle;
 
+  // Create OS window early for top-level dialogs, before createFunc or
+  // WM_INITDIALOG which may enter a nested modal loop (e.g. splash screen)
+  // and prevent the later swell_oswindow_manage call from ever executing.
+  if (!parent && !(wflags & SWELL_DLG_WS_CHILD)) {
+    swell_oswindow_manage(hwnd, true);
+  }
+
   if (bare_wndproc) {
     // fire WM_CREATE instead of WM_INITDIALOG
     hwnd->m_wndproc(hwnd, WM_CREATE, 0, param);

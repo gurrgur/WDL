@@ -46,6 +46,7 @@ target_link_libraries(Swell PRIVATE
   PkgConfig::SKIA
   pthread
   dl
+  fontconfig
   ${SWELL2_BACKEND_LIBS}
 )
 
