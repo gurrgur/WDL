@@ -1,0 +1,1017 @@
+/*
+  SWELL2 menu module — HMENU lifecycle, item manipulation, TrackPopupMenu,
+  menu bar drawing, resource loading.
+
+  Modern clean-room implementation: flat design, crisp Skia rendering,
+  keyboard navigation, cascading submenus.
+*/
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "swell-internal.h"
+#include "swell-menugen.h"
+#include <cstring>
+#include <cstdlib>
+
+// swell-functions.h defines Polygon(a,b,c) which clashes with SkPath::Polygon
+#undef Polygon
+
+// MIIM constants not defined in swell-types.h
+#ifndef MIIM_STRING
+#define MIIM_STRING     0x0040
+#define MIIM_FTYPE      0x0100
+#define MIIM_CHECKMARKS 0x0008
+#endif
+
+#ifdef SWELL_TARGET_SDL3
+#include <SDL3/SDL.h>
+#include <core/SkCanvas.h>
+#include <core/SkPaint.h>
+#include <core/SkFont.h>
+#include <core/SkFontMetrics.h>
+#include <core/SkFontMgr.h>
+#include <core/SkTypeface.h>
+#include <core/SkRRect.h>
+#include <ports/SkFontMgr_fontconfig.h>
+#include <ports/SkFontScanner_FreeType.h>
+#endif
+
+// ============================================================================
+// Default / current menu globals
+// ============================================================================
+
+static HMENU g_default_window_menu = NULL;
+static HMENU g_default_modal_window_menu = NULL;
+static HMENU g_current_menu = NULL;
+
+HMENU SWELL_GetDefaultWindowMenu()       { return g_default_window_menu; }
+void  SWELL_SetDefaultWindowMenu(HMENU m) { g_default_window_menu = m; }
+HMENU SWELL_GetDefaultModalWindowMenu()  { return g_default_modal_window_menu; }
+void  SWELL_SetDefaultModalWindowMenu(HMENU m) { g_default_modal_window_menu = m; }
+HMENU SWELL_GetCurrentMenu()             { return g_current_menu; }
+void  SWELL_SetCurrentMenu(HMENU m)      { g_current_menu = m; }
+
+// macOS-only; on Linux just stored for compatibility
+void SWELL_SetMenuDestination(HMENU menu, HWND hwnd) { (void)menu; (void)hwnd; }
+
+// ============================================================================
+// HMENU lifecycle
+// ============================================================================
+
+HMENU CreatePopupMenu()
+{
+  return new HMENU__();
+}
+
+HMENU CreatePopupMenuEx(const char *title)
+{
+  (void)title;
+  return new HMENU__();
+}
+
+void DestroyMenu(HMENU hMenu)
+{
+  if (!hMenu) return;
+  // WDL_PtrList_DeleteOnDestroy frees all SWELL_MenuItems.
+  // Each item's m_submenu is owned by the item if MF_POPUP is set.
+  // We destroy submenus here.
+  int n = hMenu->m_items.GetSize();
+  for (int i = 0; i < n; i++) {
+    SWELL_MenuItem *it = hMenu->m_items.Get(i);
+    if (it && (it->m_flags & MF_POPUP) && it->m_submenu) {
+      DestroyMenu(it->m_submenu);
+      it->m_submenu = NULL;
+    }
+  }
+  delete hMenu;
+}
+
+HMENU SWELL_DuplicateMenu(HMENU src)
+{
+  if (!src) return NULL;
+  HMENU dst = new HMENU__();
+  int n = src->m_items.GetSize();
+  for (int i = 0; i < n; i++) {
+    SWELL_MenuItem *si = src->m_items.Get(i);
+    if (!si) continue;
+    SWELL_MenuItem *di = new SWELL_MenuItem();
+    di->m_name    = si->m_name;
+    di->m_id      = si->m_id;
+    di->m_flags   = si->m_flags;
+    di->m_userdata = si->m_userdata;
+    di->m_mod_flag = si->m_mod_flag;
+    di->m_mod_code = si->m_mod_code;
+    di->m_mod_mask = si->m_mod_mask;
+    if ((si->m_flags & MF_POPUP) && si->m_submenu)
+      di->m_submenu = SWELL_DuplicateMenu(si->m_submenu);
+    dst->m_items.Add(di);
+  }
+  return dst;
+}
+
+// ============================================================================
+// Item lookup helpers
+// ============================================================================
+
+static SWELL_MenuItem *menu_find_by_pos(HMENU hMenu, int pos)
+{
+  if (!hMenu || pos < 0 || pos >= hMenu->m_items.GetSize()) return NULL;
+  return hMenu->m_items.Get(pos);
+}
+
+// Find item by command ID (recursive through submenus)
+static SWELL_MenuItem *menu_find_by_id(HMENU hMenu, int id)
+{
+  if (!hMenu) return NULL;
+  int n = hMenu->m_items.GetSize();
+  for (int i = 0; i < n; i++) {
+    SWELL_MenuItem *it = hMenu->m_items.Get(i);
+    if (!it) continue;
+    if ((it->m_flags & MF_SEPARATOR) == 0 && it->m_id == id)
+      return it;
+    if ((it->m_flags & MF_POPUP) && it->m_submenu) {
+      SWELL_MenuItem *r = menu_find_by_id(it->m_submenu, id);
+      if (r) return r;
+    }
+  }
+  return NULL;
+}
+
+// Resolve byPos/byCommand to item pointer
+static SWELL_MenuItem *menu_resolve(HMENU hMenu, int idx, BOOL byPos)
+{
+  if (!hMenu) return NULL;
+  if (byPos) return menu_find_by_pos(hMenu, idx);
+  return menu_find_by_id(hMenu, idx);
+}
+
+// ============================================================================
+// Item manipulation
+// ============================================================================
+
+int AddMenuItem(HMENU hMenu, int pos, const char *name, int tagid)
+{
+  if (!hMenu) return -1;
+  SWELL_MenuItem *it = new SWELL_MenuItem();
+  if (name) it->m_name.Set(name);
+  it->m_id = tagid;
+  if (pos < 0 || pos >= hMenu->m_items.GetSize())
+    hMenu->m_items.Add(it);
+  else
+    hMenu->m_items.Insert(pos, it);
+  return pos < 0 ? hMenu->m_items.GetSize() - 1 : pos;
+}
+
+void SWELL_InsertMenu(HMENU menu, int pos, unsigned int flag, UINT_PTR idx, const char *str)
+{
+  if (!menu) return;
+  SWELL_MenuItem *it = new SWELL_MenuItem();
+  it->m_flags = flag & ~MF_BYPOSITION;
+  it->m_id    = (int)idx;
+  if (str && !(flag & MF_SEPARATOR)) it->m_name.Set(str);
+
+  bool byPos = (flag & MF_BYPOSITION) != 0;
+  int insertAt = (int)pos;
+  if (!byPos) insertAt = menu->m_items.GetSize(); // byCommand: append
+  if (insertAt < 0 || insertAt > menu->m_items.GetSize())
+    insertAt = menu->m_items.GetSize();
+
+  menu->m_items.Insert(insertAt, it);
+}
+
+void InsertMenuItem(HMENU hMenu, int pos, BOOL byPos, MENUITEMINFO *mi)
+{
+  if (!hMenu || !mi) return;
+  SWELL_MenuItem *it = new SWELL_MenuItem();
+
+  if (mi->fMask & MIIM_STRING) {
+    if (mi->dwTypeData) it->m_name.Set(mi->dwTypeData);
+  } else if (mi->fMask & MIIM_TYPE) {
+    if (mi->fType & MFT_SEPARATOR) {
+      it->m_flags |= MF_SEPARATOR;
+    } else if (mi->dwTypeData) {
+      it->m_name.Set(mi->dwTypeData);
+    }
+  }
+  if (mi->fMask & MIIM_ID)       it->m_id = (int)mi->wID;
+  if (mi->fMask & MIIM_FTYPE)    it->m_flags = (it->m_flags & ~0x8FF) | (mi->fType & 0x8FF);
+  if (mi->fMask & MIIM_STATE)    it->m_flags = (it->m_flags & ~0x0F) | (mi->fState & 0x0F);
+  if (mi->fMask & MIIM_SUBMENU) {
+    it->m_submenu = mi->hSubMenu;
+    if (it->m_submenu) it->m_flags |= MF_POPUP;
+  }
+  if (mi->fMask & MIIM_DATA)    it->m_userdata = (DWORD_PTR)mi->dwItemData;
+  if (mi->fMask & MIIM_CHECKMARKS) {
+    it->m_checked_icon   = (HICON)mi->hbmpChecked;
+    it->m_unchecked_icon = (HICON)mi->hbmpUnchecked;
+  }
+
+  int insertAt = pos;
+  if (!byPos) insertAt = hMenu->m_items.GetSize();
+  if (insertAt < 0 || insertAt > hMenu->m_items.GetSize())
+    insertAt = hMenu->m_items.GetSize();
+  hMenu->m_items.Insert(insertAt, it);
+}
+
+BOOL GetMenuItemInfo(HMENU hMenu, int pos, BOOL byPos, MENUITEMINFO *mi)
+{
+  if (!mi) return FALSE;
+  SWELL_MenuItem *it = menu_resolve(hMenu, pos, byPos);
+  if (!it) return FALSE;
+
+  if (mi->fMask & MIIM_TYPE) {
+    mi->fType = it->m_flags & (MFT_STRING|MFT_SEPARATOR|MFT_BITMAP);
+    if (it->m_flags & MF_SEPARATOR) mi->fType |= MFT_SEPARATOR;
+    if (mi->dwTypeData && mi->cch > 0) {
+      lstrcpyn(mi->dwTypeData, it->m_name.Get() ? it->m_name.Get() : "", (int)mi->cch);
+    }
+  }
+  if (mi->fMask & MIIM_STRING) {
+    if (mi->dwTypeData && mi->cch > 0)
+      lstrcpyn(mi->dwTypeData, it->m_name.Get() ? it->m_name.Get() : "", (int)mi->cch);
+  }
+  if (mi->fMask & MIIM_ID)       mi->wID = (UINT)it->m_id;
+  if (mi->fMask & MIIM_FTYPE)    mi->fType = it->m_flags & 0x8FF;
+  if (mi->fMask & MIIM_STATE)    mi->fState = it->m_flags & 0x0F;
+  if (mi->fMask & MIIM_SUBMENU)  mi->hSubMenu = it->m_submenu;
+  if (mi->fMask & MIIM_DATA)     mi->dwItemData = (ULONG_PTR)it->m_userdata;
+  if (mi->fMask & MIIM_CHECKMARKS) {
+    mi->hbmpChecked   = (HBITMAP)it->m_checked_icon;
+    mi->hbmpUnchecked = (HBITMAP)it->m_unchecked_icon;
+  }
+  return TRUE;
+}
+
+BOOL SetMenuItemInfo(HMENU hMenu, int pos, BOOL byPos, MENUITEMINFO *mi)
+{
+  if (!mi) return FALSE;
+  SWELL_MenuItem *it = menu_resolve(hMenu, pos, byPos);
+  if (!it) return FALSE;
+
+  if (mi->fMask & MIIM_TYPE) {
+    if (mi->fType & MFT_SEPARATOR) {
+      it->m_flags |= MF_SEPARATOR;
+    } else {
+      it->m_flags &= ~MF_SEPARATOR;
+      if (mi->dwTypeData) it->m_name.Set(mi->dwTypeData);
+    }
+  }
+  if (mi->fMask & MIIM_STRING) {
+    if (mi->dwTypeData) it->m_name.Set(mi->dwTypeData);
+  }
+  if (mi->fMask & MIIM_ID)      it->m_id = (int)mi->wID;
+  if (mi->fMask & MIIM_FTYPE)   it->m_flags = (it->m_flags & ~0x8FF) | (mi->fType & 0x8FF);
+  if (mi->fMask & MIIM_STATE)   it->m_flags = (it->m_flags & ~0x0F) | (mi->fState & 0x0F);
+  if (mi->fMask & MIIM_SUBMENU) {
+    it->m_submenu = mi->hSubMenu;
+    if (it->m_submenu) it->m_flags |= MF_POPUP;
+    else               it->m_flags &= ~MF_POPUP;
+  }
+  if (mi->fMask & MIIM_DATA)    it->m_userdata = (DWORD_PTR)mi->dwItemData;
+  if (mi->fMask & MIIM_CHECKMARKS) {
+    it->m_checked_icon   = (HICON)mi->hbmpChecked;
+    it->m_unchecked_icon = (HICON)mi->hbmpUnchecked;
+  }
+  return TRUE;
+}
+
+bool SetMenuItemModifier(HMENU hMenu, int idx, int flag, int code, unsigned int mask)
+{
+  SWELL_MenuItem *it = menu_resolve(hMenu, idx, (flag & MF_BYPOSITION) ? TRUE : FALSE);
+  if (!it) return false;
+  it->m_mod_flag = flag;
+  it->m_mod_code = code;
+  it->m_mod_mask = mask;
+  return true;
+}
+
+bool SetMenuItemText(HMENU hMenu, int idx, int flag, const char *text)
+{
+  SWELL_MenuItem *it = menu_resolve(hMenu, idx, (flag & MF_BYPOSITION) ? TRUE : FALSE);
+  if (!it) return false;
+  if (text) it->m_name.Set(text);
+  return true;
+}
+
+bool EnableMenuItem(HMENU hMenu, int idx, int en)
+{
+  SWELL_MenuItem *it = menu_resolve(hMenu, idx, (en & MF_BYPOSITION) ? TRUE : FALSE);
+  if (!it) return false;
+  it->m_flags &= ~(MF_GRAYED|MF_DISABLED);
+  it->m_flags |= (en & (MF_GRAYED|MF_DISABLED));
+  return true;
+}
+
+bool DeleteMenu(HMENU hMenu, int idx, int flag)
+{
+  if (!hMenu) return false;
+  bool byPos = (flag & MF_BYPOSITION) != 0;
+  SWELL_MenuItem *it = menu_resolve(hMenu, idx, byPos ? TRUE : FALSE);
+  if (!it) return false;
+
+  int n = hMenu->m_items.GetSize();
+  for (int i = 0; i < n; i++) {
+    if (hMenu->m_items.Get(i) == it) {
+      if ((it->m_flags & MF_POPUP) && it->m_submenu) {
+        DestroyMenu(it->m_submenu);
+        it->m_submenu = NULL;
+      }
+      hMenu->m_items.Delete(i, true);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool CheckMenuItem(HMENU hMenu, int idx, int chk)
+{
+  SWELL_MenuItem *it = menu_resolve(hMenu, idx, (chk & MF_BYPOSITION) ? TRUE : FALSE);
+  if (!it) return false;
+  it->m_flags &= ~MF_CHECKED;
+  it->m_flags |= (chk & MF_CHECKED);
+  return true;
+}
+
+// ============================================================================
+// Query
+// ============================================================================
+
+HMENU GetSubMenu(HMENU hMenu, int pos)
+{
+  SWELL_MenuItem *it = menu_find_by_pos(hMenu, pos);
+  if (!it) return NULL;
+  return it->m_submenu;
+}
+
+int GetMenuItemCount(HMENU hMenu)
+{
+  return hMenu ? hMenu->m_items.GetSize() : 0;
+}
+
+int GetMenuItemID(HMENU hMenu, int pos)
+{
+  SWELL_MenuItem *it = menu_find_by_pos(hMenu, pos);
+  if (!it) return -1;
+  if (it->m_flags & MF_POPUP) return -1;
+  return it->m_id;
+}
+
+// ============================================================================
+// Window menu bar
+// ============================================================================
+
+BOOL SetMenu(HWND hwnd, HMENU menu)
+{
+  if (!hwnd) return FALSE;
+  hwnd->m_menu = menu;
+  InvalidateRect(hwnd, NULL, FALSE);
+  return TRUE;
+}
+
+HMENU GetMenu(HWND hwnd)
+{
+  return hwnd ? hwnd->m_menu : NULL;
+}
+
+void DrawMenuBar(HWND hwnd)
+{
+  if (!hwnd || !hwnd->m_menu) return;
+  InvalidateRect(hwnd, NULL, FALSE);
+}
+
+// ============================================================================
+// Resource loading
+// ============================================================================
+
+HMENU SWELL_LoadMenu(struct SWELL_MenuResourceIndex *head, const char *resid)
+{
+  if (!head) return NULL;
+  for (SWELL_MenuResourceIndex *r = head; r; r = r->_next) {
+    bool match;
+    if ((size_t)r->resid <= 0xFFFF && (size_t)resid <= 0xFFFF)
+      match = (r->resid == resid);
+    else if ((size_t)r->resid > 0xFFFF && (size_t)resid > 0xFFFF)
+      match = (strcmp(r->resid, resid) == 0);
+    else
+      match = false;
+    if (match) {
+      HMENU m = CreatePopupMenu();
+      if (r->createFunc) r->createFunc(m);
+      return m;
+    }
+  }
+  return NULL;
+}
+
+// ============================================================================
+// Internal menu generation
+// ============================================================================
+
+void SWELL_Menu_AddMenuItem(HMENU hMenu, const char *name, int idx, unsigned int flags)
+{
+  if (!hMenu) return;
+  SWELL_MenuItem *it = new SWELL_MenuItem();
+  if (name) it->m_name.Set(name);
+  it->m_id = idx;
+  it->m_flags = flags & ~MF_BYPOSITION;
+  hMenu->m_items.Add(it);
+}
+
+int SWELL_GenerateMenuFromList(HMENU hMenu, const void *list, int listsz)
+{
+  if (!hMenu || !list || listsz <= 0) return 0;
+  const SWELL_MenuGen_Entry *e = (const SWELL_MenuGen_Entry *)list;
+  int idx = 0;
+  while (idx < listsz) {
+    const SWELL_MenuGen_Entry *cur = &e[idx++];
+    if (!cur->name) {
+      // separator (name==NULL, idx==0xffff)
+      SWELL_MenuItem *it = new SWELL_MenuItem();
+      it->m_flags = MF_SEPARATOR;
+      hMenu->m_items.Add(it);
+    } else if (strncmp(cur->name, SWELL_MENUGEN_POPUP_PREFIX,
+                       strlen(SWELL_MENUGEN_POPUP_PREFIX)) == 0) {
+      // submenu
+      HMENU sub = CreatePopupMenu();
+      int consumed = SWELL_GenerateMenuFromList(sub, &e[idx], listsz - idx);
+      idx += consumed;
+      SWELL_MenuItem *it = new SWELL_MenuItem();
+      it->m_name.Set(cur->name + strlen(SWELL_MENUGEN_POPUP_PREFIX));
+      it->m_flags = MF_POPUP | (cur->flags & ~MF_BYPOSITION);
+      it->m_id = (int)cur->idx;
+      it->m_submenu = sub;
+      hMenu->m_items.Add(it);
+    } else if (strcmp(cur->name, SWELL_MENUGEN_ENDPOPUP) == 0) {
+      // end of submenu
+      break;
+    } else {
+      SWELL_MenuItem *it = new SWELL_MenuItem();
+      it->m_name.Set(cur->name);
+      it->m_id = (int)cur->idx;
+      it->m_flags = cur->flags & ~MF_BYPOSITION;
+      hMenu->m_items.Add(it);
+    }
+  }
+  return idx;
+}
+
+// ============================================================================
+// TrackPopupMenu
+// ============================================================================
+
+#ifdef SWELL_TARGET_SDL3
+
+// ---------------------------------------------------------------------------
+// Font helpers for menu rendering
+// ---------------------------------------------------------------------------
+
+static sk_sp<SkTypeface> menu_get_typeface()
+{
+  static sk_sp<SkTypeface> s_tf;
+  static bool s_tried = false;
+  if (!s_tried) {
+    s_tried = true;
+    sk_sp<SkFontMgr> fm = SkFontMgr_New_FontConfig(
+        nullptr, SkFontScanner_Make_FreeType());
+    if (fm) {
+      SkFontStyle style(SkFontStyle::kNormal_Weight,
+                        SkFontStyle::kNormal_Width,
+                        SkFontStyle::kUpright_Slant);
+      // Try modern system fonts in order
+      const char *faces[] = { "Inter", "Noto Sans", "Segoe UI",
+                               "DejaVu Sans", "Liberation Sans",
+                               "FreeSans", "Arial", nullptr };
+      for (int i = 0; faces[i]; i++) {
+        s_tf = fm->matchFamilyStyle(faces[i], style);
+        if (s_tf) break;
+      }
+    }
+  }
+  return s_tf;
+}
+
+// ---------------------------------------------------------------------------
+// Menu layout constants
+// ---------------------------------------------------------------------------
+
+static const int MENU_ITEM_H      = 26;
+static const int MENU_SEP_H       = 9;
+static const int MENU_LPAD        = 32;  // left of text (checkmark+icon area)
+static const int MENU_RPAD        = 20;  // right of text (arrow area)
+static const int MENU_VPAD        = 4;   // top/bottom padding of menu
+static const int MENU_MIN_W       = 140;
+static const int MENU_FONT_SIZE   = 13;
+
+// Convert native SWELL RGB color to SkColor (premul alpha)
+static SkColor swell_to_sk(int c, uint8_t a = 255)
+{
+  return SkColorSetARGB(a, GetRValue(c), GetGValue(c), GetBValue(c));
+}
+
+// ---------------------------------------------------------------------------
+// Single menu window state
+// ---------------------------------------------------------------------------
+
+struct MenuWindow {
+  HMENU          menu;
+  SDL_Window    *sdlwin;
+  SDL_Renderer  *renderer;
+  SDL_Texture   *texture;
+  sk_sp<SkSurface> surface;
+  SkFont         font;
+  int            w, h;
+  int            hovered;   // -1 = none
+  int            n_items;
+  int           *item_y;    // top Y of each item (size n_items)
+  bool           done;
+  int            result;    // selected item ID, 0 = cancelled
+
+  MenuWindow() : menu(NULL), sdlwin(NULL), renderer(NULL), texture(NULL),
+    hovered(-1), done(false), result(0), w(0), h(0),
+    n_items(0), item_y(NULL) {}
+  ~MenuWindow() {
+    free(item_y);
+    if (texture) SDL_DestroyTexture(texture);
+    if (renderer) SDL_DestroyRenderer(renderer);
+    if (sdlwin) SDL_DestroyWindow(sdlwin);
+  }
+};
+
+// Forward declaration for submenu
+static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
+                           MenuWindow *parent_mw, int parent_item_y);
+
+// ---------------------------------------------------------------------------
+// Measure and position menu items
+// ---------------------------------------------------------------------------
+
+static void menu_measure(MenuWindow *mw)
+{
+  if (!mw->menu) return;
+  int n = mw->menu->m_items.GetSize();
+  mw->n_items = n;
+  free(mw->item_y);
+  mw->item_y = (int *)malloc(sizeof(int) * (n + 1));
+
+  // Compute max text width
+  int maxTextW = 0;
+  for (int i = 0; i < n; i++) {
+    SWELL_MenuItem *it = mw->menu->m_items.Get(i);
+    if (!it || (it->m_flags & MF_SEPARATOR)) continue;
+    const char *txt = it->m_name.Get();
+    if (!txt || !txt[0]) continue;
+    SkRect bounds;
+    mw->font.measureText(txt, strlen(txt), SkTextEncoding::kUTF8, &bounds);
+    int tw = (int)(bounds.width() + 0.5f);
+    if (tw > maxTextW) maxTextW = tw;
+  }
+
+  mw->w = MENU_LPAD + maxTextW + MENU_RPAD;
+  if (mw->w < MENU_MIN_W) mw->w = MENU_MIN_W;
+
+  int y = MENU_VPAD;
+  for (int i = 0; i < n; i++) {
+    mw->item_y[i] = y;
+    SWELL_MenuItem *it = mw->menu->m_items.Get(i);
+    if (it && (it->m_flags & MF_SEPARATOR))
+      y += MENU_SEP_H;
+    else
+      y += MENU_ITEM_H;
+  }
+  mw->item_y[n] = y;
+  mw->h = y + MENU_VPAD;
+}
+
+// ---------------------------------------------------------------------------
+// Hit-test: which item is at screen-relative y?
+// ---------------------------------------------------------------------------
+
+static int menu_hittest(MenuWindow *mw, int local_y)
+{
+  for (int i = 0; i < mw->n_items; i++) {
+    SWELL_MenuItem *it = mw->menu->m_items.Get(i);
+    if (!it || (it->m_flags & MF_SEPARATOR)) continue;
+    if (local_y >= mw->item_y[i] && local_y < mw->item_y[i + 1])
+      return i;
+  }
+  return -1;
+}
+
+// ---------------------------------------------------------------------------
+// Draw the menu onto the Skia surface
+// ---------------------------------------------------------------------------
+
+static void menu_draw(MenuWindow *mw)
+{
+  if (!mw->surface) return;
+  SkCanvas *c = mw->surface->getCanvas();
+  if (!c) return;
+
+  const swell_colortheme &th = g_swell_ctheme;
+
+  // Background
+  SkPaint bgp;
+  bgp.setAntiAlias(false);
+  bgp.setColor(swell_to_sk(th.menu_bg));
+  SkRect full = SkRect::MakeWH((float)mw->w, (float)mw->h);
+  c->drawRect(full, bgp);
+
+  // Border
+  SkPaint border;
+  border.setStyle(SkPaint::kStroke_Style);
+  border.setColor(swell_to_sk(th._3dshadow));
+  border.setStrokeWidth(1.0f);
+  border.setAntiAlias(false);
+  SkRect borderR = SkRect::MakeWH((float)mw->w - 0.5f, (float)mw->h - 0.5f);
+  c->drawRect(borderR, border);
+
+  for (int i = 0; i < mw->n_items; i++) {
+    SWELL_MenuItem *it = mw->menu->m_items.Get(i);
+    if (!it) continue;
+
+    int iy = mw->item_y[i];
+    int ih = mw->item_y[i + 1] - iy;
+
+    if (it->m_flags & MF_SEPARATOR) {
+      SkPaint sep;
+      sep.setColor(swell_to_sk(th._3dshadow, 160));
+      sep.setStrokeWidth(1.0f);
+      sep.setAntiAlias(false);
+      float sy = iy + MENU_SEP_H / 2.0f + 0.5f;
+      c->drawLine(MENU_LPAD * 0.5f, sy, (float)(mw->w - 4), sy, sep);
+      continue;
+    }
+
+    bool hovered  = (i == mw->hovered);
+    bool disabled = (it->m_flags & (MF_GRAYED|MF_DISABLED)) != 0;
+    bool checked  = (it->m_flags & MF_CHECKED) != 0;
+    bool is_popup = (it->m_flags & MF_POPUP) != 0;
+
+    // Hover highlight
+    if (hovered && !disabled) {
+      SkPaint hp;
+      hp.setAntiAlias(true);
+      hp.setColor(swell_to_sk(th.menu_hilight_bg));
+      SkRect hr = SkRect::MakeLTRB(2, (float)iy + 1,
+                                   (float)(mw->w - 2), (float)(iy + ih - 1));
+      SkRRect rr;
+      rr.setRectXY(hr, 3.0f, 3.0f);
+      c->drawRRect(rr, hp);
+    }
+
+    // Checkmark
+    if (checked) {
+      SkPaint cp;
+      cp.setAntiAlias(true);
+      cp.setColor(hovered ? swell_to_sk(th.menu_hilight_text)
+                           : swell_to_sk(th.menu_text));
+      cp.setStrokeWidth(2.0f);
+      cp.setStyle(SkPaint::kStroke_Style);
+      cp.setStrokeCap(SkPaint::kRound_Cap);
+      cp.setStrokeJoin(SkPaint::kRound_Join);
+      float cy = (float)(iy + ih / 2);
+      // Simple checkmark: ✓ drawn as two lines
+      SkPath ck;
+      ck.moveTo(7.0f, cy);
+      ck.lineTo(11.0f, cy + 4.0f);
+      ck.lineTo(17.0f, cy - 5.0f);
+      c->drawPath(ck, cp);
+    }
+
+    // Text
+    const char *txt = it->m_name.Get();
+    if (txt && txt[0]) {
+      SkPaint tp;
+      tp.setAntiAlias(true);
+      if (disabled)
+        tp.setColor(swell_to_sk(th._3dshadow));
+      else if (hovered)
+        tp.setColor(swell_to_sk(th.menu_hilight_text));
+      else
+        tp.setColor(swell_to_sk(th.menu_text));
+
+      SkFontMetrics fm;
+      mw->font.getMetrics(&fm);
+      float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f - fm.fAscent;
+
+      c->drawSimpleText(txt, strlen(txt), SkTextEncoding::kUTF8,
+                        (float)MENU_LPAD, ty, mw->font, tp);
+    }
+
+    // Submenu arrow
+    if (is_popup) {
+      SkPaint ap;
+      ap.setAntiAlias(true);
+      if (disabled)
+        ap.setColor(swell_to_sk(th._3dshadow));
+      else if (hovered)
+        ap.setColor(swell_to_sk(th.menu_hilight_text));
+      else
+        ap.setColor(swell_to_sk(th.menu_text));
+      ap.setStyle(SkPaint::kFill_Style);
+      float ax = (float)(mw->w - 10);
+      float ay = (float)(iy + ih / 2);
+      SkPath arrow;
+      arrow.moveTo(ax,       ay - 4.0f);
+      arrow.lineTo(ax + 5.0f, ay);
+      arrow.lineTo(ax,       ay + 4.0f);
+      arrow.close();
+      c->drawPath(arrow, ap);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Flush Skia surface to SDL texture/renderer
+// ---------------------------------------------------------------------------
+
+static void menu_present(MenuWindow *mw)
+{
+  if (!mw->surface || !mw->renderer) return;
+  SkPixmap pm;
+  if (!mw->surface->peekPixels(&pm)) return;
+
+  int pw = mw->w, ph = mw->h;
+
+  if (!mw->texture) {
+    mw->texture = SDL_CreateTexture(mw->renderer,
+        SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_STREAMING, pw, ph);
+    if (!mw->texture) return;
+    SDL_SetTextureBlendMode(mw->texture, SDL_BLENDMODE_NONE);
+  }
+
+  SDL_Rect r = { 0, 0, pw, ph };
+  SDL_UpdateTexture(mw->texture, &r, pm.addr(), (int)pm.rowBytes());
+  SDL_FRect fr = { 0, 0, (float)pw, (float)ph };
+  SDL_RenderTexture(mw->renderer, mw->texture, &fr, &fr);
+  SDL_RenderPresent(mw->renderer);
+}
+
+// ---------------------------------------------------------------------------
+// run_menu_window: synchronous menu loop
+// Returns selected item ID or 0 if cancelled.
+// ---------------------------------------------------------------------------
+
+static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
+                           MenuWindow *parent_mw, int parent_item_y)
+{
+  (void)parent_mw; (void)parent_item_y;
+  if (!hMenu) return 0;
+
+  MenuWindow mw;
+  mw.menu = hMenu;
+
+  // Build font
+  mw.font.setTypeface(menu_get_typeface());
+  mw.font.setSize((float)MENU_FONT_SIZE);
+  mw.font.setEdging(SkFont::Edging::kAntiAlias);
+
+  menu_measure(&mw);
+
+  // Clamp to screen
+  RECT screen;
+  SWELL_GetViewPort(&screen, NULL, true);
+  if (sx + mw.w > screen.right)  sx = screen.right - mw.w;
+  if (sy + mw.h > screen.bottom) sy = screen.bottom - mw.h;
+  if (sx < screen.left)          sx = screen.left;
+  if (sy < screen.top)           sy = screen.top;
+
+  // Create SDL popup window
+  SDL_PropertiesID props = SDL_CreateProperties();
+  SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "");
+  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, sx);
+  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, sy);
+  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, mw.w);
+  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, mw.h);
+  SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN, true);
+  SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_ALWAYS_ON_TOP_BOOLEAN, true);
+  SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FOCUSABLE_BOOLEAN, false);
+  mw.sdlwin = SDL_CreateWindowWithProperties(props);
+  SDL_DestroyProperties(props);
+
+  if (!mw.sdlwin) return 0;
+
+  SDL_WindowID mw_id = SDL_GetWindowID(mw.sdlwin);
+  mw.renderer = SDL_CreateRenderer(mw.sdlwin, NULL);
+  if (!mw.renderer) return 0;
+
+  // Skia surface
+  mw.surface = SkSurfaces::Raster(
+      SkImageInfo::Make(mw.w, mw.h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+  if (!mw.surface) return 0;
+
+  // Initial render
+  menu_draw(&mw);
+  menu_present(&mw);
+  SDL_ShowWindow(mw.sdlwin);
+
+  // ---- Synchronous event loop ----
+  int submenu_open = -1;  // index of currently open submenu item
+
+  while (!mw.done) {
+    SDL_Event evt;
+    // Wait briefly then check timers
+    if (!SDL_WaitEventTimeout(&evt, 16)) {
+      continue;
+    }
+
+    switch (evt.type) {
+      case SDL_EVENT_QUIT:
+        mw.done = true;
+        mw.result = 0;
+        break;
+
+      case SDL_EVENT_KEY_DOWN: {
+        SDL_Keycode key = evt.key.key;
+        if (key == SDLK_ESCAPE) {
+          mw.done = true; mw.result = 0;
+        } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+          if (mw.hovered >= 0) {
+            SWELL_MenuItem *it = mw.menu->m_items.Get(mw.hovered);
+            if (it && !(it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR))) {
+              if ((it->m_flags & MF_POPUP) && it->m_submenu) {
+                int item_sx = sx + mw.w;
+                int item_sy = sy + mw.item_y[mw.hovered];
+                int r = run_menu_window(it->m_submenu, item_sx, item_sy,
+                                        owner_hwnd, &mw,
+                                        mw.item_y[mw.hovered]);
+                if (r != 0) { mw.done = true; mw.result = r; }
+              } else {
+                mw.done = true;
+                mw.result = it->m_id;
+              }
+            }
+          }
+        } else if (key == SDLK_DOWN) {
+          int next = mw.hovered + 1;
+          while (next < mw.n_items) {
+            SWELL_MenuItem *it = mw.menu->m_items.Get(next);
+            if (it && !(it->m_flags & MF_SEPARATOR)) break;
+            next++;
+          }
+          if (next < mw.n_items) {
+            mw.hovered = next;
+            menu_draw(&mw); menu_present(&mw);
+          }
+        } else if (key == SDLK_UP) {
+          int prev = (mw.hovered < 0 ? mw.n_items : mw.hovered) - 1;
+          while (prev >= 0) {
+            SWELL_MenuItem *it = mw.menu->m_items.Get(prev);
+            if (it && !(it->m_flags & MF_SEPARATOR)) break;
+            prev--;
+          }
+          if (prev >= 0) {
+            mw.hovered = prev;
+            menu_draw(&mw); menu_present(&mw);
+          }
+        }
+        break;
+      }
+
+      case SDL_EVENT_MOUSE_MOTION: {
+        if (evt.motion.windowID == mw_id) {
+          int newhov = menu_hittest(&mw, (int)evt.motion.y);
+          if (newhov != mw.hovered) {
+            submenu_open = -1;
+            mw.hovered = newhov;
+            menu_draw(&mw); menu_present(&mw);
+          }
+        } else {
+          // Mouse moved outside menu window — dismiss
+          // (But allow moving into parent — handled by checking coordinates)
+          // For now only dismiss on click outside
+        }
+        break;
+      }
+
+      case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+        if (evt.button.windowID != mw_id) {
+          // Click outside menu — dismiss
+          mw.done = true;
+          mw.result = 0;
+        }
+        break;
+      }
+
+      case SDL_EVENT_MOUSE_BUTTON_UP: {
+        if (evt.button.windowID == mw_id) {
+          int idx = menu_hittest(&mw, (int)evt.button.y);
+          if (idx >= 0) {
+            SWELL_MenuItem *it = mw.menu->m_items.Get(idx);
+            if (it && !(it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR))) {
+              if ((it->m_flags & MF_POPUP) && it->m_submenu) {
+                if (submenu_open != idx) {
+                  submenu_open = idx;
+                  int item_sx = sx + mw.w;
+                  int item_sy = sy + mw.item_y[idx];
+                  int r = run_menu_window(it->m_submenu, item_sx, item_sy,
+                                          owner_hwnd, &mw,
+                                          mw.item_y[idx]);
+                  submenu_open = -1;
+                  if (r != 0) { mw.done = true; mw.result = r; }
+                }
+              } else {
+                mw.done = true;
+                mw.result = it->m_id;
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case SDL_EVENT_WINDOW_MOUSE_LEAVE: {
+        if (evt.window.windowID == mw_id) {
+          mw.hovered = -1;
+          menu_draw(&mw); menu_present(&mw);
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  return mw.result;
+}
+
+int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
+                   int resvd, HWND hwnd, const RECT *r)
+{
+  (void)resvd; (void)r;
+  if (!hMenu) return 0;
+
+  // Send WM_INITMENUPOPUP before showing
+  if (hwnd) SendMessage(hwnd, WM_INITMENUPOPUP, (WPARAM)hMenu,
+                        MAKELPARAM(0, FALSE));
+
+  int cmd = run_menu_window(hMenu, xpos, ypos, hwnd, NULL, 0);
+
+  if (cmd && !(flags & TPM_RETURNCMD) && !(flags & TPM_NONOTIFY)) {
+    SendMessage(hwnd, WM_COMMAND, (WPARAM)cmd, 0);
+    return 0;
+  }
+  return cmd;
+}
+
+#else  // headless stub for TrackPopupMenu
+
+int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
+                   int resvd, HWND hwnd, const RECT *r)
+{
+  (void)hMenu; (void)flags; (void)xpos; (void)ypos;
+  (void)resvd; (void)hwnd; (void)r;
+  return 0;
+}
+
+#endif // SWELL_TARGET_SDL3
+
+// ============================================================================
+// WM_NCPAINT / menu bar drawing (called from DefWindowProc in swell-wnd.cpp)
+// ============================================================================
+
+void swell_paint_menubar(HWND hwnd, HDC hdc)
+{
+  if (!hwnd || !hwnd->m_menu || !hdc) return;
+  HMENU menu = hwnd->m_menu;
+  const swell_colortheme &th = g_swell_ctheme;
+
+  RECT cr;
+  GetClientRect(hwnd, &cr);
+  int barH = th.menubar_height;
+  // Menu bar occupies the top barH pixels above the client area (NC area)
+  // We draw it at y=0 relative to the window's full area.
+
+  RECT barR = { 0, 0, cr.right, barH };
+  HBRUSH br = CreateSolidBrush(th.menubar_bg);
+  FillRect(hdc, &barR, br);
+  DeleteObject(br);
+
+  // Draw each top-level menu item
+  int x = 4;
+  int n = menu->m_items.GetSize();
+  for (int i = 0; i < n; i++) {
+    SWELL_MenuItem *it = menu->m_items.Get(i);
+    if (!it) continue;
+    const char *txt = it->m_name.Get();
+    if (!txt || !txt[0]) continue;
+
+    // Measure text width via DT_CALCRECT
+    HFONT oldf = (HFONT)SelectObject(hdc, SWELL_GetDefaultFont());
+    RECT msz = { 0, 0, 0, 0 };
+    SWELL_DrawText(hdc, txt, -1, &msz, DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
+    SelectObject(hdc, oldf);
+
+    int itemW = (msz.right - msz.left) + 12;
+    RECT itemR = { x, 1, x + itemW, barH - 1 };
+
+    SetTextColor(hdc, th.menubar_text);
+    SetBkMode(hdc, TRANSPARENT);
+    SWELL_DrawText(hdc, txt, -1, &itemR,
+                   DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+
+    x += itemW + 2;
+  }
+}
