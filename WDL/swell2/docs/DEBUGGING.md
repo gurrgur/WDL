@@ -11,7 +11,11 @@ overlays your build output onto the system library path:
 cmake -DCMAKE_BUILD_TYPE=Debug -B build-debug
 cmake --build build-debug
 
-# Quick smoke test (5s timeout, check exit code)
+# Kill any existing REAPER instance first (single-instance detection will
+# cause a fresh run to immediately exit with "activating running instance")
+ps aux | grep "REAPER/reaper" | grep -v grep | awk '{print $2}' | xargs -r kill -9
+
+# Quick smoke test — capture exit code OUTSIDE the pipe
 bwrap \
   --ro-bind / / \
   --bind "$PWD/build-debug/libSwell.so" /usr/lib/REAPER/libSwell.so \
@@ -25,10 +29,17 @@ bwrap \
   --setenv SDL_VIDEO_DRIVER x11 \
   --setenv GDK_BACKEND x11 \
   -- \
-  timeout 5 /usr/lib/REAPER/reaper; echo "EXIT: $?"
-# exit 124 = timeout (REAPER stayed running = GUI working)
-# exit 0   = REAPER exited cleanly (GUI failed, check stubs)
-# SIGSEGV  = function pointer was NULL (audit symbols)
+  timeout --kill-after=2 5 /usr/lib/REAPER/reaper > /tmp/reaper_test.log 2>&1
+echo "EXIT: $?"
+
+# exit 137 = SIGKILL'd by timeout --kill-after (REAPER alive = success)
+# exit 124 = SIGTERM'd by timeout and process exited cleanly (also success)
+# exit 0   = REAPER self-exited (GUI failed, check stubs)
+# exit 139 = SIGSEGV (function pointer was NULL or bad memory access)
+
+# NOTE: Do NOT use `bwrap ... | grep ... | tail; echo "EXIT: $?"` — that
+# prints tail's exit code (always 0), masking bwrap's real exit code.
+# Always redirect to a file and check exit code before reading the file.
 
 # Interactive debug with gdb
 bwrap \
@@ -70,41 +81,40 @@ bwrap ... timeout 5 /usr/lib/REAPER/reaper 2>&1 | \
 
 This reveals exactly which stubs are hit and in what order REAPER calls them.
 
-## REAPER Startup Call Sequence
+## REAPER Call Sequence (fully running)
 
-REAPER calls these 35 SWELL functions during startup:
+With `swell-dlg.cpp` and `swell-controls.cpp` implemented, REAPER runs its full
+message loop. The 100+ SWELL functions called during a normal session include:
 
+**Init phase:**
 ```
-SWELL_initargs              ← backend init (SDL3: SDL_Init)
-SWELL_Internal_PostMessage_Init
-SWELL_Register_Cursor_Resource
-SWELL_RegisterCustomControlCreator
-SWELL_EnableRightClickEmulate
-SWELL_ExtendedAPI
-SWELL_GenerateGUID
-SWELL_LoadMenu
-AddFontResourceEx
-LoadNamedImage
-RegisterClipboardFormat
-CreateEvent / GetCurrentThreadId / SetThreadPriority  ← threading
-GetAsyncKeyState
-GetModuleFileName / GetTempPath
-GetPrivateProfileString / GetPrivateProfileInt / GetPrivateProfileStruct  ← INI
-WritePrivateProfileString / WritePrivateProfileStruct
-GetSysColor / GetTickCount / Sleep / lstrcpyn
-LoadLibrary
-SetDlgItemText / GetDlgItem
-SWELL_CreateDialog           ← main window creation (returns NULL = stub!)
-SWELL_DialogBox              ← splash/modal dialog (returns -1 = stub!)
-MessageBox
-SWELL_RunMessageLoop         ← main loop
-  └─ SWELL_MessageQueue_Flush
-  └─ SWELL_RunEvents         ← SDL_PollEvent in SDL3 backend
+SWELL_initargs → SWELL_RegisterCustomControlCreator → SWELL_Internal_PostMessage_Init
+→ SWELL_Register_Cursor_Resource (×60+) → SWELL_ExtendedAPI → GetModuleFileName
+→ lstrcpyn → GetPrivateProfileInt/String/Struct → SWELL_GenerateGUID
+→ SWELL_EnableRightClickEmulate → AddFontResourceEx → LoadNamedImage
+→ RegisterClipboardFormat → CreateEvent → GetCurrentThreadId → SetThreadPriority
+→ GetAsyncKeyState → GetTempPath → LoadLibrary → SWELL_LoadMenu
 ```
 
-**Exit cause:** `SWELL_DialogBox`/`SWELL_CreateDialog` are stubs returning
--1/NULL. REAPER thinks dialog creation failed, falls through, exits cleanly.
-Implementing `swell-dlg.cpp` and `swell-controls.cpp` fixes this.
+**Dialog creation:**
+```
+SWELL_CreateDialog → SWELL_Make* (Button/EditField/Label/Control/Combo/CheckBox)
+→ swell_oswindow_manage → swell_oswindow_resize → swell_oswindow_update_style
+→ ShowWindow → SetMenu → DrawMenuBar → SetDlgItemText → GetDlgItem
+```
+
+**Message loop (per iteration):**
+```
+SWELL_RunMessageLoop → SWELL_MessageQueue_Flush → SWELL_RunEvents
+→ GetTickCount → Sleep → SetTimer/KillTimer → InvalidateRect
+→ BeginPaint → SWELL_internalSkiaPaint → BitBlt → EndPaint
+→ swell_oswindow_updatetoscreen → swell_oswindow_invalidate
+→ SWELL_GetCtxFrameBuffer → SendMessage → DefWindowProc
+→ GetWindowRect/ClientRect → GetCursorPos → GetAsyncKeyState
+```
+
+**Pre-swell-dlg.cpp (historical):** `SWELL_CreateDialog` returned `NULL`,
+REAPER's main window creation failed, REAPER exited with code 0.
 
 ## Known Stub Return-Value Issues
 

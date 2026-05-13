@@ -26,107 +26,6 @@
 #include <cstring>
 
 // ============================================================================
-// Dialog/Control creation
-// ============================================================================
-
-void SWELL_MakeSetCurParms(float xscale, float yscale, float xtrans, float ytrans, HWND parent, bool doauto, bool dosizetofit)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeSetCurParms\n");
-}
-
-HWND SWELL_MakeButton(int def, const char *label, int idx, int x, int y, int w, int h, int flags)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeButton\n");
-  return NULL;
-}
-
-HWND SWELL_MakeEditField(int idx, int x, int y, int w, int h, int flags)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeEditField\n");
-  return NULL;
-}
-
-HWND SWELL_MakeLabel(int align, const char *label, int idx, int x, int y, int w, int h, int flags)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeLabel\n");
-  return NULL;
-}
-
-HWND SWELL_MakeControl(const char *cname, int idx, const char *classname, int style, int x, int y, int w, int h, int exstyle)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeControl\n");
-  return NULL;
-}
-
-HWND SWELL_MakeCombo(int idx, int x, int y, int w, int h, int flags)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeCombo\n");
-  return NULL;
-}
-
-HWND SWELL_MakeGroupBox(const char *name, int idx, int x, int y, int w, int h, int style)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeGroupBox\n");
-  return NULL;
-}
-
-HWND SWELL_MakeCheckBox(const char *name, int idx, int x, int y, int w, int h, int flags)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeCheckBox\n");
-  return NULL;
-}
-
-HWND SWELL_MakeListBox(int idx, int x, int y, int w, int h, int styles)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_MakeListBox\n");
-  return NULL;
-}
-
-void SWELL_GenerateDialogFromList(const void *list, int listsz)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_GenerateDialogFromList\n");
-}
-
-int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead, const char *resid, HWND parent, DLGPROC dlgproc, LPARAM param)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_DialogBox\n");
-  return -1;
-}
-
-HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead, const char *resid, HWND parent, DLGPROC dlgproc, LPARAM param)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_CreateDialog\n");
-  return NULL;
-}
-
-void EndDialog(HWND hwnd, int result)
-{
-  fprintf(stderr, "SWELL_CALL: EndDialog\n");
-}
-
-void SWELL_CloseWindow(HWND hwnd)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_CloseWindow\n");
-}
-
-void *SWELL_ModalWindowStart(HWND hwnd)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowStart\n");
-  return NULL;
-}
-
-bool SWELL_ModalWindowRun(void *ctx, int *ret)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowRun\n");
-  return false;
-}
-
-void SWELL_ModalWindowEnd(void *ctx)
-{
-  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowEnd\n");
-}
-
-// ============================================================================
 // Rect utilities
 // ============================================================================
 
@@ -722,227 +621,341 @@ bool SWELL_SetGLContextToView(HWND h)
 }
 
 // ============================================================================
+// ListView / TreeView / TabCtrl message constants
+// ============================================================================
+
+#ifndef LVM_FIRST
+#define LVM_FIRST 0x1000
+#endif
+#define SWELL_LVM_SETBKCOLOR             (LVM_FIRST+1)
+#define SWELL_LVM_SETIMAGELIST           (LVM_FIRST+3)
+#define SWELL_LVM_GETITEMCOUNT           (LVM_FIRST+4)
+#define SWELL_LVM_GETITEM                (LVM_FIRST+5)
+#define SWELL_LVM_SETITEM                (LVM_FIRST+6)
+#define SWELL_LVM_INSERTITEM             (LVM_FIRST+7)
+#define SWELL_LVM_DELETEITEM             (LVM_FIRST+8)
+#define SWELL_LVM_DELETEALLITEMS         (LVM_FIRST+9)
+#define SWELL_LVM_GETNEXTITEM            (LVM_FIRST+12)
+#define SWELL_LVM_GETITEMRECT            (LVM_FIRST+14)
+#define SWELL_LVM_HITTEST                (LVM_FIRST+18)
+#define SWELL_LVM_ENSUREVISIBLE          (LVM_FIRST+19)
+#define SWELL_LVM_SCROLL                 (LVM_FIRST+20)
+#define SWELL_LVM_REDRAWITEMS            (LVM_FIRST+21)
+#define SWELL_LVM_GETCOLUMN              (LVM_FIRST+25)
+#define SWELL_LVM_SETCOLUMN              (LVM_FIRST+26)
+#define SWELL_LVM_INSERTCOLUMN           (LVM_FIRST+27)
+#define SWELL_LVM_DELETECOLUMN           (LVM_FIRST+28)
+#define SWELL_LVM_GETCOLUMNWIDTH         (LVM_FIRST+29)
+#define SWELL_LVM_SETCOLUMNWIDTH         (LVM_FIRST+30)
+#define SWELL_LVM_GETHEADER              (LVM_FIRST+31)
+#define SWELL_LVM_GETTOPINDEX            (LVM_FIRST+39)
+#define SWELL_LVM_GETCOUNTPERPAGE        (LVM_FIRST+40)
+#define SWELL_LVM_SETITEMSTATE           (LVM_FIRST+43)
+#define SWELL_LVM_GETITEMSTATE           (LVM_FIRST+44)
+#define SWELL_LVM_GETITEMTEXT            (LVM_FIRST+45)
+#define SWELL_LVM_SETITEMTEXT            (LVM_FIRST+46)
+#define SWELL_LVM_SETITEMCOUNT           (LVM_FIRST+47)
+#define SWELL_LVM_SORTITEMS              (LVM_FIRST+48)
+#define SWELL_LVM_GETSELECTEDCOUNT       (LVM_FIRST+50)
+#define SWELL_LVM_SETEXTENDEDLISTVIEWSTYLE (LVM_FIRST+54)
+#define SWELL_LVM_GETSUBITEMRECT         (LVM_FIRST+56)
+#define SWELL_LVM_SUBITEMHITTEST         (LVM_FIRST+57)
+#define SWELL_LVM_SETCOLUMNORDERARRAY    (LVM_FIRST+58)
+#define SWELL_LVM_GETCOLUMNORDERARRAY    (LVM_FIRST+59)
+#define SWELL_LVM_GETSELECTIONMARK       (LVM_FIRST+66)
+#define SWELL_LVM_SETTEXTCOLOR           (LVM_FIRST+36)
+#define SWELL_LVM_SETTEXTBKCOLOR         (LVM_FIRST+38)
+
+#ifndef TVM_FIRST
+#define TVM_FIRST 0x1100
+#endif
+#define SWELL_TVM_INSERTITEM      (TVM_FIRST+0)
+#define SWELL_TVM_DELETEITEM      (TVM_FIRST+1)
+#define SWELL_TVM_EXPAND          (TVM_FIRST+2)
+#define SWELL_TVM_SETINDENT       (TVM_FIRST+7)
+#define SWELL_TVM_SELECTITEM      (TVM_FIRST+11)
+#define SWELL_TVM_GETITEM         (TVM_FIRST+12)
+#define SWELL_TVM_SETITEM         (TVM_FIRST+13)
+#define SWELL_TVM_HITTEST         (TVM_FIRST+17)
+#define SWELL_TVM_ENSUREVISIBLE   (TVM_FIRST+20)
+#define SWELL_TVM_SETBKCOLOR      (TVM_FIRST+29)
+#define SWELL_TVM_SETTEXTCOLOR    (TVM_FIRST+30)
+#define SWELL_TVM_DELETEALLITEMS  (TVM_FIRST+60)
+#define SWELL_TVM_GETSELECTION    (TVM_FIRST+61)
+#define SWELL_TVM_GETPARENT       (TVM_FIRST+62)
+#define SWELL_TVM_GETCHILD        (TVM_FIRST+63)
+#define SWELL_TVM_GETNEXTSIBLING  (TVM_FIRST+64)
+#define SWELL_TVM_GETROOT         (TVM_FIRST+65)
+
+#ifndef TCM_FIRST
+#define TCM_FIRST 0x1300
+#endif
+#define SWELL_TCM_GETITEMCOUNT  (TCM_FIRST+4)
+#define SWELL_TCM_INSERTITEM    (TCM_FIRST+7)
+#define SWELL_TCM_DELETEITEM    (TCM_FIRST+8)
+#define SWELL_TCM_GETCURSEL     (TCM_FIRST+11)
+#define SWELL_TCM_SETCURSEL     (TCM_FIRST+12)
+#define SWELL_TCM_ADJUSTRECT    (TCM_FIRST+40)
+
+// ============================================================================
 // ListView helpers
 // ============================================================================
 
 void ListView_SetExtendedListViewStyleEx(HWND h, int mask, int style)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetExtendedListViewStyleEx\n");
+  SendMessage(h, SWELL_LVM_SETEXTENDEDLISTVIEWSTYLE, (WPARAM)mask, (LPARAM)style);
 }
 
 void ListView_InsertColumn(HWND h, int pos, const LVCOLUMN *lvc)
 {
   fprintf(stderr, "SWELL_CALL: ListView_InsertColumn\n");
+  SendMessage(h, SWELL_LVM_INSERTCOLUMN, (WPARAM)pos, (LPARAM)lvc);
 }
 
 bool ListView_DeleteColumn(HWND h, int pos)
 {
   fprintf(stderr, "SWELL_CALL: ListView_DeleteColumn\n");
-  return false;
+  return SendMessage(h, SWELL_LVM_DELETECOLUMN, (WPARAM)pos, 0) != 0;
 }
 
 void ListView_SetColumn(HWND h, int pos, const LVCOLUMN *lvc)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetColumn\n");
+  SendMessage(h, SWELL_LVM_SETCOLUMN, (WPARAM)pos, (LPARAM)lvc);
 }
 
 void ListView_GetColumn(HWND h, int pos, LVCOLUMN *lvc)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetColumn\n");
+  SendMessage(h, SWELL_LVM_GETCOLUMN, (WPARAM)pos, (LPARAM)lvc);
 }
 
 int ListView_GetColumnWidth(HWND h, int pos)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetColumnWidth\n");
-  return 0;
+  return (int)SendMessage(h, SWELL_LVM_GETCOLUMNWIDTH, (WPARAM)pos, 0);
 }
 
 int ListView_InsertItem(HWND h, const LVITEM *item)
 {
   fprintf(stderr, "SWELL_CALL: ListView_InsertItem\n");
-  return -1;
+  return (int)SendMessage(h, SWELL_LVM_INSERTITEM, 0, (LPARAM)item);
 }
 
 void ListView_SetItemText(HWND h, int ipos, int cpos, const char *txt)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetItemText\n");
+  LVITEM lvi = {};
+  lvi.iSubItem = cpos;
+  lvi.pszText = (char*)txt;
+  SendMessage(h, SWELL_LVM_SETITEMTEXT, (WPARAM)ipos, (LPARAM)&lvi);
 }
 
 bool ListView_SetItem(HWND h, LVITEM *item)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetItem\n");
-  return false;
+  return SendMessage(h, SWELL_LVM_SETITEM, 0, (LPARAM)item) != 0;
 }
 
 bool ListView_GetItem(HWND h, LVITEM *item)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetItem\n");
-  return false;
+  return SendMessage(h, SWELL_LVM_GETITEM, 0, (LPARAM)item) != 0;
 }
 
 int ListView_GetNextItem(HWND h, int istart, int flags)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetNextItem\n");
-  return -1;
+  return (int)SendMessage(h, SWELL_LVM_GETNEXTITEM, (WPARAM)istart, (LPARAM)flags);
 }
 
 int ListView_GetItemState(HWND h, int ipos, UINT mask)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetItemState\n");
-  return 0;
+  return (int)SendMessage(h, SWELL_LVM_GETITEMSTATE, (WPARAM)ipos, (LPARAM)mask);
 }
 
 bool ListView_SetItemState(HWND h, int item, UINT state, UINT statemask)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetItemState\n");
-  return false;
+  LVITEM lvi = {};
+  lvi.state = state;
+  lvi.stateMask = statemask;
+  return SendMessage(h, SWELL_LVM_SETITEMSTATE, (WPARAM)item, (LPARAM)&lvi) != 0;
 }
 
 void ListView_DeleteItem(HWND h, int ipos)
 {
   fprintf(stderr, "SWELL_CALL: ListView_DeleteItem\n");
+  SendMessage(h, SWELL_LVM_DELETEITEM, (WPARAM)ipos, 0);
 }
 
 void ListView_DeleteAllItems(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: ListView_DeleteAllItems\n");
+  SendMessage(h, SWELL_LVM_DELETEALLITEMS, 0, 0);
 }
 
 int ListView_GetSelectedCount(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetSelectedCount\n");
-  return 0;
+  return (int)SendMessage(h, SWELL_LVM_GETSELECTEDCOUNT, 0, 0);
 }
 
 int ListView_GetItemCount(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetItemCount\n");
-  return 0;
+  return (int)SendMessage(h, SWELL_LVM_GETITEMCOUNT, 0, 0);
 }
 
 int ListView_GetSelectionMark(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetSelectionMark\n");
-  return -1;
+  return (int)SendMessage(h, SWELL_LVM_GETSELECTIONMARK, 0, 0);
 }
 
 void ListView_SetColumnWidth(HWND h, int colpos, int wid)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetColumnWidth\n");
+  SendMessage(h, SWELL_LVM_SETCOLUMNWIDTH, (WPARAM)colpos, (LPARAM)wid);
 }
 
 void ListView_RedrawItems(HWND h, int startitem, int enditem)
 {
   fprintf(stderr, "SWELL_CALL: ListView_RedrawItems\n");
+  SendMessage(h, SWELL_LVM_REDRAWITEMS, (WPARAM)startitem, (LPARAM)enditem);
 }
 
 void ListView_SetItemCount(HWND h, int cnt)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetItemCount\n");
+  SendMessage(h, SWELL_LVM_SETITEMCOUNT, (WPARAM)cnt, 0);
 }
 
 void ListView_EnsureVisible(HWND h, int i, BOOL pok)
 {
   fprintf(stderr, "SWELL_CALL: ListView_EnsureVisible\n");
+  SendMessage(h, SWELL_LVM_ENSUREVISIBLE, (WPARAM)i, (LPARAM)pok);
 }
 
 void ListView_SetImageList(HWND h, HIMAGELIST imagelist, int which)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetImageList\n");
+  SendMessage(h, SWELL_LVM_SETIMAGELIST, (WPARAM)which, (LPARAM)imagelist);
 }
 
 int ListView_SubItemHitTest(HWND h, LVHITTESTINFO *pinf)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SubItemHitTest\n");
-  return -1;
+  return (int)SendMessage(h, SWELL_LVM_SUBITEMHITTEST, 0, (LPARAM)pinf);
 }
 
 void ListView_GetItemText(HWND hwnd, int item, int subitem, char *text, int textmax)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetItemText\n");
+  LVITEM lvi = {};
+  lvi.iSubItem = subitem;
+  lvi.pszText = text;
+  lvi.cchTextMax = textmax;
+  SendMessage(hwnd, SWELL_LVM_GETITEMTEXT, (WPARAM)item, (LPARAM)&lvi);
 }
 
 void ListView_SortItems(HWND hwnd, PFNLVCOMPARE compf, LPARAM parm)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SortItems\n");
+  SendMessage(hwnd, SWELL_LVM_SORTITEMS, (WPARAM)parm, (LPARAM)compf);
 }
 
 bool ListView_Scroll(HWND h, int xscroll, int yscroll)
 {
   fprintf(stderr, "SWELL_CALL: ListView_Scroll\n");
-  return false;
+  return SendMessage(h, SWELL_LVM_SCROLL, (WPARAM)xscroll, (LPARAM)yscroll) != 0;
 }
 
 int ListView_GetTopIndex(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetTopIndex\n");
-  return 0;
+  return (int)SendMessage(h, SWELL_LVM_GETTOPINDEX, 0, 0);
 }
 
 int ListView_GetCountPerPage(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetCountPerPage\n");
-  return 0;
+  return (int)SendMessage(h, SWELL_LVM_GETCOUNTPERPAGE, 0, 0);
 }
 
 bool ListView_GetItemRect(HWND h, int item, RECT *r, int code)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetItemRect\n");
-  return false;
+  if (r) r->left = code;
+  return SendMessage(h, SWELL_LVM_GETITEMRECT, (WPARAM)item, (LPARAM)r) != 0;
 }
 
 bool ListView_GetSubItemRect(HWND h, int item, int subitem, int code, RECT *r)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetSubItemRect\n");
-  return false;
+  if (r) { r->left = code; r->top = subitem; }
+  return SendMessage(h, SWELL_LVM_GETSUBITEMRECT, (WPARAM)item, (LPARAM)r) != 0;
 }
 
 int ListView_HitTest(HWND h, LVHITTESTINFO *pinf)
 {
   fprintf(stderr, "SWELL_CALL: ListView_HitTest\n");
-  return -1;
+  return (int)SendMessage(h, SWELL_LVM_HITTEST, 0, (LPARAM)pinf);
 }
 
 BOOL ListView_SetColumnOrderArray(HWND h, int cnt, int *arr)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetColumnOrderArray\n");
-  return FALSE;
+  return (BOOL)SendMessage(h, SWELL_LVM_SETCOLUMNORDERARRAY, (WPARAM)cnt, (LPARAM)arr);
 }
 
 BOOL ListView_GetColumnOrderArray(HWND h, int cnt, int *arr)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetColumnOrderArray\n");
-  return FALSE;
+  return (BOOL)SendMessage(h, SWELL_LVM_GETCOLUMNORDERARRAY, (WPARAM)cnt, (LPARAM)arr);
 }
 
 HWND ListView_GetHeader(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: ListView_GetHeader\n");
-  return NULL;
+  return (HWND)SendMessage(h, SWELL_LVM_GETHEADER, 0, 0);
 }
 
 int Header_GetItemCount(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: Header_GetItemCount\n");
-  return 0;
+  return (int)SendMessage(h, SWELL_LVM_GETITEMCOUNT, 0, 0);
 }
 
 BOOL Header_GetItem(HWND h, int col, HDITEM *hi)
 {
   fprintf(stderr, "SWELL_CALL: Header_GetItem\n");
-  return FALSE;
+  if (!hi) return FALSE;
+  LVCOLUMN lvc = {};
+  lvc.mask = LVCF_TEXT | LVCF_WIDTH;
+  lvc.pszText = hi->pszText;
+  lvc.cchTextMax = hi->cchTextMax;
+  BOOL r = (BOOL)SendMessage(h, SWELL_LVM_GETCOLUMN, (WPARAM)col, (LPARAM)&lvc);
+  if (r) hi->cxy = lvc.cx;
+  return r;
 }
 
 BOOL Header_SetItem(HWND h, int col, HDITEM *hi)
 {
   fprintf(stderr, "SWELL_CALL: Header_SetItem\n");
-  return FALSE;
+  if (!hi) return FALSE;
+  LVCOLUMN lvc = {};
+  lvc.mask = LVCF_WIDTH;
+  lvc.cx = hi->cxy;
+  return (BOOL)SendMessage(h, SWELL_LVM_SETCOLUMN, (WPARAM)col, (LPARAM)&lvc);
 }
 
 int SWELL_GetListViewHeaderHeight(HWND h)
 {
   fprintf(stderr, "SWELL_CALL: SWELL_GetListViewHeaderHeight\n");
-  return 0;
+  return 20;
 }
 
 void SWELL_SetListViewFastClickMask(HWND hList, int mask)
@@ -953,16 +966,19 @@ void SWELL_SetListViewFastClickMask(HWND hList, int mask)
 void ListView_SetBkColor(HWND hwnd, int color)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetBkColor\n");
+  SendMessage(hwnd, SWELL_LVM_SETBKCOLOR, 0, (LPARAM)color);
 }
 
 void ListView_SetTextBkColor(HWND hwnd, int color)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetTextBkColor\n");
+  SendMessage(hwnd, SWELL_LVM_SETTEXTBKCOLOR, 0, (LPARAM)color);
 }
 
 void ListView_SetTextColor(HWND hwnd, int color)
 {
   fprintf(stderr, "SWELL_CALL: ListView_SetTextColor\n");
+  SendMessage(hwnd, SWELL_LVM_SETTEXTCOLOR, 0, (LPARAM)color);
 }
 
 void ListView_SetGridColor(HWND hwnd, int color)
@@ -982,97 +998,103 @@ void ListView_SetSelColors(HWND hwnd, int *colors, int ncolors)
 HTREEITEM TreeView_InsertItem(HWND hwnd, TV_INSERTSTRUCT *ins)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_InsertItem\n");
-  return NULL;
+  return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_INSERTITEM, 0, (LPARAM)ins);
 }
 
 BOOL TreeView_Expand(HWND hwnd, HTREEITEM item, UINT flag)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_Expand\n");
-  return FALSE;
+  return (BOOL)SendMessage(hwnd, SWELL_TVM_EXPAND, (WPARAM)flag, (LPARAM)item);
 }
 
 HTREEITEM TreeView_GetSelection(HWND hwnd)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_GetSelection\n");
-  return NULL;
+  return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETSELECTION, 0, 0);
 }
 
 void TreeView_DeleteItem(HWND hwnd, HTREEITEM item)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_DeleteItem\n");
+  SendMessage(hwnd, SWELL_TVM_DELETEITEM, 0, (LPARAM)item);
 }
 
 void TreeView_DeleteAllItems(HWND hwnd)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_DeleteAllItems\n");
+  SendMessage(hwnd, SWELL_TVM_DELETEALLITEMS, 0, 0);
 }
 
 void TreeView_SelectItem(HWND hwnd, HTREEITEM item)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_SelectItem\n");
+  SendMessage(hwnd, SWELL_TVM_SELECTITEM, 0, (LPARAM)item);
 }
 
 void TreeView_EnsureVisible(HWND hwnd, HTREEITEM item)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_EnsureVisible\n");
+  SendMessage(hwnd, SWELL_TVM_ENSUREVISIBLE, 0, (LPARAM)item);
 }
 
 BOOL TreeView_GetItem(HWND hwnd, LPTVITEM pitem)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_GetItem\n");
-  return FALSE;
+  return (BOOL)SendMessage(hwnd, SWELL_TVM_GETITEM, 0, (LPARAM)pitem);
 }
 
 BOOL TreeView_SetItem(HWND hwnd, LPTVITEM pitem)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_SetItem\n");
-  return FALSE;
+  return (BOOL)SendMessage(hwnd, SWELL_TVM_SETITEM, 0, (LPARAM)pitem);
 }
 
 HTREEITEM TreeView_HitTest(HWND hwnd, TVHITTESTINFO *hti)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_HitTest\n");
-  return NULL;
+  return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_HITTEST, 0, (LPARAM)hti);
 }
 
 BOOL TreeView_SetIndent(HWND hwnd, int indent)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_SetIndent\n");
-  return FALSE;
+  return (BOOL)SendMessage(hwnd, SWELL_TVM_SETINDENT, (WPARAM)indent, 0);
 }
 
 HTREEITEM TreeView_GetParent(HWND hwnd, HTREEITEM item)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_GetParent\n");
-  return NULL;
+  return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETPARENT, 0, (LPARAM)item);
 }
 
 HTREEITEM TreeView_GetChild(HWND hwnd, HTREEITEM item)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_GetChild\n");
-  return NULL;
+  return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETCHILD, 0, (LPARAM)item);
 }
 
 HTREEITEM TreeView_GetNextSibling(HWND hwnd, HTREEITEM item)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_GetNextSibling\n");
-  return NULL;
+  return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETNEXTSIBLING, 0, (LPARAM)item);
 }
 
 HTREEITEM TreeView_GetRoot(HWND hwnd)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_GetRoot\n");
-  return NULL;
+  return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETROOT, 0, 0);
 }
 
 void TreeView_SetBkColor(HWND hwnd, int color)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_SetBkColor\n");
+  SendMessage(hwnd, SWELL_TVM_SETBKCOLOR, 0, (LPARAM)color);
 }
 
 void TreeView_SetTextColor(HWND hwnd, int color)
 {
   fprintf(stderr, "SWELL_CALL: TreeView_SetTextColor\n");
+  SendMessage(hwnd, SWELL_TVM_SETTEXTCOLOR, 0, (LPARAM)color);
 }
 
 // ============================================================================
@@ -1082,37 +1104,37 @@ void TreeView_SetTextColor(HWND hwnd, int color)
 int TabCtrl_GetItemCount(HWND hwnd)
 {
   fprintf(stderr, "SWELL_CALL: TabCtrl_GetItemCount\n");
-  return 0;
+  return (int)SendMessage(hwnd, SWELL_TCM_GETITEMCOUNT, 0, 0);
 }
 
 BOOL TabCtrl_DeleteItem(HWND hwnd, int idx)
 {
   fprintf(stderr, "SWELL_CALL: TabCtrl_DeleteItem\n");
-  return FALSE;
+  return (BOOL)SendMessage(hwnd, SWELL_TCM_DELETEITEM, (WPARAM)idx, 0);
 }
 
 int TabCtrl_InsertItem(HWND hwnd, int idx, TCITEM *item)
 {
   fprintf(stderr, "SWELL_CALL: TabCtrl_InsertItem\n");
-  return -1;
+  return (int)SendMessage(hwnd, SWELL_TCM_INSERTITEM, (WPARAM)idx, (LPARAM)item);
 }
 
 int TabCtrl_SetCurSel(HWND hwnd, int idx)
 {
   fprintf(stderr, "SWELL_CALL: TabCtrl_SetCurSel\n");
-  return -1;
+  return (int)SendMessage(hwnd, SWELL_TCM_SETCURSEL, (WPARAM)idx, 0);
 }
 
 int TabCtrl_GetCurSel(HWND hwnd)
 {
   fprintf(stderr, "SWELL_CALL: TabCtrl_GetCurSel\n");
-  return -1;
+  return (int)SendMessage(hwnd, SWELL_TCM_GETCURSEL, 0, 0);
 }
 
 BOOL TabCtrl_AdjustRect(HWND hwnd, BOOL fLarger, RECT *r)
 {
   fprintf(stderr, "SWELL_CALL: TabCtrl_AdjustRect\n");
-  return FALSE;
+  return (BOOL)SendMessage(hwnd, SWELL_TCM_ADJUSTRECT, (WPARAM)fLarger, (LPARAM)r);
 }
 
 // ============================================================================

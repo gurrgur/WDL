@@ -59,8 +59,8 @@ swell2/
   swell-appstub.cpp        ← SWELLAPI_GetFunc export (done)
   swell-backend-headless.cpp ← headless backend (done)
   swell-backend-sdl3.cpp   ← SDL3 OS backend; window mgmt, event translation, Skia screen update (done)
-  swell-dlg.cpp            ← dialog creation and modal loop — NOT YET STARTED
-  swell-controls.cpp       ← built-in control WNDPROCs — NOT YET STARTED
+  swell-dlg.cpp            ← dialog creation and modal loop (done)
+  swell-controls.cpp       ← built-in control WNDPROCs (done)
   swell-menu.cpp           ← HMENU, TrackPopupMenu, menu bar — NOT YET STARTED
   swell-misc.cpp           ← clipboard, drag-drop, monitors, MessageBox, file dialogs — NOT YET STARTED
   swell-kb.cpp             ← keyboard routing, accelerator handling — NOT YET STARTED
@@ -522,8 +522,8 @@ Implement in this order to keep each step independently testable:
 7. **`swell-appstub.cpp`** — SWELLAPI_GetFunc export ✅
 8. **`swell-stubs.cpp`** — stubs for ALL remaining SWELL_API_DEFINE functions ✅
 9. **`swell-backend-sdl3.cpp`** — SDL3 OS backend for real windows, events, rendering ✅
-10. `swell-controls.cpp` — depends on wnd + gdi ← NEXT
-11. `swell-dlg.cpp` — depends on controls + wnd ← NEXT (needed for REAPER GUI)
+10. `swell-controls.cpp` — depends on wnd + gdi ✅
+11. `swell-dlg.cpp` — depends on controls + wnd ✅
 12. `swell-menu.cpp` — depends on wnd + gdi
 13. `swell-misc.cpp` — depends on everything above
 14. `swell-kb.cpp` — depends on wnd
@@ -542,61 +542,172 @@ scope, not the comment. Example: `SWELL_SetMenuDestination`.
 
 ---
 
-## REAPER Test Results (2026-05-13)
+## REAPER Status (2026-05-13)
 
-REAPER was run against the SDL3 backend build (`libSwell.so` overlay via bwrap).
-Outcome: no crash, clean exit(0). All ~240 function pointers resolve.
+### Current state: RUNNING ✅
 
-**Which functions REAPER actually calls at startup** (traced via fprintf injection):
+REAPER runs with `libSwell.so` overlay via bwrap, stays alive indefinitely (killed
+only by external timeout/SIGKILL). 37k+ SWELL calls per 7s run. SDL3 backend
+creates windows, processes events, paints via Skia. Main window fully alive.
+
+**Full set of SWELL functions called during a normal REAPER session:**
 
 ```
-AddFontResourceEx, CreateEvent, GetAsyncKeyState, GetCurrentThreadId,
-GetDlgItem, GetModuleFileName, GetPrivateProfileInt, GetPrivateProfileString,
-GetPrivateProfileStruct, GetSysColor, GetTempPath, GetTickCount, LoadLibrary,
-LoadNamedImage, lstrcpyn, MessageBox, RegisterClipboardFormat, SetDlgItemText,
-SetThreadPriority, Sleep, SWELL_CreateDialog, SWELL_DialogBox,
-SWELL_EnableRightClickEmulate, SWELL_ExtendedAPI, SWELL_GenerateGUID,
-SWELL_initargs, SWELL_Internal_PostMessage_Init, SWELL_LoadMenu,
-SWELL_MessageQueue_Flush, SWELL_Register_Cursor_Resource,
-SWELL_RegisterCustomControlCreator, SWELL_RunEvents, SWELL_RunMessageLoop,
-WritePrivateProfileString, WritePrivateProfileStruct
+AddFontResourceEx, BeginPaint, BitBlt, ClientToScreen, CreateEvent, CreateFont,
+CreateFontIndirect, CreatePen, CreateSolidBrush, DefWindowProc, DeleteMenu,
+DeleteObject, DestroyWindow, DrawMenuBar, EnableMenuItem, EnableWindow, EndPaint,
+GetAsyncKeyState, GetCapture, GetClassName, GetClientRect, GetCurrentThreadId,
+GetCursorPos, GetDC, GetDlgItem, GetFocus, GetForegroundWindow, GetMenu,
+GetMenuItemCount, GetModuleFileName, GetParent, GetPrivateProfileInt,
+GetPrivateProfileString, GetPrivateProfileStruct, GetProp, GetStockObject,
+GetSubMenu, GetSysColor, GetSystemMetrics, GetTempPath, GetTextMetrics,
+GetTickCount, GetWindow, GetWindowContentViewRect, GetWindowDC, GetWindowLong,
+GetWindowRect, InvalidateRect, IsChild, IsWindowVisible, KillTimer, LineTo,
+LoadLibrary, LoadNamedImage, lstrcpyn, MoveToEx, MulDiv, RegisterClipboardFormat,
+ReleaseCapture, ReleaseDC, RemoveProp, ScreenToClient, SelectObject, SendMessage,
+SetBkColor, SetBkMode, SetCapture, SetDlgItemText, SetFocus, SetForegroundWindow,
+SetMenu, SetMenuItemInfo, SetParent, SetProp, SetTextColor, SetThreadPriority,
+SetTimer, SetWindowLong, SetWindowPos, ShowWindow, Sleep, SWELL_CreateDialog,
+SWELL_CreateMemContext, SWELL_DeleteGfxContext, SWELL_DrawText,
+SWELL_EnableRightClickEmulate, SWELL_ExtendedAPI, SWELL_FillDialogBackground,
+SWELL_FillRect, SWELL_GenerateGUID, SWELL_GetCtxFrameBuffer,
+SWELL_GetDefaultFont, SWELL_GetScaling256, SWELL_GetViewPort,
+SWELL_initargs, SWELL_Internal_PostMessage_Init, SWELL_internalSkiaPaint,
+SWELL_IsGroupBox, SWELL_LoadCursor, SWELL_LoadMenu, SWELL_MessageQueue_Clear,
+SWELL_MessageQueue_Flush, SWELL_Polygon, SWELL_PtInRect,
+SWELL_Register_Cursor_Resource, SWELL_RegisterCustomControlCreator,
+SWELL_RunEvents, SWELL_RunMessageLoop, SWELL_SetClassName, SWELL_SetCursor,
+SWELL_SetMenuDestination, SWELL_SetWindowWantRaiseAmt, SwellDialogDefaultWindowProc,
+TrackPopupMenu, UpdateWindow, WindowFromPoint, WinIntersectRect, WinOffsetRect,
+WinSetRect, WritePrivateProfileString, WritePrivateProfileStruct,
+swell_DirtyContext, swell_oswindow_focus, swell_oswindow_invalidate,
+swell_oswindow_manage, swell_oswindow_resize, swell_oswindow_update_enable,
+swell_oswindow_update_style, swell_oswindow_updatetoscreen
 ```
 
-**Why REAPER exits without GUI:** `SWELL_DialogBox` returns `-1` (stub),
-`SWELL_CreateDialog` returns `NULL` (stub). REAPER tries to create its main
-dialog, gets failure, falls through and exits normally. These are in
-`swell-stubs.cpp` — implementing `swell-dlg.cpp` and `swell-controls.cpp` is
-the next step.
+**What is NOT yet called (open work):** ListView_*, TreeView_*, TabCtrl_* helper
+functions (now implemented as SendMessage dispatchers), menu creation functions
+beyond stubs, clipboard, drag-drop, file dialogs.
 
-**SDL3 backend:** `SWELL_initargs` → SDL_Init(VIDEO) succeeds. `SWELL_RunEvents`
-processes 0 events because no windows are created (dialog creation is stubbed).
-`swell_oswindow_manage` is never reached — dialog creation would trigger it.
+### Earlier state (pre-swell-dlg.cpp): self-exit
 
-## Session Findings
+Before `swell-dlg.cpp` and `swell-controls.cpp` were implemented, REAPER exited
+with code 0 immediately. Root cause: `SWELL_CreateDialog` returned `NULL` →
+REAPER main window creation failed → REAPER fell through and exited normally.
 
-### `#if 0` block in swell-types.h
+---
 
-`swell-types.h:1434` wraps `SM_*` constants in `#if 0 // disabled until
-implemented`. These constants (SM_CYCAPTION, SM_CXBORDER, SM_CXDLGFRAME, etc.)
-are needed by `GetSystemMetrics`. Changed to `#if 1` when GetSystemMetrics was
-implemented. Check for similar `#if 0` blocks when adding new functionality.
+## Session Findings (2026-05-13)
 
-### Tracing function calls
+### REAPER is single-instance: kill before testing
 
-To see which functions REAPER calls at runtime (not just resolves), use a Python
-script to inject `fprintf(stderr, "SWELL_CALL: FuncName\n");` after every
-function's opening brace. Then run REAPER and filter:
+REAPER uses a Unix socket or shared file for single-instance detection. If a
+prior bwrap run left REAPER alive, a new run prints `activating running instance...done`
+and exits immediately (EXIT:0). Always kill existing instances before a test run:
+
 ```bash
-./inject_traces.py
-cmake --build build-debug
-bwrap ... timeout 5 reaper 2>&1 | grep "SWELL_CALL:" | sed 's/.*SWELL_CALL: //' | sort -u
+ps aux | grep "REAPER/reaper" | grep -v grep | awk '{print $2}' | xargs -r kill -9
 ```
+
+### bwrap must bind config dirs and /proc
+
+The minimal bwrap invocation in older docs is missing critical binds. Without
+`--bind ~/.config/REAPER` REAPER has no config; without `--proc /proc` and
+`--setenv DISPLAY :0` it fails before even printing SWELL calls. Use this full
+command (from `docs/DEBUGGING.md`):
+
+```bash
+bwrap \
+  --ro-bind / / \
+  --bind "$PWD/build-debug/libSwell.so" /usr/lib/REAPER/libSwell.so \
+  --bind "$HOME/.config/REAPER" "$HOME/.config/REAPER" \
+  --bind "$HOME/.cache" "$HOME/.cache" \
+  --tmpfs /tmp \
+  --bind /tmp/.X11-unix /tmp/.X11-unix \
+  --dev /dev \
+  --proc /proc \
+  --setenv DISPLAY ":0" \
+  --setenv SDL_VIDEO_DRIVER x11 \
+  --setenv GDK_BACKEND x11 \
+  -- timeout --kill-after=2 5 /usr/lib/REAPER/reaper
+echo "EXIT: $?"
+```
+
+### timeout --kill-after=2 is required
+
+Plain `timeout 5 reaper` hangs when REAPER catches SIGTERM and doesn't exit
+(it tries to save the project). The outer timeout process then waits forever.
+Use `timeout --kill-after=2 5 reaper` — sends SIGTERM at 5s, SIGKILL at 7s.
+
+### Exit code 137 = success (bwrap killed), not failure
+
+`bwrap ... -- timeout --kill-after=2 5 reaper; echo $?` prints `137` when the
+kill-after SIGKILL fires (128+9). This means REAPER ran the full timeout period
+without self-exiting. It is the success condition. Self-exit is EXIT:0.
+
+### Pipeline exit code masks bwrap's exit code
+
+`bwrap ... reaper 2>&1 | grep ... | tail -20; echo "EXIT: $?"` prints the exit
+code of `tail`, always 0. Capture bwrap's exit code before the pipe:
+```bash
+bwrap ... reaper > /tmp/reaper.log 2>&1; echo "EXIT: $?"
+```
+
+### MAKEINTRESOURCE is NOT a string — never strcmp it
+
+REAPER passes integer resource IDs as `(const char*)n` (MAKEINTRESOURCE). Calling
+`strcmp(r->resid, resid)` on such a pointer crashes immediately (reads from address
+`0x66` etc.). In `SWELL_CreateDialog`: check `(size_t)resid <= 0xFFFF` before
+any string operation. Use pointer equality for integer IDs; `strcmp` only when
+both sides are confirmed real string pointers (value > 0xFFFF).
+
+### LVM_*/TVM_*/TCM_* constants not in swell-types.h
+
+`swell-types.h` intentionally omits these message constants (they're defined by
+the control implementor). Both `swell-controls.cpp` and `swell-stubs.cpp` need
+local `#define` blocks. Values are standard Win32: `LVM_FIRST=0x1000`,
+`TCM_FIRST=0x1300`, `TVM_FIRST=0x1100`. The SWELL2-specific tree navigation
+messages (TVM_GETSELECTION, TVM_GETPARENT, TVM_GETCHILD, TVM_GETNEXTSIBLING,
+TVM_GETROOT, TVM_DELETEALLITEMS) use TVM_FIRST+60..65.
+
+### WDL_PtrList::Insert argument order
+
+```cpp
+// WRONG: list.Insert(item, index)
+// RIGHT:
+list.Insert(index, item);   // index comes FIRST
+```
+
+### swell-types.h #if 0 guard on SM_* constants
+
+`swell-types.h:1434` wraps `SM_CYCAPTION`, `SM_CXBORDER`, `SM_CXDLGFRAME`, etc.
+in `#if 0 // disabled until implemented`. Change to `#if 1` when implementing
+`GetSystemMetrics`. Check the file for other `#if 0` blocks before assuming a
+constant is missing.
+
+### SWELL_GetCtxFrameBuffer must return the Skia raster pointer
+
+REAPER calls this from its WM_TIMER handler and crashes if it returns nullptr.
+Correct implementation:
+```cpp
+SkPixmap pm;
+if (ct->surface->peekPixels(&pm))
+  return const_cast<void*>(pm.addr());
+return nullptr;
+```
+
+### ListView/TreeView/TabCtrl helpers live in swell-stubs.cpp, not controls
+
+The `ListView_*`, `TreeView_*`, `TabCtrl_*` convenience functions are standalone
+C functions (not WNDPROC messages). They dispatch to the control's WNDPROC via
+`SendMessage`. They live in `swell-stubs.cpp` (or eventually `swell-misc.cpp`)
+and should **not** be placed in `swell-controls.cpp`.
 
 ### Build config note
 
 CMake auto-detects SDL3 via pkg-config. If SDL3 is not found, falls back to
-headless backend. To force headless build even when SDL3 is installed, edit
-CMakeLists.txt or set `-DSDL3_FOUND=OFF` before the `pkg_check_modules` call.
+headless backend. GPU errors from Mesa/amdgpu at runtime are harmless — REAPER
+uses Skia's software raster backend, not OpenGL.
 
 ### swell-types.h is a kept header but may need small edits
 

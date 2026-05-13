@@ -1445,6 +1445,18 @@ void SWELL_UnregisterCustomControlCreator(SWELL_ControlCreatorProc proc)
   }
 }
 
+// Invoked by swell-dlg.cpp for unknown classnames
+HWND swell_invoke_control_creators(HWND parent, const char *cname, int idx,
+                                   const char *classname, int style,
+                                   int x, int y, int w, int h)
+{
+  for (ControlCreatorNode *n = g_control_creators; n; n = n->_next) {
+    HWND res = n->proc(parent, cname, idx, classname, style, x, y, w, h);
+    if (res) return res;
+  }
+  return NULL;
+}
+
 // ===========================================================================
 // SWELL_GetDefaultButtonID
 // ===========================================================================

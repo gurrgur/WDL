@@ -1,0 +1,599 @@
+/*
+  SWELL2 dialog creation and lifecycle.
+  Implements SWELL_CreateDialog, SWELL_DialogBox, EndDialog,
+  SWELL_Make* control constructors, and SWELL_GenerateDialogFromList.
+*/
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "swell-internal.h"
+#include "swell-dlggen.h"
+#include <cstring>
+#include <cstdlib>
+#include <unistd.h>
+
+// ---------------------------------------------------------------------------
+// Current dialog-creation parameters (set by SWELL_MakeSetCurParms)
+// ---------------------------------------------------------------------------
+
+static float  g_dlg_xscale  = 1.9f;
+static float  g_dlg_yscale  = 1.9f;
+static float  g_dlg_xtrans  = 0.0f;
+static float  g_dlg_ytrans  = 0.0f;
+static HWND   g_dlg_parent  = NULL;
+
+static inline int scx(int x) { return (int)(x * g_dlg_xscale + g_dlg_xtrans + 0.5f); }
+static inline int scy(int y) { return (int)(y * g_dlg_yscale + g_dlg_ytrans + 0.5f); }
+static inline int scw(int w) { return (int)(w * g_dlg_xscale + 0.5f); }
+static inline int sch(int h) { return (int)(h * g_dlg_yscale + 0.5f); }
+
+void SWELL_MakeSetCurParms(float xscale, float yscale, float xtrans, float ytrans,
+                           HWND parent, bool doauto, bool dosizetofit)
+{
+  g_dlg_xscale = (xscale > 0.0f) ? xscale : 1.9f;
+  g_dlg_yscale = (yscale > 0.0f) ? yscale : 1.9f;
+  g_dlg_xtrans = xtrans;
+  g_dlg_ytrans = ytrans;
+  g_dlg_parent = parent;
+  (void)doauto; (void)dosizetofit;
+}
+
+// ---------------------------------------------------------------------------
+// Spare OS window pool (kept between EndDialog calls to reduce flicker)
+// ---------------------------------------------------------------------------
+
+static HWND g_spare_oswindow_hwnd = NULL;
+
+void swell_dlg_destroyspare()
+{
+  if (g_spare_oswindow_hwnd) {
+    swell_oswindow_destroy(g_spare_oswindow_hwnd);
+    g_spare_oswindow_hwnd = NULL;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Modal dialog state
+// ---------------------------------------------------------------------------
+
+struct ModalDlgState {
+  HWND   hwnd;
+  bool   has_ret;
+  int    ret;
+  ModalDlgState *prev;
+};
+
+static ModalDlgState *g_modal_stack = NULL;
+static int            s_last_dlgret = -1;
+
+// ---------------------------------------------------------------------------
+// Helper: find first focusable child
+// ---------------------------------------------------------------------------
+
+static HWND find_first_focusable(HWND parent)
+{
+  if (!parent) return NULL;
+  int n = parent->m_children.GetSize();
+  for (int i = 0; i < n; i++) {
+    HWND ch = parent->m_children.Get(i);
+    if (ch && ch->m_visible && ch->m_enabled && ch->m_wantfocus)
+      return ch;
+  }
+  return NULL;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_MakeButton
+// ---------------------------------------------------------------------------
+
+HWND SWELL_MakeButton(int def, const char *label, int idx,
+                      int x, int y, int w, int h, int flags)
+{
+  DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
+  style |= def ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON;
+  if (flags) style |= (DWORD)flags;
+
+  RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  HWND hwnd = new HWND__(g_dlg_parent, idx, &r, label ? label : "", true,
+                         buttonWindowProc);
+  hwnd->m_style     = style;
+  hwnd->m_classname = "Button";
+  buttonWindowProc(hwnd, WM_CREATE, 0, 0);
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_MakeEditField
+// ---------------------------------------------------------------------------
+
+HWND SWELL_MakeEditField(int idx, int x, int y, int w, int h, int flags)
+{
+  DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL;
+  if (flags) style |= (DWORD)flags;
+
+  RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  HWND hwnd = new HWND__(g_dlg_parent, idx, &r, "", true, editWindowProc);
+  hwnd->m_style     = style;
+  hwnd->m_classname = "Edit";
+  editWindowProc(hwnd, WM_CREATE, 0, 0);
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_MakeLabel
+// ---------------------------------------------------------------------------
+
+HWND SWELL_MakeLabel(int align, const char *label, int idx,
+                     int x, int y, int w, int h, int flags)
+{
+  DWORD style = WS_CHILD | WS_VISIBLE;
+  if (align < 0)      style |= SS_LEFT;
+  else if (align > 0) style |= SS_RIGHT;
+  else                style |= SS_CENTER;
+  if (flags) style |= (DWORD)flags;
+
+  RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  HWND hwnd = new HWND__(g_dlg_parent, idx, &r, label ? label : "", true,
+                         labelWindowProc);
+  hwnd->m_style     = style;
+  hwnd->m_classname = "Static";
+  hwnd->m_wantfocus = false;
+  labelWindowProc(hwnd, WM_CREATE, 0, 0);
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_MakeGroupBox
+// ---------------------------------------------------------------------------
+
+HWND SWELL_MakeGroupBox(const char *name, int idx,
+                        int x, int y, int w, int h, int style)
+{
+  DWORD wstyle = WS_CHILD | WS_VISIBLE | BS_GROUPBOX;
+  if (style) wstyle |= (DWORD)style;
+
+  RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  HWND hwnd = new HWND__(g_dlg_parent, idx, &r, name ? name : "", true,
+                         buttonWindowProc);
+  hwnd->m_style     = wstyle;
+  hwnd->m_classname = "Button";
+  hwnd->m_wantfocus = false;
+  buttonWindowProc(hwnd, WM_CREATE, 0, 0);
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_MakeCheckBox
+// ---------------------------------------------------------------------------
+
+HWND SWELL_MakeCheckBox(const char *name, int idx,
+                        int x, int y, int w, int h, int flags)
+{
+  DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX;
+  if (flags) style |= (DWORD)flags;
+
+  RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  HWND hwnd = new HWND__(g_dlg_parent, idx, &r, name ? name : "", true,
+                         buttonWindowProc);
+  hwnd->m_style     = style;
+  hwnd->m_classname = "Button";
+  buttonWindowProc(hwnd, WM_CREATE, 0, 0);
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_MakeCombo
+// ---------------------------------------------------------------------------
+
+HWND SWELL_MakeCombo(int idx, int x, int y, int w, int h, int flags)
+{
+  DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
+  if (flags) style |= (DWORD)flags;
+  else       style |= CBS_DROPDOWNLIST;
+
+  RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  HWND hwnd = new HWND__(g_dlg_parent, idx, &r, "", true, comboWindowProc);
+  hwnd->m_style     = style;
+  hwnd->m_classname = "ComboBox";
+  comboWindowProc(hwnd, WM_CREATE, 0, 0);
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_MakeListBox
+// ---------------------------------------------------------------------------
+
+HWND SWELL_MakeListBox(int idx, int x, int y, int w, int h, int styles)
+{
+  DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER;
+  if (styles) style |= (DWORD)styles;
+
+  RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  HWND hwnd = new HWND__(g_dlg_parent, idx, &r, "", true, listViewWindowProc);
+  hwnd->m_style     = style;
+  hwnd->m_classname = "ListBox";
+  // pass is_listbox=1 via lParam to WM_CREATE
+  listViewWindowProc(hwnd, WM_CREATE, 0, 1);
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_MakeControl — dispatch based on classname
+// ---------------------------------------------------------------------------
+
+HWND SWELL_MakeControl(const char *cname, int idx, const char *classname,
+                       int style, int x, int y, int w, int h, int exstyle)
+{
+  if (!classname) return NULL;
+
+  RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  DWORD wstyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | (DWORD)style;
+
+  WNDPROC proc = NULL;
+  const char *klass = classname;
+  bool is_listbox = false;
+  bool no_focus = false;
+
+  if (!strcasecmp(classname, "SysListView32")) {
+    proc = listViewWindowProc;
+    klass = "SysListView32";
+  } else if (!strcasecmp(classname, "SysTreeView32")) {
+    proc = treeViewWindowProc;
+    klass = "SysTreeView32";
+  } else if (!strcasecmp(classname, "SysTabControl32")) {
+    proc = tabControlWindowProc;
+    klass = "SysTabControl32";
+    no_focus = true;
+  } else if (!strcasecmp(classname, "msctls_trackbar32")) {
+    proc = trackbarWindowProc;
+    klass = "msctls_trackbar32";
+  } else if (!strcasecmp(classname, "msctls_progress32")) {
+    proc = progressWindowProc;
+    klass = "msctls_progress32";
+    no_focus = true;
+  } else if (!strcasecmp(classname, "Button")) {
+    proc = buttonWindowProc;
+    klass = "Button";
+  } else if (!strcasecmp(classname, "Edit")) {
+    proc = editWindowProc;
+    klass = "Edit";
+  } else if (!strcasecmp(classname, "Static")) {
+    proc = labelWindowProc;
+    klass = "Static";
+    no_focus = true;
+  } else if (!strcasecmp(classname, "ComboBox")) {
+    proc = comboWindowProc;
+    klass = "ComboBox";
+  } else if (!strcasecmp(classname, "ListBox")) {
+    proc = listViewWindowProc;
+    klass = "ListBox";
+    is_listbox = true;
+  } else if (!strcasecmp(classname, "__SWELL_ICON")) {
+    proc = labelWindowProc;
+    klass = "Static";
+    no_focus = true;
+  }
+
+  if (!proc) {
+    int px = scx(x), py = scy(y), pw = scw(w), ph = sch(h);
+    extern HWND swell_invoke_control_creators(HWND parent, const char *cname, int idx,
+                                              const char *classname, int style,
+                                              int x, int y, int w, int h);
+    return swell_invoke_control_creators(g_dlg_parent, cname, idx, classname,
+                                         style, px, py, pw, ph);
+  }
+
+  HWND hwnd = new HWND__(g_dlg_parent, idx, &r, cname ? cname : "", true, proc);
+  hwnd->m_style     = wstyle;
+  hwnd->m_exstyle   = (DWORD)exstyle;
+  hwnd->m_classname = klass;
+
+  if (no_focus) hwnd->m_wantfocus = false;
+
+  proc(hwnd, WM_CREATE, 0, is_listbox ? 1 : 0);
+
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_GenerateDialogFromList
+// ---------------------------------------------------------------------------
+
+void SWELL_GenerateDialogFromList(const void *list, int listsz)
+{
+  if (!list || listsz <= 0 || !g_dlg_parent) return;
+
+  const SWELL_DlgResourceEntry *ents = (const SWELL_DlgResourceEntry *)list;
+
+  for (int i = 0; i < listsz; i++) {
+    const SWELL_DlgResourceEntry *e = &ents[i];
+    if (!e->str1) continue;
+
+    if (!strcmp(e->str1, "__SWELL_BUTTON")) {
+      SWELL_MakeButton(e->flag1, e->str2, e->p1,
+                       e->p2, e->p3, e->p4, e->p5, e->p6);
+    } else if (!strcmp(e->str1, "__SWELL_EDIT")) {
+      SWELL_MakeEditField(e->p1, e->p2, e->p3, e->p4, e->p5, e->p6);
+    } else if (!strcmp(e->str1, "__SWELL_LABEL")) {
+      SWELL_MakeLabel(e->flag1, e->str2, e->p1,
+                      e->p2, e->p3, e->p4, e->p5, e->p6);
+    } else if (!strcmp(e->str1, "__SWELL_COMBO")) {
+      SWELL_MakeCombo(e->p1, e->p2, e->p3, e->p4, e->p5, e->p6);
+    } else if (!strcmp(e->str1, "__SWELL_GROUP")) {
+      SWELL_MakeGroupBox(e->str2, e->p1, e->p2, e->p3, e->p4, e->p5, e->p6);
+    } else if (!strcmp(e->str1, "__SWELL_CHECKBOX")) {
+      SWELL_MakeCheckBox(e->str2, e->p1, e->p2, e->p3, e->p4, e->p5, e->p6);
+    } else if (!strcmp(e->str1, "__SWELL_LISTBOX")) {
+      SWELL_MakeListBox(e->p1, e->p2, e->p3, e->p4, e->p5, e->p6);
+    } else if (!strcmp(e->str1, "__SWELL_ICON")) {
+      // str2 is resource name, skip for now
+      (void)e;
+    } else {
+      // CONTROL entry: str1=cname, flag1=idx, str2=classname, p1=style, p2..p6=x,y,w,h,exstyle
+      SWELL_MakeControl(e->str1, e->flag1, e->str2,
+                        e->p1, e->p2, e->p3, e->p4, e->p5, e->p6);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_CreateDialog
+// ---------------------------------------------------------------------------
+
+HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
+                        const char *resid,
+                        HWND parent,
+                        DLGPROC dlgproc,
+                        LPARAM param)
+{
+  fprintf(stderr, "SWELL_CALL: SWELL_CreateDialog\n");
+
+  // resid==NULL + parent means bare WNDPROC (opaque child window)
+  bool bare_wndproc = (resid == NULL);
+
+  SWELL_DialogResourceIndex *res = NULL;
+  if (resid) {
+    // resid may be MAKEINTRESOURCE(n) = (const char*)n where n < 0x10000
+    bool resid_is_int = ((size_t)resid <= 0xFFFF);
+    for (SWELL_DialogResourceIndex *r = reshead; r; r = r->_next) {
+      bool match = (r->resid == resid);
+      if (!match && !resid_is_int && r->resid && (size_t)r->resid > 0xFFFF)
+        match = !strcmp(r->resid, resid);
+      if (match) { res = r; break; }
+    }
+    if (!res) {
+      if (resid_is_int)
+        fprintf(stderr, "SWELL_CreateDialog: resource #%d not found\n", (int)(size_t)resid);
+      else
+        fprintf(stderr, "SWELL_CreateDialog: resource '%s' not found\n", resid);
+      return NULL;
+    }
+  }
+
+  int wflags = res ? res->windowTypeFlags : 0;
+
+  DWORD style = WS_CLIPCHILDREN;
+  DWORD exstyle = 0;
+
+  if (parent || (wflags & SWELL_DLG_WS_CHILD)) {
+    style |= WS_CHILD | WS_VISIBLE;
+  } else {
+    style |= WS_CAPTION | WS_SYSMENU;
+    if (wflags & SWELL_DLG_WS_RESIZABLE) style |= WS_THICKFRAME;
+    if (wflags & SWELL_DLG_WS_DROPTARGET) exstyle |= WS_EX_ACCEPTFILES;
+  }
+
+  int dlg_w = res ? res->width  : 400;
+  int dlg_h = res ? res->height : 300;
+
+  // Center on screen if top-level
+  int dlg_x = 0, dlg_y = 0;
+  if (!parent) {
+    int sx = GetSystemMetrics(SM_CXSCREEN);
+    int sy = GetSystemMetrics(SM_CYSCREEN);
+    dlg_x = (sx - dlg_w) / 2;
+    dlg_y = (sy - dlg_h) / 2;
+    if (dlg_x < 10) dlg_x = 10;
+    if (dlg_y < 10) dlg_y = 10;
+  }
+
+  RECT r = { dlg_x, dlg_y, dlg_x + dlg_w, dlg_y + dlg_h };
+
+  WNDPROC wproc = bare_wndproc ? (WNDPROC)dlgproc : SwellDialogDefaultWindowProc;
+
+  HWND hwnd = new HWND__(parent, 0, &r,
+                         res ? (res->title ? res->title : "") : "",
+                         !parent,  // visible if top-level
+                         wproc);
+  hwnd->m_style   = style;
+  hwnd->m_exstyle = exstyle;
+
+  if (bare_wndproc) {
+    // fire WM_CREATE instead of WM_INITDIALOG
+    hwnd->m_wndproc(hwnd, WM_CREATE, 0, param);
+    return (hwnd->m_hashaddestroy >= 2) ? NULL : hwnd;
+  }
+
+  hwnd->m_dlgproc = dlgproc;
+
+  // Create controls
+  if (res && res->createFunc) {
+    HWND saved_parent = g_dlg_parent;
+    g_dlg_parent = hwnd;
+    res->createFunc(hwnd, wflags);
+    g_dlg_parent = saved_parent;
+  }
+
+  // Find first focusable child
+  HWND firstFocus = find_first_focusable(hwnd);
+
+  // Fire WM_INITDIALOG
+  INT_PTR initret = 0;
+  if (dlgproc) {
+    initret = dlgproc(hwnd, WM_INITDIALOG, (WPARAM)firstFocus, param);
+  }
+
+  if (hwnd->m_hashaddestroy >= 2) {
+    s_last_dlgret = -1;
+    return NULL;
+  }
+
+  if (initret && firstFocus) {
+    SetFocus(firstFocus);
+  }
+
+  // Manage OS window for top-level (non-child) dialogs
+  if (!parent && !(wflags & SWELL_DLG_WS_CHILD)) {
+    swell_oswindow_manage(hwnd, true);
+  }
+
+  return hwnd;
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_DialogBox  (modal)
+// ---------------------------------------------------------------------------
+
+int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
+                    const char *resid,
+                    HWND parent,
+                    DLGPROC dlgproc,
+                    LPARAM param)
+{
+  fprintf(stderr, "SWELL_CALL: SWELL_DialogBox\n");
+
+  HWND dlg = SWELL_CreateDialog(reshead, resid, parent, dlgproc, param);
+  if (!dlg) return s_last_dlgret;
+
+  // Push modal state
+  ModalDlgState ms;
+  ms.hwnd    = dlg;
+  ms.has_ret = false;
+  ms.ret     = -1;
+  ms.prev    = g_modal_stack;
+  g_modal_stack = &ms;
+
+  // Disable other top-level windows
+  WDL_PtrList<HWND__> disabled_list;
+  for (HWND w = g_swell_top_level_list; w; w = w->m_next) {
+    if (w != dlg && w->m_enabled && !w->m_parent) {
+      EnableWindow(w, FALSE);
+      disabled_list.Add(w);
+    }
+  }
+
+  // Ensure OS window exists and is shown
+  if (!dlg->m_oswindow) {
+    swell_oswindow_manage(dlg, true);
+  } else {
+    ShowWindow(dlg, SW_SHOW);
+  }
+
+  // Modal loop
+  while (!ms.has_ret && dlg->m_hashaddestroy < 2) {
+    SWELL_RunMessageLoop();
+    usleep(10000); // 10ms
+  }
+
+  // Re-enable disabled windows
+  for (int i = 0; i < disabled_list.GetSize(); i++) {
+    HWND w = disabled_list.Get(i);
+    if (w && w->m_hashaddestroy < 2) {
+      EnableWindow(w, TRUE);
+    }
+  }
+
+  int ret = ms.ret;
+  g_modal_stack = ms.prev;
+
+  return ret;
+}
+
+// ---------------------------------------------------------------------------
+// EndDialog
+// ---------------------------------------------------------------------------
+
+void EndDialog(HWND hwnd, int result)
+{
+  fprintf(stderr, "SWELL_CALL: EndDialog\n");
+  if (!hwnd) return;
+
+  bool found = false;
+  for (ModalDlgState *ms = g_modal_stack; ms; ms = ms->prev) {
+    if (ms->hwnd == hwnd) {
+      ms->has_ret = true;
+      ms->ret = result;
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) s_last_dlgret = result;
+
+  DestroyWindow(hwnd);
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_CloseWindow
+// ---------------------------------------------------------------------------
+
+void SWELL_CloseWindow(HWND hwnd)
+{
+  fprintf(stderr, "SWELL_CALL: SWELL_CloseWindow\n");
+  if (!hwnd) return;
+  SendMessage(hwnd, WM_CLOSE, 0, 0);
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_ModalWindowStart / Run / End
+// ---------------------------------------------------------------------------
+
+void *SWELL_ModalWindowStart(HWND hwnd)
+{
+  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowStart\n");
+  if (!hwnd) return NULL;
+
+  ModalDlgState *ms = new ModalDlgState();
+  ms->hwnd    = hwnd;
+  ms->has_ret = false;
+  ms->ret     = -1;
+  ms->prev    = g_modal_stack;
+  g_modal_stack = ms;
+
+  return (void *)ms;
+}
+
+bool SWELL_ModalWindowRun(void *ctx, int *ret)
+{
+  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowRun\n");
+  if (!ctx) return false;
+
+  ModalDlgState *ms = (ModalDlgState *)ctx;
+
+  if (ms->has_ret || ms->hwnd->m_hashaddestroy >= 2) {
+    if (ret) *ret = ms->ret;
+    return false;
+  }
+
+  SWELL_RunMessageLoop();
+  return true;
+}
+
+void SWELL_ModalWindowEnd(void *ctx)
+{
+  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowEnd\n");
+  if (!ctx) return;
+
+  ModalDlgState *ms = (ModalDlgState *)ctx;
+
+  if (g_modal_stack == ms) {
+    g_modal_stack = ms->prev;
+  } else {
+    for (ModalDlgState *cur = g_modal_stack; cur; cur = cur->prev) {
+      if (cur->prev == ms) { cur->prev = ms->prev; break; }
+    }
+  }
+
+  delete ms;
+}

@@ -459,4 +459,9 @@ extern int g_pmq_count;
 // swell-dlg.cpp spare window
 void swell_dlg_destroyspare();
 
+// swell-wnd.cpp: invoke registered custom control creators
+HWND swell_invoke_control_creators(HWND parent, const char *cname, int idx,
+                                   const char *classname, int style,
+                                   int x, int y, int w, int h);
+
 #endif // _SWELL_INTERNAL_H_

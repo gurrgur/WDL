@@ -17,6 +17,8 @@ set(SWELL2_SOURCES
   swell-ini.cpp
   swell-gdi.cpp
   swell-wnd.cpp
+  swell-dlg.cpp
+  swell-controls.cpp
   swell-stubs.cpp
   swell-appstub.cpp
 )

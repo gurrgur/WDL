@@ -1181,7 +1181,12 @@ void *SWELL_GetCtxGC(HDC ctx)
 void *SWELL_GetCtxFrameBuffer(HDC ctx)
 {
   fprintf(stderr, "SWELL_CALL: SWELL_GetCtxFrameBuffer\n");
-  (void)ctx;
+  if (!ctx || !HDC_VALID(ctx)) return nullptr;
+  HDC__ *ct = (HDC__*)ctx;
+  if (!ct->surface) return nullptr;
+  SkPixmap pm;
+  if (ct->surface->peekPixels(&pm))
+    return const_cast<void*>(pm.addr());
   return nullptr;
 }
 
