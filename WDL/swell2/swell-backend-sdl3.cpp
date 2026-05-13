@@ -260,32 +260,14 @@ void swell_oswindow_update_text(HWND hwnd)
 
 void swell_oswindow_invalidate(HWND hwnd, const RECT *r)
 {
+  // Invalidation is deferred — m_invalidated/m_child_invalidated flags
+  // are set by InvalidateRect before calling this. Actual paint happens
+  // in SWELL_RunMessageLoop (batched per iteration), via UpdateWindow
+  // (synchronous), or from SDL_EVENT_WINDOW_EXPOSED (OS-triggered).
+  // Guard against recursive paint cycles during WM_PAINT.
   if (!hwnd || !hwnd->m_oswindow) return;
-
-  // guard against recursive paint cycles
   if (hwnd->m_paintctx) return;
-
-  // Paint using backing store canvas, then update screen
-  sk_sp<SkSurface> bs = hwnd->m_backingstore;
-  if (bs) {
-    SkCanvas *canvas = bs->getCanvas();
-    if (canvas) {
-      if (r) {
-        SkRect clip = SkRect::MakeLTRB(
-            (float)r->left, (float)r->top,
-            (float)r->right, (float)r->bottom);
-        canvas->save();
-        canvas->clipRect(clip);
-      }
-
-      SWELL_internalSkiaPaint(hwnd, canvas, 0, 0, false);
-
-      if (r) {
-        canvas->restore();
-      }
-    }
-    swell_oswindow_updatetoscreen(hwnd, r);
-  }
+  (void)r;
 }
 
 // ---------------------------------------------------------------------------

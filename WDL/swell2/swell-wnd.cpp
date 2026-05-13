@@ -1367,8 +1367,13 @@ void UpdateWindow(HWND hwnd)
 
   HWND top = hwnd;
   while (top->m_parent) top = (HWND)top->m_parent;
-  if (top->m_backingstore)
-    swell_oswindow_invalidate(top, NULL);
+  if (!top->m_backingstore) return;
+
+  SkCanvas *canvas = top->m_backingstore->getCanvas();
+  if (canvas) {
+    SWELL_internalSkiaPaint(top, canvas, 0, 0, false);
+    swell_oswindow_updatetoscreen(top, NULL);
+  }
 }
 
 // ===========================================================================
@@ -1617,6 +1622,20 @@ BOOL GetFileTime(int filedes, FILETIME *lpCreationTime,
 void SWELL_RunMessageLoop()
 {
   SWELL_MessageQueue_Flush();
+
+  // Paint all dirty top-level windows (deferred from InvalidateRect calls)
+  HWND w = g_swell_top_level_list;
+  while (w) {
+    if ((w->m_invalidated || w->m_child_invalidated) && w->m_backingstore) {
+      SkCanvas *canvas = w->m_backingstore->getCanvas();
+      if (canvas) {
+        SWELL_internalSkiaPaint(w, canvas, 0, 0, false);
+        swell_oswindow_updatetoscreen(w, NULL);
+      }
+    }
+    w = w->m_next;
+  }
+
   SWELL_RunEvents();
   fireTimers();
 }

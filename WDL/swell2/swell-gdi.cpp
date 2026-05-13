@@ -1422,9 +1422,14 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
       SendMessage(hwnd, WM_NCPAINT, 0, 0);
     }
 
-    // Adjust surface_offs and clipr by NC inset
-    ctx_local.ctx.surface_offs.x = bmout_xpos + ncr.left;
-    ctx_local.ctx.surface_offs.y = bmout_ypos + ncr.top;
+    // Adjust surface_offs and clipr by NC inset.
+    // Also compute adjusted bmout origin for child recursion — matches
+    // original SWELL_internalLICEpaint which offsets bmout by NC area
+    // so children receive correct surface coordinates.
+    int adj_xpos = bmout_xpos + ncr.left;
+    int adj_ypos = bmout_ypos + ncr.top;
+    ctx_local.ctx.surface_offs.x = adj_xpos;
+    ctx_local.ctx.surface_offs.y = adj_ypos;
     ctx_local.clipr = ncr;
 
     ctx_local.ctx.curfont = hwnd->m_font;
@@ -1454,8 +1459,12 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
         canvas->translate((float)cr.left, (float)cr.top);
       }
 
+      // Pass adjusted bmout plus child position so child's surface_offs
+      // accounts for both NC area and child position within parent.
       SWELL_internalSkiaPaint(child, canvas,
-        bmout_xpos, bmout_ypos, forceref);
+        adj_xpos + child->m_position.left,
+        adj_ypos + child->m_position.top,
+        forceref);
 
       if (canvas) canvas->restoreToCount(saveCount);
     }
