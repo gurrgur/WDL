@@ -550,41 +550,44 @@ static void fireTimers()
 // DestroyWindow
 // ===========================================================================
 
-void DestroyWindow(HWND hwnd)
+// Physical cleanup of an HWND and all descendants — no hasaddestroy guard.
+// Called from DestroyWindow(root) after WM_DESTROY cascade.
+static void RecurseDestroyWindow(HWND hwnd)
 {
   if (!hwnd) return;
-  if (hwnd->m_hashaddestroy) return;
 
-  // SendMessage now handles WM_DESTROY cascade (sets m_hashaddestroy, kills
-  // children, owned windows, timers, clears wndproc).
-  SendMessage(hwnd, WM_DESTROY, 0, 0);
-
-  // RecurseDestroyWindow: physical cleanup (OS window, backing store, menu,
-  // removal from parent/top-level lists, message queue, Release).
-  // destroy OS window
   if (hwnd->m_oswindow) {
     swell_oswindow_destroy(hwnd);
   }
 
-  // destroy children again (RecurseDestroyWindow — second safety pass)
-  for (int i = hwnd->m_children.GetSize() - 1; i >= 0; i--) {
-    HWND ch = hwnd->m_children.Get(i);
-    if (ch) {
-      hwnd->m_children.Delete(i, false);
-      DestroyWindow(ch);
+  // recurse into children first (like reference: nullify list, iterate saved)
+  {
+    WDL_PtrList<HWND__> tmpChildren;
+    for (int i = hwnd->m_children.GetSize() - 1; i >= 0; i--) {
+      HWND ch = hwnd->m_children.Get(i);
+      if (ch) {
+        hwnd->m_children.Delete(i, false);
+        tmpChildren.Add(ch);
+      }
     }
+    for (int i = 0; i < tmpChildren.GetSize(); i++)
+      RecurseDestroyWindow(tmpChildren.Get(i));
   }
 
-  // destroy owned
-  for (int i = hwnd->m_owned.GetSize() - 1; i >= 0; i--) {
-    HWND ow = hwnd->m_owned.Get(i);
-    if (ow) {
-      hwnd->m_owned.Delete(i, false);
-      DestroyWindow(ow);
+  // owned windows: nullify list, then recurse
+  {
+    WDL_PtrList<HWND__> tmpOwned;
+    for (int i = hwnd->m_owned.GetSize() - 1; i >= 0; i--) {
+      HWND ow = hwnd->m_owned.Get(i);
+      if (ow) {
+        hwnd->m_owned.Delete(i, false);
+        tmpOwned.Add(ow);
+      }
     }
+    for (int i = 0; i < tmpOwned.GetSize(); i++)
+      RecurseDestroyWindow(tmpOwned.Get(i));
   }
 
-  // destroy menu
   if (hwnd->m_menu) {
     DestroyMenu(hwnd->m_menu);
     hwnd->m_menu = NULL;
@@ -607,12 +610,20 @@ void DestroyWindow(HWND hwnd)
     else g_swell_top_level_list_end = hwnd->m_prev;
   }
 
-  // clear message queue and timers (safety — also done in SendMessage WM_DESTROY)
   SWELL_MessageQueue_Clear(hwnd);
   KillTimer(hwnd, (UINT_PTR)-1);
 
-  // Release (decrements refcnt, calls delete when 0)
   hwnd->Release();
+}
+
+void DestroyWindow(HWND hwnd)
+{
+  if (!hwnd) return;
+  if (hwnd->m_hashaddestroy) return;
+
+  SendMessage(hwnd, WM_DESTROY, 0, 0);
+
+  RecurseDestroyWindow(hwnd);
 }
 
 // ===========================================================================
