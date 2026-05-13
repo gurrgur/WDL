@@ -251,7 +251,13 @@ HDC GetDC(HWND hwnd)
   }
 
   // hwnd's NC area was already handled in the pre-block above.
-  // Walk parent chain only — skip hwnd to avoid double-counting NCCALCSIZE.
+  // Add hwnd's own position within its parent before walking up the
+  // ancestor chain (matching SWELL_internalGetWindowDC which includes
+  // the starting window's m_position on every iteration).
+  xoffs += hwnd->m_position.left;
+  yoffs += hwnd->m_position.top;
+
+  // Walk parent chain — skip hwnd to avoid double-counting NCCALCSIZE.
   HWND h = (HWND)hwnd->m_parent;
   int ltrim = 0, ttrim = 0, rtrim = 0, btrim = 0;
 
@@ -1462,7 +1468,7 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     SendMessage(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr);
 
     if (forceref) {
-      SendMessage(hwnd, WM_NCPAINT, 0, 0);
+      SendMessage(hwnd, WM_NCPAINT, 1, 0);
     }
 
     // clipr is the client-area rect (NCCALCSIZE result), which tells
@@ -1479,6 +1485,10 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
       SendMessage(hwnd, WM_PAINT, (WPARAM)&ctx_local, 0);
     }
 
+    // Restore paintctx before child recursion so re-entrancy is
+    // detectable (matching SWELL_internalLICEpaint which restores
+    // oldpaintctx after WM_PAINT).  m_invalidated is cleared now
+    // so the window won't be repainted unnecessarily.
     hwnd->m_paintctx = nullptr;
     hwnd->m_invalidated = false;
 

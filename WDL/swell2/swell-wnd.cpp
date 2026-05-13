@@ -1335,11 +1335,20 @@ void UpdateWindow(HWND hwnd)
   while (top->m_parent) top = (HWND)top->m_parent;
   if (!top->m_backingstore) return;
 
+  // guard against re-entrant paint cycles when UpdateWindow is called
+  // from within a WM_PAINT handler (matching swell-experimental's
+  // s_sdl_paint_depth guard in swell_sdl_paint).
+  static int s_updatewindow_depth = 0;
+  if (s_updatewindow_depth > 0) return;
+  s_updatewindow_depth++;
+
   SkCanvas *canvas = top->m_backingstore->getCanvas();
   if (canvas) {
     SWELL_internalSkiaPaint(top, canvas, 0, 0, false);
     swell_oswindow_updatetoscreen(top, NULL);
   }
+
+  s_updatewindow_depth--;
 }
 
 // ===========================================================================
