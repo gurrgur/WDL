@@ -81,7 +81,20 @@ static void remove_entry(SDL_WindowEntry *e)
 
 void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 {
-  if (!hwnd || hwnd->m_oswindow) return;
+  if (!hwnd) return;
+
+  // Destroy or create OS window as visibility requires.
+  // Child windows don't get their own OS window.
+  const bool haveOS = hwnd->m_oswindow != NULL;
+  const bool wantOS = !hwnd->m_parent && hwnd->m_visible;
+
+  if (!wantOS && haveOS)
+  {
+    swell_oswindow_destroy(hwnd);
+    return;
+  }
+
+  if (!wantOS || haveOS) return;
 
   RECT r = hwnd->m_position;
   int w = r.right - r.left;
@@ -109,8 +122,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 
   SDL_SetWindowPosition(sdlwin, r.left, r.top);
 
-  if (wantFocus)
-    SDL_ShowWindow(sdlwin);
+  SDL_ShowWindow(sdlwin);
 
   SDL_Renderer *rend = SDL_CreateRenderer(sdlwin, NULL);
   if (!rend) {
@@ -121,6 +133,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 
   add_entry(sdlwin, hwnd, rend);
   hwnd->m_oswindow = sdlwin;
+
+  SDL_StartTextInput(sdlwin);
 
   // create backing Skia surface (pixel dimensions for HiDPI)
   int pw = 0, ph = 0;
@@ -202,12 +216,16 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
 
 void swell_oswindow_focus(HWND hwnd)
 {
-  if (!hwnd) return;
+  if (!hwnd) {
+    g_swell_focused_oswindow_hwnd = NULL;
+    return;
+  }
 
   HWND top = hwnd;
   while (top->m_parent) top = (HWND)top->m_parent;
 
   if (top->m_oswindow) {
+    g_swell_focused_oswindow_hwnd = top;
     SDL_RaiseWindow((SDL_Window*)top->m_oswindow);
   }
 }
@@ -228,15 +246,15 @@ void swell_oswindow_update_style(HWND hwnd, DWORD oldstyle)
 
   if (oldResize != newResize || oldCaption != newCaption) {
     // SDL3 doesn't support changing window flags after creation,
-    // so destroy and recreate
+    // so destroy and recreate. Destroy renderer first (tied to window).
     SDL_WindowEntry *e = find_entry_by_hwnd(hwnd);
     if (!e) return;
     SDL_Window *oldwin = e->window;
     bool wasVisible = SDL_GetWindowFlags(oldwin) & SDL_WINDOW_HIDDEN ? false : true;
-    SDL_DestroyWindow(oldwin);
-    remove_entry(e);
     hwnd->m_oswindow = NULL;
     hwnd->m_backingstore.reset();
+    remove_entry(e);
+    SDL_DestroyWindow(oldwin);
 
     // recreate with new flags
     swell_oswindow_manage(hwnd, wasVisible);
@@ -381,8 +399,8 @@ void swell_oswindow_maximize(HWND hwnd)
 
 static int sdl_key_to_vk(SDL_Keycode key)
 {
-  if (key >= 'A' && key <= 'Z') return key;
-  if (key >= '0' && key <= '9') return key;
+  if (key >= SDLK_A && key <= SDLK_Z) return 'A' + (key - SDLK_A);
+  if (key >= SDLK_0 && key <= SDLK_9) return '0' + (key - SDLK_0);
 
   switch (key) {
     case SDLK_RETURN:     return VK_RETURN;
@@ -558,6 +576,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_WINDOW_FOCUS_LOST: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
+        if (g_swell_focused_oswindow_hwnd == e->hwnd)
+          g_swell_focused_oswindow_hwnd = NULL;
         HWND foc = GetFocus();
         if (foc) SendMessage(foc, WM_KILLFOCUS, 0, 0);
         SendMessage(e->hwnd, WM_ACTIVATE, WA_INACTIVE, 0);
@@ -598,7 +618,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       int vk = sdl_key_to_vk(k);
       if (!vk && k < 0x80) vk = k;
 
-      if (vk && !(k & SDLK_EXTENDED_MASK)) {
+      if (vk) {
         HWND foc = GetFocus();
         if (foc) SendMessage(foc, WM_KEYUP, vk, lp);
       }
@@ -616,13 +636,14 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       bool down = evt->button.down;
 
       SDL_WindowEntry *e = find_entry_by_windowID(evt->button.windowID);
-      HWND target = NULL;
-      if (e && e->hwnd) {
+
+      // If a control has mouse capture, route to that control
+      HWND cap = GetCapture();
+      HWND target = cap;
+      if (!target && e && e->hwnd) {
         target = e->hwnd;
-        // hit-test for child
         HWND child = hittest_child(e->hwnd, mx, my);
         if (child) {
-          // convert to child coords
           mx -= child->m_position.left;
           my -= child->m_position.top;
           target = child;
@@ -638,9 +659,17 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           msg = WM_LBUTTONUP;
         }
       } else if (btn == SDL_BUTTON_RIGHT) {
-        msg = down ? WM_RBUTTONDOWN : WM_RBUTTONUP;
+        if (down) {
+          msg = (clicks >= 2) ? WM_RBUTTONDBLCLK : WM_RBUTTONDOWN;
+        } else {
+          msg = WM_RBUTTONUP;
+        }
       } else if (btn == SDL_BUTTON_MIDDLE) {
-        msg = down ? WM_MBUTTONDOWN : WM_MBUTTONUP;
+        if (down) {
+          msg = (clicks >= 2) ? WM_MBUTTONDBLCLK : WM_MBUTTONDOWN;
+        } else {
+          msg = WM_MBUTTONUP;
+        }
       }
 
       if (msg) {
@@ -653,15 +682,18 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       float mx = evt->motion.x;
       float my = evt->motion.y;
 
-      SDL_WindowEntry *e = find_entry_by_windowID(evt->motion.windowID);
-      HWND target = NULL;
-      if (e && e->hwnd) {
-        target = e->hwnd;
-        HWND child = hittest_child(e->hwnd, mx, my);
-        if (child) {
-          mx -= child->m_position.left;
-          my -= child->m_position.top;
-          target = child;
+      HWND cap = GetCapture();
+      HWND target = cap;
+      if (!target) {
+        SDL_WindowEntry *e = find_entry_by_windowID(evt->motion.windowID);
+        if (e && e->hwnd) {
+          target = e->hwnd;
+          HWND child = hittest_child(e->hwnd, mx, my);
+          if (child) {
+            mx -= child->m_position.left;
+            my -= child->m_position.top;
+            target = child;
+          }
         }
       }
       if (target) {
@@ -724,7 +756,7 @@ void SWELL_initargs(int *argc, char ***argv)
   (void)argc;
   (void)argv;
   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
-  if (!SDL_Init(SDL_INIT_VIDEO)) {
+  if (!SDL_WasInit(SDL_INIT_VIDEO) && !SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "SWELL SDL3: SDL_Init failed: %s\n", SDL_GetError());
   }
 }
