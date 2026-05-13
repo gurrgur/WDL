@@ -1377,14 +1377,37 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
 
   hwnd->m_invalidated = true;
 
-  // walk up ancestor chain marking child_invalidated
-  HWND w = (HWND)hwnd->m_parent;
-  while (w) {
-    w->m_child_invalidated = true;
-    w = (HWND)w->m_parent;
+  // WS_CLIPSIBLINGS: invalidate later siblings that intersect us
+  {
+    HWND t = (HWND)hwnd->m_parent;
+    if (t && (t->m_style & WS_CLIPSIBLINGS)) {
+      HWND nw = hwnd->m_next;
+      while (nw) {
+        RECT tmp;
+        if (nw->m_visible && !nw->m_invalidated &&
+            WinIntersectRect(&tmp, &hwnd->m_position, &nw->m_position))
+          nw->m_invalidated = true;
+        nw = nw->m_next;
+      }
+    }
   }
 
-  swell_oswindow_invalidate(top, (hwnd != top || r) ? &rect : NULL);
+  // walk up ancestor chain marking child_invalidated
+  // if eraseBk > 0, also invalidate parent backgrounds up to eraseBk levels
+  {
+    HWND w = (HWND)hwnd->m_parent;
+    while (w) {
+      if (eraseBk) {
+        w->m_invalidated = true;
+        eraseBk--;
+      }
+      w->m_child_invalidated = true;
+      w = (HWND)w->m_parent;
+    }
+  }
+
+  // h is the OS window found by the ancestor walk loop
+  swell_oswindow_invalidate(h, (hwnd != h || r) ? &rect : NULL);
   return TRUE;
 }
 
