@@ -948,9 +948,11 @@ LONG_PTR GetWindowLong(HWND hwnd, int idx)
     case DWL_DLGPROC:     return (LONG_PTR)hwnd->m_dlgproc;
     case GWL_STYLE:       return hwnd->m_style;
     case GWL_EXSTYLE:     return hwnd->m_exstyle;
-    case GWL_HWNDPARENT:  return (LONG_PTR)(hwnd->m_parent);
+    case GWL_HWNDPARENT:  return (LONG_PTR)(hwnd->m_owner);
     default:
-      if (idx >= 0 && idx < 64) return hwnd->m_extra[idx];
+      // Win32 nIndex is a byte offset into extra window memory
+      if (idx >= 0 && idx < 64 * (int)sizeof(INT_PTR))
+        return (LONG_PTR)hwnd->m_extra[idx / (int)sizeof(INT_PTR)];
       return 0;
   }
 }
@@ -992,10 +994,20 @@ LONG_PTR SetWindowLong(HWND hwnd, int idx, LONG_PTR val)
       SendMessage(hwnd, WM_STYLECHANGED, GWL_EXSTYLE,
                   (LPARAM)(new STYLESTRUCT{(DWORD)old, (DWORD)val}));
       return (LONG_PTR)old;
+    case GWL_HWNDPARENT:
+      old = (LONG_PTR)hwnd->m_owner;
+      if (val != old) {
+        if (hwnd->m_owner && hwnd->m_owner->m_owned.Find(hwnd) >= 0)
+          hwnd->m_owner->m_owned.Delete(hwnd->m_owner->m_owned.Find(hwnd), false);
+        hwnd->m_owner = (HWND__*)val;
+        if (hwnd->m_owner)
+          hwnd->m_owner->m_owned.Add(hwnd);
+      }
+      return old;
     default:
-      if (idx >= 0 && idx < 64) {
-        old = hwnd->m_extra[idx];
-        hwnd->m_extra[idx] = (INT_PTR)val;
+      if (idx >= 0 && idx < 64 * (int)sizeof(INT_PTR)) {
+        old = (LONG_PTR)hwnd->m_extra[idx / (int)sizeof(INT_PTR)];
+        hwnd->m_extra[idx / (int)sizeof(INT_PTR)] = (INT_PTR)val;
         return old;
       }
       return 0;
