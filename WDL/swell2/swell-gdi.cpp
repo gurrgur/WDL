@@ -158,12 +158,6 @@ void swell_DirtyContext(HDC__ *ctx, int l, int t, int r, int b)
   }
 }
 
-// Convert SkColor back to native RGB
-static inline int SkColorToNativeRGB(int sk)
-{
-  return RGB(SkColorGetR(sk), SkColorGetG(sk), SkColorGetB(sk));
-}
-
 // Check brush validity for fill ops
 static inline bool brush_valid(HDC__ *c)
 {
@@ -981,7 +975,8 @@ int GetTextColor(HDC ctx)
 {
   fprintf(stderr, "SWELL_CALL: GetTextColor\n");
   if (!HDC_VALID(ctx)) return 0;
-  return SkColorToNativeRGB(ctx->cur_text_color_int);
+  int sk = ctx->cur_text_color_int;
+  return RGB(SkColorGetR(sk), SkColorGetG(sk), SkColorGetB(sk));
 }
 
 void SetBkColor(HDC ctx, int col)
@@ -1153,16 +1148,16 @@ int GetSysColor(int idx)
 {
   fprintf(stderr, "SWELL_CALL: GetSysColor\n");
   switch (idx) {
-    case COLOR_3DFACE:       return SkColorToNativeRGB(g_swell_ctheme._3dface);
-    case COLOR_3DSHADOW:     return SkColorToNativeRGB(g_swell_ctheme._3dshadow);
-    case COLOR_3DHILIGHT:    return SkColorToNativeRGB(g_swell_ctheme._3dhilight);
-    case COLOR_3DDKSHADOW:   return SkColorToNativeRGB(g_swell_ctheme._3ddkshadow);
-    case COLOR_BTNFACE:      return SkColorToNativeRGB(g_swell_ctheme._3dface);
-    case COLOR_BTNTEXT:      return SkColorToNativeRGB(g_swell_ctheme.button_text);
-    case COLOR_WINDOW:       return SkColorToNativeRGB(g_swell_ctheme.edit_bg);
-    case COLOR_SCROLLBAR:    return SkColorToNativeRGB(g_swell_ctheme.scrollbar);
-    case COLOR_INFOBK:       return SkColorToNativeRGB(g_swell_ctheme.info_bg);
-    case COLOR_INFOTEXT:     return SkColorToNativeRGB(g_swell_ctheme.info_text);
+    case COLOR_3DFACE:       return g_swell_ctheme._3dface;
+    case COLOR_3DSHADOW:     return g_swell_ctheme._3dshadow;
+    case COLOR_3DHILIGHT:    return g_swell_ctheme._3dhilight;
+    case COLOR_3DDKSHADOW:   return g_swell_ctheme._3ddkshadow;
+    case COLOR_BTNFACE:      return g_swell_ctheme._3dface;
+    case COLOR_BTNTEXT:      return g_swell_ctheme.button_text;
+    case COLOR_WINDOW:       return g_swell_ctheme.edit_bg;
+    case COLOR_SCROLLBAR:    return g_swell_ctheme.scrollbar;
+    case COLOR_INFOBK:       return g_swell_ctheme.info_bg;
+    case COLOR_INFOTEXT:     return g_swell_ctheme.info_text;
     default:                 return 0;
   }
 }
@@ -1308,7 +1303,7 @@ void SWELL_FillDialogBackground(HDC hdc, const RECT *r, int level)
 
   SkPaint paint;
   paint.setStyle(SkPaint::kFill_Style);
-  paint.setColor(g_swell_ctheme._3dface);
+  paint.setColor(SWELL_TO_SKCOLOR(g_swell_ctheme._3dface, 255));
 
   hdc->canvas->drawRect(
     SkRect::MakeLTRB((float)r->left, (float)r->top,
@@ -1322,90 +1317,90 @@ void SWELL_FillDialogBackground(HDC hdc, const RECT *r, int level)
 swell_colortheme::swell_colortheme()
 {
   // 3D / chrome colors
-  _3dface       = 0xFFD4D0C8;
-  _3dshadow     = 0xFF808080;
-  _3dhilight    = 0xFFFFFFFF;
-  _3ddkshadow   = 0xFF404040;
+  _3dface       = RGB(212,208,200);
+  _3dshadow     = RGB(128,128,128);
+  _3dhilight    = RGB(255,255,255);
+  _3ddkshadow   = RGB(64,64,64);
 
   // Button
-  button_bg              = 0xFFD4D0C8;
-  button_text            = 0xFF000000;
-  button_text_disabled   = 0xFF808080;
-  button_shadow          = 0xFF808080;
-  button_hilight         = 0xFFFFFFFF;
+  button_bg              = RGB(212,208,200);
+  button_text            = RGB(0,0,0);
+  button_text_disabled   = RGB(128,128,128);
+  button_shadow          = RGB(128,128,128);
+  button_hilight         = RGB(255,255,255);
 
   // Checkbox
-  checkbox_bg            = 0xFFD4D0C8;
-  checkbox_text          = 0xFF000000;
-  checkbox_text_disabled = 0xFF808080;
+  checkbox_bg            = RGB(212,208,200);
+  checkbox_text          = RGB(0,0,0);
+  checkbox_text_disabled = RGB(128,128,128);
 
   // Scrollbar
-  scrollbar    = 0xFFD4D0C8;
-  scrollbar_fg = 0xFF808080;
-  scrollbar_bg = 0xFFD4D0C8;
+  scrollbar    = RGB(212,208,200);
+  scrollbar_fg = RGB(128,128,128);
+  scrollbar_bg = RGB(212,208,200);
 
   // Edit
-  edit_bg      = 0xFFFFFFFF;
-  edit_text    = 0xFF000000;
-  edit_text_sel = 0xFFFFFFFF;
-  edit_bg_sel  = 0xFF000080;
-  edit_cursor  = 0xFF000000;
+  edit_bg      = RGB(255,255,255);
+  edit_text    = RGB(0,0,0);
+  edit_text_sel = RGB(255,255,255);
+  edit_bg_sel  = RGB(0,0,128);
+  edit_cursor  = RGB(0,0,0);
 
   // Info tip
-  info_bg   = 0xFFFFFFE1;
-  info_text = 0xFF000000;
+  info_bg   = RGB(255,255,225);
+  info_text = RGB(0,0,0);
 
   // Menu
-  menu_bg          = 0xFFD4D0C8;
-  menu_text        = 0xFF000000;
-  menu_hilight_bg  = 0xFF000080;
-  menu_hilight_text = 0xFFFFFFFF;
+  menu_bg          = RGB(212,208,200);
+  menu_text        = RGB(0,0,0);
+  menu_hilight_bg  = RGB(0,0,128);
+  menu_hilight_text = RGB(255,255,255);
 
   // Menubar
-  menubar_bg          = 0xFFD4D0C8;
-  menubar_text        = 0xFF000000;
-  menubar_hilight_bg  = 0xFF000080;
-  menubar_hilight_text = 0xFFFFFFFF;
+  menubar_bg          = RGB(212,208,200);
+  menubar_text        = RGB(0,0,0);
+  menubar_hilight_bg  = RGB(0,0,128);
+  menubar_hilight_text = RGB(255,255,255);
   menubar_height      = 20;
 
   // Trackbar
-  trackbar_bg    = 0xFFD4D0C8;
-  trackbar_fg    = 0xFF808080;
-  trackbar_thumb = 0xFFD4D0C8;
+  trackbar_bg    = RGB(212,208,200);
+  trackbar_fg    = RGB(128,128,128);
+  trackbar_thumb = RGB(212,208,200);
 
   // Progress
-  progress = 0xFF000080;
+  progress = RGB(0,0,128);
 
   // Label
-  label_text = 0xFF000000;
+  label_text = RGB(0,0,0);
 
   // Combo
-  combo_bg   = 0xFFFFFFFF;
-  combo_text = 0xFF000000;
+  combo_bg   = RGB(255,255,255);
+  combo_text = RGB(0,0,0);
 
   // ListView
-  listview_bg          = 0xFFFFFFFF;
-  listview_text        = 0xFF000000;
-  listview_header_bg   = 0xFFD4D0C8;
-  listview_header_text = 0xFF000000;
+  listview_bg          = RGB(255,255,255);
+  listview_text        = RGB(0,0,0);
+  listview_header_bg   = RGB(212,208,200);
+  listview_header_text = RGB(0,0,0);
 
   // TreeView
-  treeview_bg   = 0xFFFFFFFF;
-  treeview_text = 0xFF000000;
+  treeview_bg   = RGB(255,255,255);
+  treeview_text = RGB(0,0,0);
 
   // Tab
-  tab_bg       = 0xFFD4D0C8;
-  tab_text     = 0xFF000000;
-  tab_sel_bg   = 0xFFFFFFFF;
-  tab_sel_text = 0xFF000000;
+  tab_bg       = RGB(212,208,200);
+  tab_text     = RGB(0,0,0);
+  tab_sel_bg   = RGB(255,255,255);
+  tab_sel_text = RGB(0,0,0);
 
   // Focus rect
-  focusrect     = 0xFF000000;
-  focus_hilight = 0xFFC0C0C0;
+  focusrect     = RGB(0,0,0);
+  focus_hilight = RGB(192,192,192);
 
   // Group box
-  group_bg   = 0xFFD4D0C8;
-  group_text = 0xFF000000;
+  group_bg   = RGB(212,208,200);
+  group_text = RGB(0,0,0);
 
   // Font
   default_font_size = 12;
