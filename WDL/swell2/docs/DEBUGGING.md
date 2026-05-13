@@ -16,18 +16,17 @@ cmake --build build-debug
 ps aux | grep "REAPER/reaper" | grep -v grep | awk '{print $2}' | xargs -r kill -9
 
 # Quick smoke test — capture exit code OUTSIDE the pipe
-bwrap \
-  --ro-bind / / \
-  --bind "$PWD/build-debug/libSwell.so" /usr/lib/REAPER/libSwell.so \
-  --bind "$HOME/.config/REAPER" "$HOME/.config/REAPER" \
-  --bind "$HOME/.cache" "$HOME/.cache" \
-  --tmpfs /tmp \
-  --bind /tmp/.X11-unix /tmp/.X11-unix \
-  --dev /dev \
-  --proc /proc \
-  --setenv DISPLAY ":0" \
-  --setenv SDL_VIDEO_DRIVER x11 \
-  --setenv GDK_BACKEND x11 \
+bwrap --bind / / \
+    --dev /dev \
+    --ro-bind /usr /usr \
+    --ro-bind /lib /lib \
+    --ro-bind /lib64 /lib64 \
+    --proc /proc \
+    --tmpfs /tmp \
+    --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
+    --bind "$XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR" \
+    --bind "$PWD/build-debug/libSwell.so" /usr/lib/REAPER/libSwell.so \
+    reaper
   -- \
   timeout --kill-after=2 5 /usr/lib/REAPER/reaper > /tmp/reaper_test.log 2>&1
 echo "EXIT: $?"
