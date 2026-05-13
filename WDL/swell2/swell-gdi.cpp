@@ -250,13 +250,13 @@ HDC GetDC(HWND hwnd)
     yoffs += p.rgrc[0].top - r.top;
   }
 
-  HWND h = hwnd;
+  // hwnd's NC area was already handled in the pre-block above.
+  // Walk parent chain only — skip hwnd to avoid double-counting NCCALCSIZE.
+  HWND h = (HWND)hwnd->m_parent;
   int ltrim = 0, ttrim = 0, rtrim = 0, btrim = 0;
 
-  for (;;)
+  while (h && !h->m_backingstore && !h->m_oswindow)
   {
-    if (h->m_backingstore || h->m_oswindow || !h->m_parent) break;
-
     xoffs += h->m_position.left;
     yoffs += h->m_position.top;
 
@@ -268,20 +268,27 @@ HDC GetDC(HWND hwnd)
 
     ltrim = (ltrim > -xoffs) ? ltrim : -xoffs;
     ttrim = (ttrim > -yoffs) ? ttrim : -yoffs;
-    rtrim = (rtrim > (xoffs + wndw - (h->m_position.right - h->m_position.left))) ?
-            rtrim : (xoffs + wndw - (h->m_position.right - h->m_position.left));
-    btrim = (btrim > (yoffs + wndh - (h->m_position.bottom - h->m_position.top))) ?
-            btrim : (yoffs + wndh - (h->m_position.bottom - h->m_position.top));
+    rtrim = (rtrim > (xoffs + wndw - h->m_position.right)) ?
+            rtrim : (xoffs + wndw - h->m_position.right);
+    btrim = (btrim > (yoffs + wndh - h->m_position.bottom)) ?
+            btrim : (yoffs + wndh - h->m_position.bottom);
 
     h = (HWND)h->m_parent;
   }
 
+  // Find the backing store owner (h may be NULL if no match found)
+  HWND bsowner = h;
+  if (!bsowner) {
+    bsowner = hwnd;
+    while (bsowner->m_parent) bsowner = (HWND)bsowner->m_parent;
+  }
+
   // Also apply NCCALCSIZE to the backing store owner if different from starting window
-  if (h != hwnd && h->m_wndproc)
+  if (bsowner != hwnd && bsowner->m_wndproc)
   {
-    RECT r = h->m_position;
+    RECT r = bsowner->m_position;
     NCCALCSIZE_PARAMS p = {{{ 0, 0, r.right - r.left, r.bottom - r.top }}};
-    h->m_wndproc(h, WM_NCCALCSIZE, FALSE, (LPARAM)&p);
+    bsowner->m_wndproc(bsowner, WM_NCCALCSIZE, FALSE, (LPARAM)&p);
     yoffs += p.rgrc[0].top;
     xoffs += p.rgrc[0].left;
   }
@@ -289,10 +296,10 @@ HDC GetDC(HWND hwnd)
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
   if (!ctx) return nullptr;
 
-  if (h && h->m_backingstore)
+  if (bsowner && bsowner->m_backingstore)
   {
-    ctx->surface = h->m_backingstore;
-    ctx->canvas = h->m_backingstore->getCanvas();
+    ctx->surface = bsowner->m_backingstore;
+    ctx->canvas = bsowner->m_backingstore->getCanvas();
   }
   else
   {
@@ -367,10 +374,10 @@ HDC GetWindowDC(HWND hwnd)
 
     ltrim = (ltrim > -xoffs) ? ltrim : -xoffs;
     ttrim = (ttrim > -yoffs) ? ttrim : -yoffs;
-    rtrim = (rtrim > (xoffs + wndw - (h->m_position.right - h->m_position.left))) ?
-            rtrim : (xoffs + wndw - (h->m_position.right - h->m_position.left));
-    btrim = (btrim > (yoffs + wndh - (h->m_position.bottom - h->m_position.top))) ?
-            btrim : (yoffs + wndh - (h->m_position.bottom - h->m_position.top));
+    rtrim = (rtrim > (xoffs + wndw - h->m_position.right)) ?
+            rtrim : (xoffs + wndw - h->m_position.right);
+    btrim = (btrim > (yoffs + wndh - h->m_position.bottom)) ?
+            btrim : (yoffs + wndh - h->m_position.bottom);
 
     h = (HWND)h->m_parent;
   }
