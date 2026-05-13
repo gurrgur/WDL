@@ -198,9 +198,18 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       PAINTSTRUCT ps;
       HDC hdc = BeginPaint(hwnd, &ps);
       if (hdc) {
-        // fill dialog background
         RECT r = ps.rcPaint;
-        SWELL_FillDialogBackground(hdc, &r, 0);
+
+        // Query dlgproc for custom background brush (matching original)
+        HBRUSH hbrush = NULL;
+        if (dlgproc)
+          hbrush = (HBRUSH)dlgproc(hwnd, WM_CTLCOLORDLG, (WPARAM)hdc, (LPARAM)hwnd);
+
+        if (hbrush && hbrush != (HBRUSH)1) {
+          FillRect(hdc, &r, hbrush);
+        } else {
+          SWELL_FillDialogBackground(hdc, &r, 0);
+        }
         EndPaint(hwnd, &ps);
       }
       break;
