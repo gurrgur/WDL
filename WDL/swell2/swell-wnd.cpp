@@ -347,6 +347,8 @@ void SWELL_Internal_PMQ_ClearAllMessages(HWND hwnd)
 
 BOOL PostMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+  if (!hwnd || hwnd->m_hashaddestroy) return FALSE;
+
   WDL_MutexLock lock(&g_pmq_mutex);
 
   if (g_pmq_count >= MAX_PMQ_SIZE) {
@@ -432,7 +434,10 @@ void SWELL_MessageQueue_Clear(HWND h)
 
 UINT_PTR SetTimer(HWND hwnd, UINT_PTR timerid, UINT rate, TIMERPROC tProc)
 {
-  if (rate < 1) rate = 1;
+  if (!hwnd && !tProc) return 0;
+  if (hwnd && !timerid) return 0;
+  if (!hwnd || !rate) return 0;
+  if (hwnd && hwnd->m_hashaddestroy) return 0;
 
   WDL_MutexLock lock(&g_timer_mutex);
 
@@ -464,6 +469,8 @@ UINT_PTR SetTimer(HWND hwnd, UINT_PTR timerid, UINT rate, TIMERPROC tProc)
 
 BOOL KillTimer(HWND hwnd, UINT_PTR timerid)
 {
+  if (timerid == (UINT_PTR)-1 && !hwnd) return FALSE;
+
   WDL_MutexLock lock(&g_timer_mutex);
 
   TimerInfoRec *prev = NULL;
@@ -623,6 +630,9 @@ void ShowWindow(HWND hwnd, int cmd)
       hwnd->m_visible = false;
       break;
     case SW_SHOW:
+      hwnd->m_visible = true;
+      SetForegroundWindow(hwnd);
+      break;
     case SW_SHOWNA:
     case SW_SHOWMINIMIZED:
     case SW_SHOWMAXIMIZED:
@@ -632,13 +642,16 @@ void ShowWindow(HWND hwnd, int cmd)
   }
 
   if (cmd == SW_HIDE && wasVisible) {
-    // invalidate parent to trigger repaint of area where child was
     if (hwnd->m_parent)
       InvalidateRect((HWND)hwnd->m_parent, &hwnd->m_position, FALSE);
   }
 
   if (hwnd->m_visible && !wasVisible && !hwnd->m_parent && !hwnd->m_oswindow) {
     swell_oswindow_manage(hwnd, cmd != SW_SHOWNA);
+  }
+
+  if (hwnd->m_visible) {
+    InvalidateRect(hwnd, NULL, FALSE);
   }
 
   SendMessage(hwnd, WM_SHOWWINDOW, hwnd->m_visible ? TRUE : FALSE, cmd);

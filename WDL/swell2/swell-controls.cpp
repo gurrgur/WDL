@@ -794,17 +794,20 @@ LRESULT labelWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       RECT cr; GetClientRect(hwnd, &cr);
 
-      // Ask parent for colors
-      COLORREF fgcol = (COLORREF)g_swell_ctheme.label_text;
+      COLORREF fgcol = hwnd->m_enabled
+        ? (COLORREF)g_swell_ctheme.label_text
+        : (COLORREF)g_swell_ctheme.button_text_disabled;
+      SetTextColor(hdc, fgcol);
+
       HBRUSH br = get_window_brush(hwnd, hdc, WM_CTLCOLORSTATIC);
       if (br && (INT_PTR)br != 1) {
         FillRect(hdc, &cr, br);
-      } else {
-        HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme._3dface);
-        FillRect(hdc, &cr, bg);
-        DeleteObject(bg);
-        SetTextColor(hdc, fgcol);
+      } else if (!br) {
+        SWELL_FillDialogBackground(hdc, &cr, 0);
       }
+      // else: parent returned 1 (already painted bg), skip
+
+      SetBkMode(hdc, TRANSPARENT);
 
       DWORD align_flag = DT_VCENTER | DT_SINGLELINE | DT_WORDBREAK;
       DWORD style = hwnd->m_style;
@@ -814,7 +817,6 @@ LRESULT labelWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       SelectObject(hdc, f);
-      SetBkMode(hdc, TRANSPARENT);
 
       const char *txt = hwnd->m_title.Get();
       if (txt && txt[0]) {
