@@ -266,6 +266,7 @@ static bool read_hex_byte(const char *src, uint8_t *out)
 BOOL WritePrivateProfileString(const char *appname, const char *keyname,
                                 const char *val, const char *fn)
 {
+  fprintf(stderr, "SWELL_CALL: WritePrivateProfileString\n");
   if (!appname || (keyname && !keyname[0])) return FALSE;
 
   WDL_MutexLock lock(&s_mutex);
@@ -306,6 +307,7 @@ DWORD GetPrivateProfileString(const char *appname, const char *keyname,
                                const char *def, char *ret, int retsize,
                                const char *fn)
 {
+  fprintf(stderr, "SWELL_CALL: GetPrivateProfileString\n");
   WDL_MutexLock lock(&s_mutex);
   IniCtx *ctx = ctx_load(fn);
 
@@ -356,6 +358,7 @@ DWORD GetPrivateProfileString(const char *appname, const char *keyname,
 int GetPrivateProfileInt(const char *appname, const char *keyname,
                           int def, const char *fn)
 {
+  fprintf(stderr, "SWELL_CALL: GetPrivateProfileInt\n");
   char buf[512];
   GetPrivateProfileString(appname, keyname, "", buf, sizeof(buf), fn);
   if (buf[0]) {
@@ -368,6 +371,7 @@ int GetPrivateProfileInt(const char *appname, const char *keyname,
 BOOL GetPrivateProfileStruct(const char *appname, const char *keyname,
                               void *buf, int bufsz, const char *fn)
 {
+  fprintf(stderr, "SWELL_CALL: GetPrivateProfileStruct\n");
   if (!appname || !keyname || bufsz < 0) return FALSE;
 
   int hexlen = bufsz * 2 + 8 + 1;
@@ -409,6 +413,7 @@ BOOL GetPrivateProfileStruct(const char *appname, const char *keyname,
 BOOL WritePrivateProfileStruct(const char *appname, const char *keyname,
                                 const void *buf, int bufsz, const char *fn)
 {
+  fprintf(stderr, "SWELL_CALL: WritePrivateProfileStruct\n");
   if (!keyname)
     return WritePrivateProfileString(appname, keyname, (const char *)buf, fn);
 
@@ -437,6 +442,7 @@ BOOL WritePrivateProfileStruct(const char *appname, const char *keyname,
 BOOL WritePrivateProfileSection(const char *appname, const char *strings,
                                  const char *fn)
 {
+  fprintf(stderr, "SWELL_CALL: WritePrivateProfileSection\n");
   if (!appname) return FALSE;
 
   WDL_MutexLock lock(&s_mutex);
@@ -467,6 +473,7 @@ BOOL WritePrivateProfileSection(const char *appname, const char *strings,
 DWORD GetPrivateProfileSection(const char *appname, char *strout,
                                 DWORD strout_len, const char *fn)
 {
+  fprintf(stderr, "SWELL_CALL: GetPrivateProfileSection\n");
   WDL_MutexLock lock(&s_mutex);
 
   if (!strout || strout_len < 2) {

@@ -81,6 +81,7 @@ static void remove_entry(SDL_WindowEntry *e)
 
 void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_manage\n");
   if (!hwnd || hwnd->m_oswindow) return;
 
   RECT r = hwnd->m_position;
@@ -137,6 +138,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 
 void swell_oswindow_destroy(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_destroy\n");
   if (!hwnd || !hwnd->m_oswindow) return;
 
   SDL_WindowEntry *e = find_entry_by_hwnd(hwnd);
@@ -155,6 +157,7 @@ void swell_oswindow_destroy(HWND hwnd)
 
 void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_resize\n");
   if (!hwnd || !hwnd->m_oswindow) return;
 
   SDL_WindowEntry *e = find_entry_by_hwnd(hwnd);
@@ -193,6 +196,7 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
 
 void swell_oswindow_focus(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_focus\n");
   if (!hwnd) return;
 
   HWND top = hwnd;
@@ -209,6 +213,7 @@ void swell_oswindow_focus(HWND hwnd)
 
 void swell_oswindow_update_style(HWND hwnd, DWORD oldstyle)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_update_style\n");
   if (!hwnd || !hwnd->m_oswindow) return;
 
   DWORD newstyle = hwnd->m_style;
@@ -240,6 +245,7 @@ void swell_oswindow_update_style(HWND hwnd, DWORD oldstyle)
 
 void swell_oswindow_update_enable(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_update_enable\n");
   (void)hwnd;
   // SDL3 doesn't have a native enable/disable for windows
 }
@@ -250,6 +256,7 @@ void swell_oswindow_update_enable(HWND hwnd)
 
 void swell_oswindow_update_text(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_update_text\n");
   if (!hwnd || !hwnd->m_oswindow) return;
   SDL_SetWindowTitle((SDL_Window*)hwnd->m_oswindow, hwnd->m_title.Get());
 }
@@ -260,6 +267,7 @@ void swell_oswindow_update_text(HWND hwnd)
 
 void swell_oswindow_invalidate(HWND hwnd, const RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_invalidate\n");
   if (!hwnd || !hwnd->m_oswindow) return;
 
   // guard against recursive paint cycles
@@ -294,6 +302,7 @@ void swell_oswindow_invalidate(HWND hwnd, const RECT *r)
 
 void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_updatetoscreen\n");
   if (!hwnd || !hwnd->m_oswindow) return;
 
   SDL_WindowEntry *e = find_entry_by_hwnd(hwnd);
@@ -358,6 +367,7 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
 
 HWND swell_oswindow_to_hwnd(SWELL_OSWINDOW osw)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_to_hwnd\n");
   if (!osw) return NULL;
   SDL_WindowEntry *e = find_entry_by_window((SDL_Window*)osw);
   return e ? e->hwnd : NULL;
@@ -365,6 +375,7 @@ HWND swell_oswindow_to_hwnd(SWELL_OSWINDOW osw)
 
 SWELL_OSWINDOW swell_oswindow_from_hwnd(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: swell_oswindow_from_hwnd\n");
   if (!hwnd) return NULL;
   SDL_WindowEntry *e = find_entry_by_hwnd(hwnd);
   return e ? (SWELL_OSWINDOW)e->window : NULL;
@@ -705,6 +716,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 
 void SWELL_RunEvents()
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_RunEvents\n");
   SDL_Event evt;
   while (SDL_PollEvent(&evt)) {
     swell_sdlEventHandler(&evt);
@@ -718,6 +730,7 @@ void SWELL_RunEvents()
 #ifndef SWELL_TARGET_OSX
 void SWELL_initargs(int *argc, char ***argv)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_initargs\n");
   (void)argc;
   (void)argv;
   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
@@ -737,12 +750,14 @@ void SWELL_initargs(int *argc, char ***argv)
 #ifndef SWELL_TARGET_OSX
 HWND SWELL_CreateXBridgeWindow(HWND viewpar, void **wref, const RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_CreateXBridgeWindow\n");
   (void)viewpar; (void)wref; (void)r;
   return NULL;
 }
 
 void *SWELL_GetOSWindow(HWND hwnd, const char *type)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetOSWindow\n");
   if (!hwnd || !type) return NULL;
   if (strcmp(type, "!sdl") == 0)
     return (void*)hwnd->m_oswindow;
@@ -751,6 +766,7 @@ void *SWELL_GetOSWindow(HWND hwnd, const char *type)
 
 void *SWELL_GetOSEvent(const char *type)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetOSEvent\n");
   (void)type;
   return NULL;
 }

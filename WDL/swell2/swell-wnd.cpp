@@ -100,6 +100,7 @@ void HWND__::Release()
 
 LRESULT SendMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+  fprintf(stderr, "SWELL_CALL: SendMessage\n");
   if (!hwnd) return 0;
   if (hwnd->m_hashaddestroy >= 2) return 0;
 
@@ -115,6 +116,7 @@ LRESULT SendMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+  fprintf(stderr, "SWELL_CALL: DefWindowProc\n");
   if (!hwnd) return 0;
 
   switch (msg) {
@@ -188,6 +190,7 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+  fprintf(stderr, "SWELL_CALL: SwellDialogDefaultWindowProc\n");
   DLGPROC dlgproc = hwnd->m_dlgproc;
 
   switch (msg) {
@@ -277,21 +280,25 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 #ifndef SWELL_PROVIDED_BY_APP
 void SWELL_Internal_PostMessage_Init()
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_Internal_PostMessage_Init\n");
 }
 
 BOOL SWELL_Internal_PostMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_Internal_PostMessage\n");
   return PostMessage(hwnd, msg, wParam, lParam);
 }
 
 void SWELL_Internal_PMQ_ClearAllMessages(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_Internal_PMQ_ClearAllMessages\n");
   SWELL_MessageQueue_Clear(hwnd);
 }
 #endif
 
 BOOL PostMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+  fprintf(stderr, "SWELL_CALL: PostMessage\n");
   WDL_MutexLock lock(&g_pmq_mutex);
 
   if (g_pmq_count >= MAX_PMQ_SIZE) {
@@ -325,6 +332,7 @@ BOOL PostMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 void SWELL_MessageQueue_Flush()
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_MessageQueue_Flush\n");
   g_pmq_mutex.Enter();
   int n = g_pmq_count;
   g_pmq_mutex.Leave();
@@ -351,6 +359,7 @@ void SWELL_MessageQueue_Flush()
 
 void SWELL_MessageQueue_Clear(HWND h)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_MessageQueue_Clear\n");
   WDL_MutexLock lock(&g_pmq_mutex);
 
   PMQ_rec *prev = NULL;
@@ -377,6 +386,7 @@ void SWELL_MessageQueue_Clear(HWND h)
 
 UINT_PTR SetTimer(HWND hwnd, UINT_PTR timerid, UINT rate, TIMERPROC tProc)
 {
+  fprintf(stderr, "SWELL_CALL: SetTimer\n");
   if (rate < 1) rate = 1;
 
   WDL_MutexLock lock(&g_timer_mutex);
@@ -409,6 +419,7 @@ UINT_PTR SetTimer(HWND hwnd, UINT_PTR timerid, UINT rate, TIMERPROC tProc)
 
 BOOL KillTimer(HWND hwnd, UINT_PTR timerid)
 {
+  fprintf(stderr, "SWELL_CALL: KillTimer\n");
   WDL_MutexLock lock(&g_timer_mutex);
 
   TimerInfoRec *prev = NULL;
@@ -490,6 +501,7 @@ static void fireTimers()
 
 void DestroyWindow(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: DestroyWindow\n");
   if (!hwnd) return;
   if (hwnd->m_hashaddestroy) return;
 
@@ -586,6 +598,7 @@ void DestroyWindow(HWND hwnd)
 
 void ShowWindow(HWND hwnd, int cmd)
 {
+  fprintf(stderr, "SWELL_CALL: ShowWindow\n");
   if (!hwnd) return;
 
   bool wasVisible = hwnd->m_visible;
@@ -612,6 +625,7 @@ void ShowWindow(HWND hwnd, int cmd)
 
 void EnableWindow(HWND hwnd, int enable)
 {
+  fprintf(stderr, "SWELL_CALL: EnableWindow\n");
   if (!hwnd) return;
   hwnd->m_enabled = (enable != 0);
 
@@ -626,6 +640,7 @@ void EnableWindow(HWND hwnd, int enable)
 
 bool IsWindowEnabled(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: IsWindowEnabled\n");
   if (!hwnd) return false;
   HWND w = hwnd;
   while (w) {
@@ -637,12 +652,14 @@ bool IsWindowEnabled(HWND hwnd)
 
 bool IsWindowVisible(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: IsWindowVisible\n");
   if (!hwnd) return false;
   return hwnd->m_visible;
 }
 
 bool IsWindow(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: IsWindow\n");
   // non-null pointer is enough for the headless backend
   return hwnd != NULL;
 }
@@ -653,6 +670,7 @@ bool IsWindow(HWND hwnd)
 
 void SetFocus(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: SetFocus\n");
   if (!hwnd) return;
 
   HWND oldFoc = GetFocus();
@@ -683,6 +701,7 @@ void SetFocus(HWND hwnd)
 
 HWND GetFocus()
 {
+  fprintf(stderr, "SWELL_CALL: GetFocus\n");
   HWND w = g_swell_focused_oswindow_hwnd;
   while (w && w->m_focused_child) {
     w = (HWND)w->m_focused_child;
@@ -693,6 +712,7 @@ HWND GetFocus()
 
 void SetForegroundWindow(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: SetForegroundWindow\n");
   g_swell_foreground = hwnd;
   if (hwnd) {
     SetFocus(hwnd);
@@ -701,6 +721,7 @@ void SetForegroundWindow(HWND hwnd)
 
 HWND GetForegroundWindow()
 {
+  fprintf(stderr, "SWELL_CALL: GetForegroundWindow\n");
   return g_swell_foreground;
 }
 
@@ -710,6 +731,7 @@ HWND GetForegroundWindow()
 
 HWND SetCapture(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: SetCapture\n");
   HWND prev = g_swell_capture;
   if (prev && prev != hwnd) {
     SendMessage(prev, WM_CAPTURECHANGED, 0, (LPARAM)hwnd);
@@ -720,11 +742,13 @@ HWND SetCapture(HWND hwnd)
 
 HWND GetCapture()
 {
+  fprintf(stderr, "SWELL_CALL: GetCapture\n");
   return g_swell_capture;
 }
 
 void ReleaseCapture()
 {
+  fprintf(stderr, "SWELL_CALL: ReleaseCapture\n");
   if (g_swell_capture) {
     SendMessage(g_swell_capture, WM_CAPTURECHANGED, 0, 0);
     g_swell_capture = NULL;
@@ -737,12 +761,14 @@ void ReleaseCapture()
 
 HWND GetParent(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: GetParent\n");
   if (!hwnd) return NULL;
   return (HWND)hwnd->m_parent;
 }
 
 HWND SetParent(HWND hwnd, HWND newPar)
 {
+  fprintf(stderr, "SWELL_CALL: SetParent\n");
   if (!hwnd) return NULL;
 
   HWND oldPar = (HWND)hwnd->m_parent;
@@ -788,6 +814,7 @@ HWND SetParent(HWND hwnd, HWND newPar)
 
 HWND GetWindow(HWND hwnd, int what)
 {
+  fprintf(stderr, "SWELL_CALL: GetWindow\n");
   if (!hwnd) return NULL;
 
   switch (what) {
@@ -841,6 +868,7 @@ HWND GetWindow(HWND hwnd, int what)
 
 int IsChild(HWND hwndParent, HWND hwndChild)
 {
+  fprintf(stderr, "SWELL_CALL: IsChild\n");
   if (!hwndParent || !hwndChild) return FALSE;
   HWND w = (HWND)hwndChild->m_parent;
   while (w) {
@@ -874,6 +902,7 @@ BOOL EnumChildWindows(HWND hwnd, BOOL (*proc)(HWND, LPARAM), LPARAM lParam)
 
 HWND FindWindowEx(HWND par, HWND lastw, const char *classname, const char *title)
 {
+  fprintf(stderr, "SWELL_CALL: FindWindowEx\n");
   HWND list = NULL;
   if (par) {
     if (par->m_children.GetSize() > 0) {
@@ -913,6 +942,7 @@ HWND FindWindowEx(HWND par, HWND lastw, const char *classname, const char *title
 
 HWND GetDlgItem(HWND hwnd, int idx)
 {
+  fprintf(stderr, "SWELL_CALL: GetDlgItem\n");
   if (!hwnd) return NULL;
   if (idx == 0) return hwnd;
 
@@ -930,6 +960,7 @@ HWND GetDlgItem(HWND hwnd, int idx)
 
 LONG_PTR GetWindowLong(HWND hwnd, int idx)
 {
+  fprintf(stderr, "SWELL_CALL: GetWindowLong\n");
   if (!hwnd) return 0;
 
   switch (idx) {
@@ -948,6 +979,7 @@ LONG_PTR GetWindowLong(HWND hwnd, int idx)
 
 LONG_PTR SetWindowLong(HWND hwnd, int idx, LONG_PTR val)
 {
+  fprintf(stderr, "SWELL_CALL: SetWindowLong\n");
   if (!hwnd) return 0;
 
   LONG_PTR old = 0;
@@ -1009,6 +1041,7 @@ static PropEntry *propList = NULL;
 
 HANDLE GetProp(HWND hwnd, const char *name)
 {
+  fprintf(stderr, "SWELL_CALL: GetProp\n");
   if (!hwnd || !name) return NULL;
 
   for (PropEntry *e = propList; e; e = e->_next) {
@@ -1023,6 +1056,7 @@ HANDLE GetProp(HWND hwnd, const char *name)
 
 BOOL SetProp(HWND hwnd, const char *name, HANDLE data)
 {
+  fprintf(stderr, "SWELL_CALL: SetProp\n");
   if (!hwnd || !name) return FALSE;
 
   // remove existing
@@ -1044,6 +1078,7 @@ BOOL SetProp(HWND hwnd, const char *name, HANDLE data)
 
 HANDLE RemoveProp(HWND hwnd, const char *name)
 {
+  fprintf(stderr, "SWELL_CALL: RemoveProp\n");
   if (!hwnd || !name) return NULL;
 
   PropEntry *prev = NULL;
@@ -1067,6 +1102,7 @@ HANDLE RemoveProp(HWND hwnd, const char *name)
 
 int EnumPropsEx(HWND hwnd, PROPENUMPROCEX proc, LPARAM lParam)
 {
+  fprintf(stderr, "SWELL_CALL: EnumPropsEx\n");
   if (!hwnd || !proc) return -1;
 
   for (PropEntry *e = propList; e; e = e->_next) {
@@ -1082,6 +1118,7 @@ int EnumPropsEx(HWND hwnd, PROPENUMPROCEX proc, LPARAM lParam)
 
 BOOL SetDlgItemText(HWND hwnd, int idx, const char *text)
 {
+  fprintf(stderr, "SWELL_CALL: SetDlgItemText\n");
   HWND w = GetDlgItem(hwnd, idx);
   if (!w) return FALSE;
 
@@ -1093,6 +1130,7 @@ BOOL SetDlgItemText(HWND hwnd, int idx, const char *text)
 
 BOOL SetDlgItemInt(HWND hwnd, int idx, int val, int issigned)
 {
+  fprintf(stderr, "SWELL_CALL: SetDlgItemInt\n");
   char buf[64];
   if (issigned) snprintf(buf, sizeof(buf), "%d", val);
   else snprintf(buf, sizeof(buf), "%u", (unsigned int)val);
@@ -1101,6 +1139,7 @@ BOOL SetDlgItemInt(HWND hwnd, int idx, int val, int issigned)
 
 int GetDlgItemInt(HWND hwnd, int idx, BOOL *translated, int issigned)
 {
+  fprintf(stderr, "SWELL_CALL: GetDlgItemInt\n");
   char buf[256] = "";
   GetDlgItemText(hwnd, idx, buf, sizeof(buf));
   if (translated) *translated = TRUE;
@@ -1111,6 +1150,7 @@ int GetDlgItemInt(HWND hwnd, int idx, BOOL *translated, int issigned)
 
 BOOL GetDlgItemText(HWND hwnd, int idx, char *text, int textlen)
 {
+  fprintf(stderr, "SWELL_CALL: GetDlgItemText\n");
   HWND w = GetDlgItem(hwnd, idx);
   if (!w) {
     if (textlen > 0) text[0] = 0;
@@ -1125,12 +1165,14 @@ BOOL GetDlgItemText(HWND hwnd, int idx, char *text, int textlen)
 
 int GetWindowTextLength(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: GetWindowTextLength\n");
   if (!hwnd) return 0;
   return hwnd->m_title.GetLength();
 }
 
 BOOL CheckDlgButton(HWND hwnd, int idx, int check)
 {
+  fprintf(stderr, "SWELL_CALL: CheckDlgButton\n");
   HWND w = GetDlgItem(hwnd, idx);
   if (!w) return FALSE;
   return (BOOL)SendMessage(w, BM_SETCHECK, check, 0);
@@ -1138,6 +1180,7 @@ BOOL CheckDlgButton(HWND hwnd, int idx, int check)
 
 int IsDlgButtonChecked(HWND hwnd, int idx)
 {
+  fprintf(stderr, "SWELL_CALL: IsDlgButtonChecked\n");
   HWND w = GetDlgItem(hwnd, idx);
   if (!w) return 0;
   return (int)SendMessage(w, BM_GETCHECK, 0, 0);
@@ -1149,6 +1192,7 @@ int IsDlgButtonChecked(HWND hwnd, int idx)
 
 void ClientToScreen(HWND hwnd, POINT *p)
 {
+  fprintf(stderr, "SWELL_CALL: ClientToScreen\n");
   if (!hwnd || !p) return;
 
   // walk up parent chain accumulating offsets
@@ -1167,6 +1211,7 @@ void ClientToScreen(HWND hwnd, POINT *p)
 
 void ScreenToClient(HWND hwnd, POINT *p)
 {
+  fprintf(stderr, "SWELL_CALL: ScreenToClient\n");
   if (!hwnd || !p) return;
 
   HWND w = hwnd;
@@ -1180,6 +1225,7 @@ void ScreenToClient(HWND hwnd, POINT *p)
 
 void GetClientRect(HWND hwnd, RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: GetClientRect\n");
   if (!hwnd || !r) return;
 
   RECT wr = hwnd->m_position;
@@ -1190,6 +1236,7 @@ void GetClientRect(HWND hwnd, RECT *r)
 
 bool GetWindowRect(HWND hwnd, RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: GetWindowRect\n");
   if (!hwnd || !r) return false;
   *r = hwnd->m_position;
   return true;
@@ -1197,6 +1244,7 @@ bool GetWindowRect(HWND hwnd, RECT *r)
 
 void GetWindowContentViewRect(HWND hwnd, RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: GetWindowContentViewRect\n");
   if (!hwnd || !r) return;
   r->left = 0;
   r->top = 0;
@@ -1206,6 +1254,7 @@ void GetWindowContentViewRect(HWND hwnd, RECT *r)
 
 void SetWindowPos(HWND hwnd, HWND unused, int x, int y, int cx, int cy, int flags)
 {
+  fprintf(stderr, "SWELL_CALL: SetWindowPos\n");
   if (!hwnd) return;
 
   bool moved = false, sized = false;
@@ -1247,6 +1296,7 @@ void SetWindowPos(HWND hwnd, HWND unused, int x, int y, int cx, int cy, int flag
 
 HWND WindowFromPoint(POINT p)
 {
+  fprintf(stderr, "SWELL_CALL: WindowFromPoint\n");
   // search top-level windows for containment
   HWND w = g_swell_top_level_list;
   while (w) {
@@ -1276,6 +1326,7 @@ HWND WindowFromPoint(POINT p)
 
 BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
 {
+  fprintf(stderr, "SWELL_CALL: InvalidateRect\n");
   if (!hwnd || !hwnd->m_visible) return FALSE;
 
   hwnd->m_invalidated = true;
@@ -1297,6 +1348,7 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
 
 void UpdateWindow(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: UpdateWindow\n");
   if (!hwnd) return;
   // in headless mode, Send WM_PAINT to trigger paint cycle
   if (hwnd->m_invalidated) {
@@ -1311,6 +1363,7 @@ void UpdateWindow(HWND hwnd)
 BOOL ScrollWindow(HWND hwnd, int xamt, int yamt,
                   const RECT *lpRect, const RECT *lpClipRect)
 {
+  fprintf(stderr, "SWELL_CALL: ScrollWindow\n");
   if (!hwnd) return FALSE;
   // for headless: invalidate and return
   InvalidateRect(hwnd, NULL, FALSE);
@@ -1323,6 +1376,7 @@ BOOL ScrollWindow(HWND hwnd, int xamt, int yamt,
 
 int GetClassName(HWND hwnd, char *buf, int bufsz)
 {
+  fprintf(stderr, "SWELL_CALL: GetClassName\n");
   if (!hwnd || !buf || bufsz <= 0) return 0;
   if (hwnd->m_classname) {
     lstrcpyn(buf, hwnd->m_classname, bufsz);
@@ -1334,6 +1388,7 @@ int GetClassName(HWND hwnd, char *buf, int bufsz)
 
 void SWELL_SetClassName(HWND hwnd, const char *name)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_SetClassName\n");
   if (!hwnd) return;
   hwnd->m_classname = name; // caller must pass static string
 }
@@ -1344,6 +1399,7 @@ void SWELL_SetClassName(HWND hwnd, const char *name)
 
 void SWELL_BroadcastMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_BroadcastMessage\n");
   HWND w = g_swell_top_level_list;
   while (w) {
     SendMessage(w, msg, wParam, lParam);
@@ -1364,6 +1420,7 @@ static ControlCreatorNode *g_control_creators = NULL;
 
 void SWELL_RegisterCustomControlCreator(SWELL_ControlCreatorProc proc)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_RegisterCustomControlCreator\n");
   if (!proc) return;
   ControlCreatorNode *n = new ControlCreatorNode();
   n->proc = proc;
@@ -1373,6 +1430,7 @@ void SWELL_RegisterCustomControlCreator(SWELL_ControlCreatorProc proc)
 
 void SWELL_UnregisterCustomControlCreator(SWELL_ControlCreatorProc proc)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_UnregisterCustomControlCreator\n");
   ControlCreatorNode *prev = NULL;
   ControlCreatorNode *n = g_control_creators;
   while (n) {
@@ -1393,6 +1451,7 @@ void SWELL_UnregisterCustomControlCreator(SWELL_ControlCreatorProc proc)
 
 int SWELL_GetDefaultButtonID(HWND hwndDlg, bool onlyIfEnabled)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetDefaultButtonID\n");
   if (!hwndDlg) return 0;
   int n = hwndDlg->m_children.GetSize();
   for (int i = 0; i < n; i++) {
@@ -1412,17 +1471,20 @@ int SWELL_GetDefaultButtonID(HWND hwndDlg, bool onlyIfEnabled)
 
 void SWELL_DrawFocusRect(HWND hwndPar, RECT *rct, void **handle)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_DrawFocusRect\n");
   // stub: headless mode, no drawing
 }
 
 BOOL SWELL_IsGroupBox(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_IsGroupBox\n");
   if (!hwnd) return FALSE;
   return (hwnd->m_style & BS_GROUPBOX) != 0;
 }
 
 BOOL SWELL_IsButton(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_IsButton\n");
   if (!hwnd) return FALSE;
   return (hwnd->m_style & (BS_PUSHBUTTON | BS_DEFPUSHBUTTON | BS_AUTOCHECKBOX |
          BS_AUTO3STATE | BS_AUTORADIOBUTTON | BS_OWNERDRAW | BS_GROUPBOX)) != 0;
@@ -1430,6 +1492,7 @@ BOOL SWELL_IsButton(HWND hwnd)
 
 BOOL SWELL_IsStaticText(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_IsStaticText\n");
   if (!hwnd) return FALSE;
   if (!hwnd->m_classname) return FALSE;
   return strcmp(hwnd->m_classname, "Static") == 0;
@@ -1437,27 +1500,32 @@ BOOL SWELL_IsStaticText(HWND hwnd)
 
 void SWELL_GetDesiredControlSize(HWND hwnd, RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetDesiredControlSize\n");
   if (!hwnd || !r) return;
   *r = hwnd->m_position;
 }
 
 void SWELL_DisableContextMenu(HWND hwnd, bool disable)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_DisableContextMenu\n");
   // stub: headless mode
 }
 
 int SWELL_SetWindowLevel(HWND hwnd, int newlevel)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_SetWindowLevel\n");
   return newlevel;
 }
 
 int SWELL_GetWindowWantRaiseAmt(HWND h)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetWindowWantRaiseAmt\n");
   return 0;
 }
 
 void SWELL_SetWindowWantRaiseAmt(HWND h, int amt)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_SetWindowWantRaiseAmt\n");
 }
 
 // ===========================================================================
@@ -1466,12 +1534,14 @@ void SWELL_SetWindowWantRaiseAmt(HWND h, int amt)
 
 int MulDiv(int a, int b, int c)
 {
+  fprintf(stderr, "SWELL_CALL: MulDiv\n");
   if (c == 0) return -1;
   return (int)(((long long)a * (long long)b) / c);
 }
 
 char *lstrcpyn(char *dest, const char *src, int l)
 {
+  fprintf(stderr, "SWELL_CALL: lstrcpyn\n");
   if (!dest || !src || l <= 0) return dest;
   char *d = dest;
   while (--l > 0 && *src) {
@@ -1487,6 +1557,7 @@ char *lstrcpyn(char *dest, const char *src, int l)
 
 void Sleep(int ms)
 {
+  fprintf(stderr, "SWELL_CALL: Sleep\n");
   if (ms <= 0) {
     usleep(100);
   } else {
@@ -1496,6 +1567,7 @@ void Sleep(int ms)
 
 DWORD GetTickCount()
 {
+  fprintf(stderr, "SWELL_CALL: GetTickCount\n");
   struct timeval tv;
   gettimeofday(&tv, NULL);
   return (DWORD)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
@@ -1504,6 +1576,7 @@ DWORD GetTickCount()
 BOOL GetFileTime(int filedes, FILETIME *lpCreationTime,
                  FILETIME *lpLastAccessTime, FILETIME *lpLastWriteTime)
 {
+  fprintf(stderr, "SWELL_CALL: GetFileTime\n");
   if (!lpCreationTime && !lpLastAccessTime && !lpLastWriteTime) return FALSE;
 
   struct stat st;
@@ -1537,6 +1610,7 @@ BOOL GetFileTime(int filedes, FILETIME *lpCreationTime,
 
 void SWELL_RunMessageLoop()
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_RunMessageLoop\n");
   SWELL_MessageQueue_Flush();
   SWELL_RunEvents();
   fireTimers();

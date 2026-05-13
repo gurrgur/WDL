@@ -11,8 +11,8 @@ overlays your build output onto the system library path:
 cmake -DCMAKE_BUILD_TYPE=Debug -B build-debug
 cmake --build build-debug
 
-# Run REAPER under gdb with your libSwell.so
-GDK_BACKEND=x11 bwrap \
+# Quick smoke test (5s timeout, check exit code)
+bwrap \
   --ro-bind / / \
   --bind "$PWD/build-debug/libSwell.so" /usr/lib/REAPER/libSwell.so \
   --bind "$HOME/.config/REAPER" "$HOME/.config/REAPER" \
@@ -21,13 +21,107 @@ GDK_BACKEND=x11 bwrap \
   --bind /tmp/.X11-unix /tmp/.X11-unix \
   --dev /dev \
   --proc /proc \
+  --setenv DISPLAY ":0" \
+  --setenv SDL_VIDEO_DRIVER x11 \
+  --setenv GDK_BACKEND x11 \
+  -- \
+  timeout 5 /usr/lib/REAPER/reaper; echo "EXIT: $?"
+# exit 124 = timeout (REAPER stayed running = GUI working)
+# exit 0   = REAPER exited cleanly (GUI failed, check stubs)
+# SIGSEGV  = function pointer was NULL (audit symbols)
+
+# Interactive debug with gdb
+bwrap \
+  --ro-bind / / \
+  --bind "$PWD/build-debug/libSwell.so" /usr/lib/REAPER/libSwell.so \
+  --bind "$HOME/.config/REAPER" "$HOME/.config/REAPER" \
+  --bind "$HOME/.cache" "$HOME/.cache" \
+  --tmpfs /tmp \
+  --bind /tmp/.X11-unix /tmp/.X11-unix \
+  --dev /dev \
+  --proc /proc \
+  --setenv DISPLAY ":0" \
+  --setenv SDL_VIDEO_DRIVER x11 \
   --setenv GDK_BACKEND x11 \
   -- \
   gdb /usr/lib/REAPER/reaper
 ```
 
-On Wayland systems, `GDK_BACKEND=x11` may be required for REAPER's GDK2
-backend to connect to XWayland.
+On Wayland systems, set `DISPLAY=:0` and `SDL_VIDEO_DRIVER=x11` to force SDL3
+to use XWayland. The original SWELL GDK backend uses `GDK_BACKEND=x11`.
+Both are needed when testing SDL3 backend under Wayland.
+
+## Tracing Which Functions REAPER Calls
+
+To see which functions are actually called (not just resolved), inject
+fprintf traces into every function body:
+
+```python
+# inject_traces.py — adds fprintf(stderr, "SWELL_CALL: Func\n") after each {
+# See AGENTS.md "Tracing function calls" section for the full script.
+```
+
+Then run and filter:
+```bash
+cmake --build build-debug
+bwrap ... timeout 5 /usr/lib/REAPER/reaper 2>&1 | \
+  grep "SWELL_CALL:" | sed 's/.*SWELL_CALL: //' | sort -u
+```
+
+This reveals exactly which stubs are hit and in what order REAPER calls them.
+
+## REAPER Startup Call Sequence
+
+REAPER calls these 35 SWELL functions during startup:
+
+```
+SWELL_initargs              ← backend init (SDL3: SDL_Init)
+SWELL_Internal_PostMessage_Init
+SWELL_Register_Cursor_Resource
+SWELL_RegisterCustomControlCreator
+SWELL_EnableRightClickEmulate
+SWELL_ExtendedAPI
+SWELL_GenerateGUID
+SWELL_LoadMenu
+AddFontResourceEx
+LoadNamedImage
+RegisterClipboardFormat
+CreateEvent / GetCurrentThreadId / SetThreadPriority  ← threading
+GetAsyncKeyState
+GetModuleFileName / GetTempPath
+GetPrivateProfileString / GetPrivateProfileInt / GetPrivateProfileStruct  ← INI
+WritePrivateProfileString / WritePrivateProfileStruct
+GetSysColor / GetTickCount / Sleep / lstrcpyn
+LoadLibrary
+SetDlgItemText / GetDlgItem
+SWELL_CreateDialog           ← main window creation (returns NULL = stub!)
+SWELL_DialogBox              ← splash/modal dialog (returns -1 = stub!)
+MessageBox
+SWELL_RunMessageLoop         ← main loop
+  └─ SWELL_MessageQueue_Flush
+  └─ SWELL_RunEvents         ← SDL_PollEvent in SDL3 backend
+```
+
+**Exit cause:** `SWELL_DialogBox`/`SWELL_CreateDialog` are stubs returning
+-1/NULL. REAPER thinks dialog creation failed, falls through, exits cleanly.
+Implementing `swell-dlg.cpp` and `swell-controls.cpp` fixes this.
+
+## Known Stub Return-Value Issues
+
+Some stubs return values that make REAPER behave unexpectedly:
+
+| Function | Stub Returns | Should Return | Effect |
+|---|---|---|---|
+| `SWELL_DialogBox` | -1 | non-zero (success) | REAPER exits immediately |
+| `SWELL_CreateDialog` | NULL | valid HWND | No main window |
+| `SWELL_MakeButton` etc. | NULL | valid HWND | No controls in dialogs |
+| `SWELL_CreateXBridgeWindow` | NULL | valid HWND | VST plugin windows fail |
+| `EnumDisplayMonitors` | FALSE | TRUE + callback | REAPER thinks no display |
+| `GetSystemMetrics` | 0 for all | plausible values | 0x0 screen → may exit |
+| `GetMonitorInfo` | FALSE | TRUE | Monitor detection fails |
+
+The display-related stubs (`GetSystemMetrics`, `EnumDisplayMonitors`) are now
+fixed to return plausible values (1920x1080 screen, 1 monitor).
 
 ## Common Crash Patterns
 
@@ -73,6 +167,14 @@ SWELL functions on Linux have C++ linkage (no `extern "C"`) because
 function names are mangled. When debugging with `nm`, use `nm -C` to demangle.
 
 ## Build Issues
+
+### swell-types.h `#if 0` guards
+
+`swell-types.h:1434` wraps many `SM_*` and other constants in `#if 0 // these
+are disabled until implemented`. When you implement a function that uses these
+constants (e.g. `GetSystemMetrics`), change the guard to `#if 1`. The kept
+headers rule means "don't change the API" — enabling already-declared constants
+is expected when the implementation catches up.
 
 ### min/max macro conflicts
 

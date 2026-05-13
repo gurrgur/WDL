@@ -49,6 +49,7 @@ static int g_gdiobj_pool_count = 0;
 
 HDC__ *SWELL_GDP_CTX_NEW()
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GDP_CTX_NEW\n");
   std::lock_guard<std::mutex> lock(g_hdc_pool_mutex);
   HDC__ *p = nullptr;
   if (g_hdc_free_list) {
@@ -65,6 +66,7 @@ HDC__ *SWELL_GDP_CTX_NEW()
 
 void SWELL_GDP_CTX_DELETE(HDC__ *hdc)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GDP_CTX_DELETE\n");
   if (!hdc) return;
   std::lock_guard<std::mutex> lock(g_hdc_pool_mutex);
   if (g_hdc_pool_count < SWELL_MAX_HDC_POOL) {
@@ -79,6 +81,7 @@ void SWELL_GDP_CTX_DELETE(HDC__ *hdc)
 
 HGDIOBJ__ *GDP_OBJECT_NEW()
 {
+  fprintf(stderr, "SWELL_CALL: GDP_OBJECT_NEW\n");
   std::lock_guard<std::mutex> lock(g_gdiobj_pool_mutex);
   HGDIOBJ__ *p = nullptr;
   if (g_gdiobj_free_list) {
@@ -95,6 +98,7 @@ HGDIOBJ__ *GDP_OBJECT_NEW()
 
 void GDP_OBJECT_DELETE(HGDIOBJ__ *obj)
 {
+  fprintf(stderr, "SWELL_CALL: GDP_OBJECT_DELETE\n");
   if (!obj) return;
   std::lock_guard<std::mutex> lock(g_gdiobj_pool_mutex);
   if (g_gdiobj_pool_count < SWELL_MAX_HGDIOBJ_POOL) {
@@ -109,6 +113,7 @@ void GDP_OBJECT_DELETE(HGDIOBJ__ *obj)
 
 bool HGDIOBJ_VALID(HGDIOBJ__ *p, int reqType)
 {
+  fprintf(stderr, "SWELL_CALL: HGDIOBJ_VALID\n");
   if (!p) return false;
   if (p->_infreelist) return false;
   if (reinterpret_cast<INT_PTR>(p) < 256) return false; // sentinels
@@ -118,6 +123,7 @@ bool HGDIOBJ_VALID(HGDIOBJ__ *p, int reqType)
 
 bool HDC_VALID(HDC__ *ct)
 {
+  fprintf(stderr, "SWELL_CALL: HDC_VALID\n");
   if (!ct) return false;
   if (ct->_infreelist) return false;
   return true;
@@ -136,6 +142,7 @@ static HGDIOBJ__ g_null_brush_obj = { TYPE_BRUSH, 0, 0, -1, 0.0f, nullptr, false
 
 void swell_DirtyContext(HDC__ *ctx, int l, int t, int r, int b)
 {
+  fprintf(stderr, "SWELL_CALL: swell_DirtyContext\n");
   if (!ctx) return;
   if (ctx->dirty_rect_valid) {
     if (l < ctx->dirty_rect.left)   ctx->dirty_rect.left = l;
@@ -175,6 +182,7 @@ static inline bool pen_valid(HDC__ *c)
 
 HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_CreateMemContext\n");
   (void)hdc;
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
   if (!ctx) return nullptr;
@@ -207,6 +215,7 @@ HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
 
 void SWELL_DeleteGfxContext(HDC ctx)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_DeleteGfxContext\n");
   if (!ctx || !HDC_VALID(ctx)) return;
   ctx->surface.reset();
   ctx->canvas = nullptr;
@@ -215,6 +224,7 @@ void SWELL_DeleteGfxContext(HDC ctx)
 
 HDC BeginPaint(HWND hwnd, PAINTSTRUCT *ps)
 {
+  fprintf(stderr, "SWELL_CALL: BeginPaint\n");
   if (!hwnd || !ps) return nullptr;
   memset(ps, 0, sizeof(PAINTSTRUCT));
   if (!hwnd->m_paintctx) return nullptr;
@@ -227,6 +237,7 @@ HDC BeginPaint(HWND hwnd, PAINTSTRUCT *ps)
 
 BOOL EndPaint(HWND hwnd, PAINTSTRUCT *ps)
 {
+  fprintf(stderr, "SWELL_CALL: EndPaint\n");
   (void)hwnd;
   (void)ps;
   return TRUE;
@@ -234,6 +245,7 @@ BOOL EndPaint(HWND hwnd, PAINTSTRUCT *ps)
 
 HDC GetDC(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: GetDC\n");
   if (!hwnd) return nullptr;
 
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
@@ -265,11 +277,13 @@ HDC GetDC(HWND hwnd)
 
 HDC GetWindowDC(HWND hwnd)
 {
+  fprintf(stderr, "SWELL_CALL: GetWindowDC\n");
   return GetDC(hwnd);
 }
 
 void ReleaseDC(HWND hwnd, HDC ctx)
 {
+  fprintf(stderr, "SWELL_CALL: ReleaseDC\n");
   (void)hwnd;
   if (!ctx || !HDC_VALID(ctx)) return;
   ctx->surface.reset();
@@ -283,6 +297,7 @@ void ReleaseDC(HWND hwnd, HDC ctx)
 
 HPEN CreatePen(int attr, int wid, int col)
 {
+  fprintf(stderr, "SWELL_CALL: CreatePen\n");
   (void)attr;
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) return nullptr;
@@ -296,6 +311,7 @@ HPEN CreatePen(int attr, int wid, int col)
 
 HPEN CreatePenAlpha(int attr, int wid, int col, float alpha)
 {
+  fprintf(stderr, "SWELL_CALL: CreatePenAlpha\n");
   HPEN p = CreatePen(attr, wid, col);
   if (p) p->alpha = alpha;
   return p;
@@ -303,6 +319,7 @@ HPEN CreatePenAlpha(int attr, int wid, int col, float alpha)
 
 HBRUSH CreateSolidBrush(int col)
 {
+  fprintf(stderr, "SWELL_CALL: CreateSolidBrush\n");
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) return nullptr;
   obj->type = TYPE_BRUSH;
@@ -315,6 +332,7 @@ HBRUSH CreateSolidBrush(int col)
 
 HBRUSH CreateSolidBrushAlpha(int col, float alpha)
 {
+  fprintf(stderr, "SWELL_CALL: CreateSolidBrushAlpha\n");
   HBRUSH br = CreateSolidBrush(col);
   if (br) br->alpha = alpha;
   return br;
@@ -325,6 +343,7 @@ HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation,
                  char lfCharSet, char lfOutPrecision, char lfClipPrecision,
                  char lfQuality, char lfPitchAndFamily, const char *lfFaceName)
 {
+  fprintf(stderr, "SWELL_CALL: CreateFont\n");
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) return nullptr;
   obj->type = TYPE_FONT;
@@ -356,6 +375,7 @@ HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation,
 
 HFONT CreateFontIndirect(const LOGFONT *lf)
 {
+  fprintf(stderr, "SWELL_CALL: CreateFontIndirect\n");
   if (!lf) return nullptr;
   return CreateFont(lf->lfHeight, lf->lfWidth, lf->lfEscapement, lf->lfOrientation,
                     lf->lfWeight, lf->lfItalic, lf->lfUnderline, lf->lfStrikeOut,
@@ -367,6 +387,7 @@ HFONT CreateFontIndirect(const LOGFONT *lf)
 HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
                      unsigned char *bits)
 {
+  fprintf(stderr, "SWELL_CALL: CreateBitmap\n");
   (void)numplanes;
   if (width <= 0 || height <= 0) return nullptr;
 
@@ -387,6 +408,7 @@ HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
 
 HICON CreateIconIndirect(const ICONINFO *iconinfo)
 {
+  fprintf(stderr, "SWELL_CALL: CreateIconIndirect\n");
   if (!iconinfo) return nullptr;
 
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
@@ -417,6 +439,7 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
 
 HICON LoadNamedImage(const char *name, bool alphaFromMask)
 {
+  fprintf(stderr, "SWELL_CALL: LoadNamedImage\n");
   (void)name;
   (void)alphaFromMask;
   return nullptr;
@@ -424,6 +447,7 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
 
 HGDIOBJ SelectObject(HDC ctx, HGDIOBJ pen)
 {
+  fprintf(stderr, "SWELL_CALL: SelectObject\n");
   if (!ctx || !HDC_VALID(ctx)) return nullptr;
 
   if (!pen) return nullptr;
@@ -468,6 +492,7 @@ HGDIOBJ SelectObject(HDC ctx, HGDIOBJ pen)
 
 void DeleteObject(HGDIOBJ obj)
 {
+  fprintf(stderr, "SWELL_CALL: DeleteObject\n");
   if (!obj) return;
 
   // Never delete stock objects (null pen/brush)
@@ -494,6 +519,7 @@ void DeleteObject(HGDIOBJ obj)
 
 HGDIOBJ GetStockObject(int wh)
 {
+  fprintf(stderr, "SWELL_CALL: GetStockObject\n");
   if (wh == NULL_PEN)  return &g_null_pen_obj;
   if (wh == NULL_BRUSH) return &g_null_brush_obj;
   return nullptr;
@@ -501,6 +527,7 @@ HGDIOBJ GetStockObject(int wh)
 
 HGDIOBJ SWELL_CloneGDIObject(HGDIOBJ a)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_CloneGDIObject\n");
   if (!a || !HGDIOBJ_VALID(a)) return nullptr;
   a->additional_refcnt++;
   return a;
@@ -508,6 +535,7 @@ HGDIOBJ SWELL_CloneGDIObject(HGDIOBJ a)
 
 BOOL GetObject(HICON icon, int bmsz, void *_bm)
 {
+  fprintf(stderr, "SWELL_CALL: GetObject\n");
   if (!icon || !_bm || bmsz < (int)sizeof(BITMAP)) return FALSE;
   if (!HGDIOBJ_VALID(icon, TYPE_BITMAP)) return FALSE;
 
@@ -534,6 +562,7 @@ BOOL GetObject(HICON icon, int bmsz, void *_bm)
 
 void Rectangle(HDC ctx, int l, int t, int r, int b)
 {
+  fprintf(stderr, "SWELL_CALL: Rectangle\n");
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, l, t, r, b);
@@ -561,6 +590,7 @@ void Rectangle(HDC ctx, int l, int t, int r, int b)
 
 void Ellipse(HDC ctx, int l, int t, int r, int b)
 {
+  fprintf(stderr, "SWELL_CALL: Ellipse\n");
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, l, t, r, b);
@@ -589,6 +619,7 @@ void Ellipse(HDC ctx, int l, int t, int r, int b)
 
 void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
 {
+  fprintf(stderr, "SWELL_CALL: RoundRect\n");
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, x, y, x2, y2);
@@ -618,6 +649,7 @@ void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
 
 void SWELL_FillRect(HDC ctx, const RECT *r, HBRUSH br)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_FillRect\n");
   if (!HDC_VALID(ctx) || !ctx->canvas || !r) return;
 
   HGDIOBJ__ *useBrush = nullptr;
@@ -642,6 +674,7 @@ void SWELL_FillRect(HDC ctx, const RECT *r, HBRUSH br)
 
 void SWELL_Polygon(HDC ctx, POINT *pts, int npts)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_Polygon\n");
   if (!HDC_VALID(ctx) || !ctx->canvas || !pts || npts < 2) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
 
@@ -683,6 +716,7 @@ void SWELL_Polygon(HDC ctx, POINT *pts, int npts)
 
 void MoveToEx(HDC ctx, int x, int y, POINT *op)
 {
+  fprintf(stderr, "SWELL_CALL: MoveToEx\n");
   if (!HDC_VALID(ctx)) return;
   if (op) {
     op->x = (LONG)ctx->lastpos_x;
@@ -694,6 +728,7 @@ void MoveToEx(HDC ctx, int x, int y, POINT *op)
 
 void LineTo(HDC ctx, int x, int y)
 {
+  fprintf(stderr, "SWELL_CALL: LineTo\n");
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!pen_valid(ctx)) {
     ctx->lastpos_x = (float)x;
@@ -721,6 +756,7 @@ void LineTo(HDC ctx, int x, int y)
 
 void SetPixel(HDC ctx, int x, int y, int c)
 {
+  fprintf(stderr, "SWELL_CALL: SetPixel\n");
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   swell_DirtyContext(ctx, x, y, x + 1, y + 1);
 
@@ -732,6 +768,7 @@ void SetPixel(HDC ctx, int x, int y, int c)
 
 void PolyBezierTo(HDC ctx, POINT *pts, int np)
 {
+  fprintf(stderr, "SWELL_CALL: PolyBezierTo\n");
   if (!HDC_VALID(ctx) || !ctx->canvas || !pts || np < 1) return;
   if (!pen_valid(ctx)) {
     ctx->lastpos_x = (float)pts[np - 1].x;
@@ -771,6 +808,7 @@ void PolyBezierTo(HDC ctx, POINT *pts, int np)
 
 void PolyPolyline(HDC ctx, const POINT *pts, const DWORD *cnts, int nseg)
 {
+  fprintf(stderr, "SWELL_CALL: PolyPolyline\n");
   if (!HDC_VALID(ctx) || !ctx->canvas || !pts || !cnts || nseg < 1) return;
   if (!pen_valid(ctx)) return;
 
@@ -823,6 +861,7 @@ void PolyPolyline(HDC ctx, const POINT *pts, const DWORD *cnts, int nseg)
 void BitBlt(HDC hdcOut, int x, int y, int w, int h,
             HDC hdcIn, int xin, int yin, int mode)
 {
+  fprintf(stderr, "SWELL_CALL: BitBlt\n");
   if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !HDC_VALID(hdcIn) || !hdcIn->canvas) return;
   if (w <= 0 || h <= 0) return;
 
@@ -849,6 +888,7 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h,
 void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
                 HDC hdcIn, int xin, int yin, int srcw, int srch, int mode)
 {
+  fprintf(stderr, "SWELL_CALL: StretchBlt\n");
   if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !HDC_VALID(hdcIn) || !hdcIn->canvas) return;
   if (w <= 0 || h <= 0 || srcw <= 0 || srch <= 0) return;
 
@@ -876,6 +916,7 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
 void StretchBltFromMem(HDC hdcOut, int x, int y, int w, int h,
                        const void *bits, int srcw, int srch, int srcspan)
 {
+  fprintf(stderr, "SWELL_CALL: StretchBltFromMem\n");
   if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !bits) return;
   if (w <= 0 || h <= 0 || srcw <= 0 || srch <= 0) return;
 
@@ -901,12 +942,14 @@ void StretchBltFromMem(HDC hdcOut, int x, int y, int w, int h,
 
 int SWELL_GetScaling256(void)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetScaling256\n");
   return g_swell_ui_scale;
 }
 #endif
 
 void DrawImageInRect(HDC ctx, HICON img, const RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: DrawImageInRect\n");
   if (!HDC_VALID(ctx) || !ctx->canvas || !img || !r) return;
   if (!HGDIOBJ_VALID(img, TYPE_BITMAP)) return;
 
@@ -929,24 +972,28 @@ void DrawImageInRect(HDC ctx, HICON img, const RECT *r)
 
 void SetTextColor(HDC ctx, int col)
 {
+  fprintf(stderr, "SWELL_CALL: SetTextColor\n");
   if (!HDC_VALID(ctx)) return;
   ctx->cur_text_color_int = SWELL_TO_SKCOLOR(col, 255);
 }
 
 int GetTextColor(HDC ctx)
 {
+  fprintf(stderr, "SWELL_CALL: GetTextColor\n");
   if (!HDC_VALID(ctx)) return 0;
   return SkColorToNativeRGB(ctx->cur_text_color_int);
 }
 
 void SetBkColor(HDC ctx, int col)
 {
+  fprintf(stderr, "SWELL_CALL: SetBkColor\n");
   if (!HDC_VALID(ctx)) return;
   ctx->curbkcol = SWELL_TO_SKCOLOR(col, 255);
 }
 
 void SetBkMode(HDC ctx, int col)
 {
+  fprintf(stderr, "SWELL_CALL: SetBkMode\n");
   if (!HDC_VALID(ctx)) return;
   ctx->curbkmode = col;
 }
@@ -957,6 +1004,7 @@ void SetBkMode(HDC ctx, int col)
 
 int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_DrawText\n");
   if (!HDC_VALID(ctx) || !r) return 0;
 
   if (len == -1) len = (int)strlen(buf);
@@ -1026,6 +1074,7 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 
 BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 {
+  fprintf(stderr, "SWELL_CALL: GetTextMetrics\n");
   if (!HDC_VALID(ctx) || !tm) return FALSE;
 
   memset(tm, 0, sizeof(TEXTMETRIC));
@@ -1055,6 +1104,7 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
 int GetTextFace(HDC ctx, int nCount, LPTSTR lpFaceName)
 {
+  fprintf(stderr, "SWELL_CALL: GetTextFace\n");
   (void)ctx;
   if (lpFaceName && nCount > 0) lpFaceName[0] = 0;
   return 0;
@@ -1063,6 +1113,7 @@ int GetTextFace(HDC ctx, int nCount, LPTSTR lpFaceName)
 int GetGlyphIndicesW(HDC ctx, wchar_t *buf, int len, unsigned short *indices,
                      int flags)
 {
+  fprintf(stderr, "SWELL_CALL: GetGlyphIndicesW\n");
   (void)ctx; (void)buf; (void)len; (void)indices; (void)flags;
   return 0;
 }
@@ -1073,12 +1124,14 @@ int GetGlyphIndicesW(HDC ctx, wchar_t *buf, int len, unsigned short *indices,
 
 void SWELL_PushClipRegion(HDC ctx)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_PushClipRegion\n");
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   ctx->clip_save_count = ctx->canvas->save();
 }
 
 void SWELL_SetClipRegion(HDC ctx, const RECT *r)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_SetClipRegion\n");
   if (!HDC_VALID(ctx) || !ctx->canvas || !r) return;
   ctx->canvas->clipRect(
     SkRect::MakeLTRB((float)r->left, (float)r->top,
@@ -1087,6 +1140,7 @@ void SWELL_SetClipRegion(HDC ctx, const RECT *r)
 
 void SWELL_PopClipRegion(HDC ctx)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_PopClipRegion\n");
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   ctx->canvas->restoreToCount(ctx->clip_save_count);
 }
@@ -1097,6 +1151,7 @@ void SWELL_PopClipRegion(HDC ctx)
 
 int GetSysColor(int idx)
 {
+  fprintf(stderr, "SWELL_CALL: GetSysColor\n");
   switch (idx) {
     case COLOR_3DFACE:       return SkColorToNativeRGB(g_swell_ctheme._3dface);
     case COLOR_3DSHADOW:     return SkColorToNativeRGB(g_swell_ctheme._3dshadow);
@@ -1118,12 +1173,14 @@ int GetSysColor(int idx)
 
 void *SWELL_GetCtxGC(HDC ctx)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetCtxGC\n");
   (void)ctx;
   return nullptr;
 }
 
 void *SWELL_GetCtxFrameBuffer(HDC ctx)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetCtxFrameBuffer\n");
   (void)ctx;
   return nullptr;
 }
@@ -1134,12 +1191,14 @@ void *SWELL_GetCtxFrameBuffer(HDC ctx)
 
 int AddFontResourceEx(LPCTSTR str, DWORD fl, void *pdv)
 {
+  fprintf(stderr, "SWELL_CALL: AddFontResourceEx\n");
   (void)str; (void)fl; (void)pdv;
   return 0;
 }
 
 HFONT SWELL_GetDefaultFont()
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_GetDefaultFont\n");
   if (g_swell_default_font_instance)
     return g_swell_default_font_instance;
 
@@ -1158,6 +1217,7 @@ HFONT SWELL_GetDefaultFont()
 void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     int bmout_xpos, int bmout_ypos, bool forceref)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_internalSkiaPaint\n");
   if (!hwnd) return;
 
   if (hwnd->m_invalidated)
@@ -1237,6 +1297,7 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
 
 void SWELL_FillDialogBackground(HDC hdc, const RECT *r, int level)
 {
+  fprintf(stderr, "SWELL_CALL: SWELL_FillDialogBackground\n");
   (void)level;
   if (!HDC_VALID(hdc) || !hdc->canvas || !r) return;
 

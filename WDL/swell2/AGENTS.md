@@ -29,6 +29,7 @@ is incomplete, but the new code must be independently written.
 ```
 swell2/
   AGENTS.md                ← this file
+  PROGRESS.md              ← implementation progress tracker
   docs/
     SPEC.md                ← complete API surface (types, constants, functions)
     PROTOCOLS.md           ← message encodings, call contracts, ordering guarantees
@@ -49,21 +50,21 @@ swell2/
   swell_resgen.{pl,php,sh} ← resource compiler scripts (.rc → .rc_mac_dlg etc.)
 
   # --- To be written ---
-  swell-internal.h         ← internal types: HWND__, HDC__, HGDIOBJ__, etc.
-  swell-gdi-internalpool.h ← GDI object pool (HDC/HGDIOBJ free lists)
+  swell-internal.h         ← internal types: HWND__, HDC__, HGDIOBJ__, etc. (done)
+  swell-gdi-internalpool.h ← GDI object pool (HDC/HGDIOBJ free lists) (done — merged into swell-gdi.cpp)
   swell-ini.cpp            ← INI file read/write (done)
-  swell-gdi.cpp            ← GDI: drawing, fonts, bitmaps, text (stubs)
+  swell-gdi.cpp            ← GDI: drawing, fonts, bitmaps, text; Skia rendering (done)
   swell-wnd.cpp            ← window management: HWND lifecycle, messages, timers (done)
-  swell-stubs.cpp          ← stubs for all remaining SWELL_API_DEFINE functions
-  swell-appstub.cpp        ← SWELLAPI_GetFunc export (needed by REAPER)
-  swell-backend-headless.cpp ← headless backend (no display, for testing; done)
-  swell-backend-sdl3.cpp   ← SDL3 OS backend (Linux) — NOT YET STARTED
-  swell-dlg.cpp            ← dialog creation and modal loop
-  swell-controls.cpp       ← built-in control WNDPROCs
-  swell-menu.cpp           ← HMENU, TrackPopupMenu, menu bar
-  swell-misc.cpp           ← clipboard, drag-drop, monitors, MessageBox, file dialogs
-  swell-kb.cpp             ← keyboard routing, accelerator handling
-  swell-modstub.cpp        ← DllMain shim for plugin mode
+  swell-stubs.cpp          ← stubs for all ~240 SWELL_API_DEFINE functions (done)
+  swell-appstub.cpp        ← SWELLAPI_GetFunc export (done)
+  swell-backend-headless.cpp ← headless backend (done)
+  swell-backend-sdl3.cpp   ← SDL3 OS backend; window mgmt, event translation, Skia screen update (done)
+  swell-dlg.cpp            ← dialog creation and modal loop — NOT YET STARTED
+  swell-controls.cpp       ← built-in control WNDPROCs — NOT YET STARTED
+  swell-menu.cpp           ← HMENU, TrackPopupMenu, menu bar — NOT YET STARTED
+  swell-misc.cpp           ← clipboard, drag-drop, monitors, MessageBox, file dialogs — NOT YET STARTED
+  swell-kb.cpp             ← keyboard routing, accelerator handling — NOT YET STARTED
+  swell-modstub.cpp        ← DllMain shim for plugin mode — NOT YET STARTED
   CMakeLists.txt           ← build system (done)
 ```
 
@@ -512,23 +513,23 @@ resolves all ~240 SWELL function pointers at load time.
 
 Implement in this order to keep each step independently testable:
 
-1. `swell-internal.h` — all internal type definitions
-2. `swell-gdi-internalpool.h` — pool infrastructure
-3. `swell-ini.cpp` — no dependencies; self-contained; easy to test
-4. `swell-gdi.cpp` — depends on Skia and pool only
-5. `swell-wnd.cpp` (partial) — HWND__ lifecycle, SendMessage, PostMessage queue, timers
-6. `swell-backend-headless.cpp` — lets you test window logic without GDK
-7. **`swell-appstub.cpp`** — SWELLAPI_GetFunc export (needed by REAPER to resolve fn pointers)
-8. **`swell-stubs.cpp`** — stubs for ALL remaining SWELL_API_DEFINE functions; every declared
-   function must have a definition or REAPER crashes with null pointer calls
-9. `swell-controls.cpp` — depends on wnd + gdi
-10. `swell-dlg.cpp` — depends on controls + wnd
-11. `swell-menu.cpp` — depends on wnd + gdi
-12. `swell-misc.cpp` — depends on everything above
-13. `swell-kb.cpp` — depends on wnd
-14. `swell-backend-gdk.cpp` — OS integration; depends on everything
-15. `swell-modstub.cpp` — thin; implement last
-16. `CMakeLists.txt` — wire it all together (C++17, Skia via pkg-config)
+1. `swell-internal.h` — all internal type definitions ✅
+2. `swell-gdi-internalpool.h` — pool infrastructure ✅ (merged into swell-gdi.cpp)
+3. `swell-ini.cpp` — no dependencies; self-contained; easy to test ✅
+4. `swell-gdi.cpp` — depends on Skia and pool only ✅ (real drawing, not stubs)
+5. `swell-wnd.cpp` (partial) — HWND__ lifecycle, SendMessage, PostMessage queue, timers ✅
+6. `swell-backend-headless.cpp` — lets you test window logic without GDK ✅
+7. **`swell-appstub.cpp`** — SWELLAPI_GetFunc export ✅
+8. **`swell-stubs.cpp`** — stubs for ALL remaining SWELL_API_DEFINE functions ✅
+9. **`swell-backend-sdl3.cpp`** — SDL3 OS backend for real windows, events, rendering ✅
+10. `swell-controls.cpp` — depends on wnd + gdi ← NEXT
+11. `swell-dlg.cpp` — depends on controls + wnd ← NEXT (needed for REAPER GUI)
+12. `swell-menu.cpp` — depends on wnd + gdi
+13. `swell-misc.cpp` — depends on everything above
+14. `swell-kb.cpp` — depends on wnd
+15. `swell-backend-gdk.cpp` — OS integration; depends on everything (deferred)
+16. `swell-modstub.cpp` — thin; implement last
+17. `CMakeLists.txt` — wire it all together ✅ (C++17, Skia, SDL3 via pkg-config)
 
 **Critical:** You MUST provide a definition for every function declared via
 `SWELL_API_DEFINE` in `swell-functions.h`. Even stub no-ops are sufficient.
@@ -541,14 +542,64 @@ scope, not the comment. Example: `SWELL_SetMenuDestination`.
 
 ---
 
-## What "Done" Looks Like for a Module
+## REAPER Test Results (2026-05-13)
 
-A module is done when:
-1. All functions listed in `swell-functions.h` for that module compile and link.
-2. Behavior matches the relevant spec doc section exactly, including edge cases.
-3. No undefined behavior (valgrind or ASAN clean).
-4. No references to original `../swell/` source in the implementation.
+REAPER was run against the SDL3 backend build (`libSwell.so` overlay via bwrap).
+Outcome: no crash, clean exit(0). All ~240 function pointers resolve.
 
----
+**Which functions REAPER actually calls at startup** (traced via fprintf injection):
 
-*End of AGENTS.md*
+```
+AddFontResourceEx, CreateEvent, GetAsyncKeyState, GetCurrentThreadId,
+GetDlgItem, GetModuleFileName, GetPrivateProfileInt, GetPrivateProfileString,
+GetPrivateProfileStruct, GetSysColor, GetTempPath, GetTickCount, LoadLibrary,
+LoadNamedImage, lstrcpyn, MessageBox, RegisterClipboardFormat, SetDlgItemText,
+SetThreadPriority, Sleep, SWELL_CreateDialog, SWELL_DialogBox,
+SWELL_EnableRightClickEmulate, SWELL_ExtendedAPI, SWELL_GenerateGUID,
+SWELL_initargs, SWELL_Internal_PostMessage_Init, SWELL_LoadMenu,
+SWELL_MessageQueue_Flush, SWELL_Register_Cursor_Resource,
+SWELL_RegisterCustomControlCreator, SWELL_RunEvents, SWELL_RunMessageLoop,
+WritePrivateProfileString, WritePrivateProfileStruct
+```
+
+**Why REAPER exits without GUI:** `SWELL_DialogBox` returns `-1` (stub),
+`SWELL_CreateDialog` returns `NULL` (stub). REAPER tries to create its main
+dialog, gets failure, falls through and exits normally. These are in
+`swell-stubs.cpp` — implementing `swell-dlg.cpp` and `swell-controls.cpp` is
+the next step.
+
+**SDL3 backend:** `SWELL_initargs` → SDL_Init(VIDEO) succeeds. `SWELL_RunEvents`
+processes 0 events because no windows are created (dialog creation is stubbed).
+`swell_oswindow_manage` is never reached — dialog creation would trigger it.
+
+## Session Findings
+
+### `#if 0` block in swell-types.h
+
+`swell-types.h:1434` wraps `SM_*` constants in `#if 0 // disabled until
+implemented`. These constants (SM_CYCAPTION, SM_CXBORDER, SM_CXDLGFRAME, etc.)
+are needed by `GetSystemMetrics`. Changed to `#if 1` when GetSystemMetrics was
+implemented. Check for similar `#if 0` blocks when adding new functionality.
+
+### Tracing function calls
+
+To see which functions REAPER calls at runtime (not just resolves), use a Python
+script to inject `fprintf(stderr, "SWELL_CALL: FuncName\n");` after every
+function's opening brace. Then run REAPER and filter:
+```bash
+./inject_traces.py
+cmake --build build-debug
+bwrap ... timeout 5 reaper 2>&1 | grep "SWELL_CALL:" | sed 's/.*SWELL_CALL: //' | sort -u
+```
+
+### Build config note
+
+CMake auto-detects SDL3 via pkg-config. If SDL3 is not found, falls back to
+headless backend. To force headless build even when SDL3 is installed, edit
+CMakeLists.txt or set `-DSDL3_FOUND=OFF` before the `pkg_check_modules` call.
+
+### swell-types.h is a kept header but may need small edits
+
+The `#if 0` guards on disabled constants are the only expected changes to
+kept headers. Always keep the API surface (types, constants, function
+signatures) unchanged.
