@@ -250,12 +250,13 @@ HDC GetDC(HWND hwnd)
     yoffs += p.rgrc[0].top - r.top;
   }
 
-  // hwnd's NC area was already handled in the pre-block above.
-  // Add hwnd's own position within its parent before walking up the
-  // ancestor chain (matching SWELL_internalGetWindowDC which includes
-  // the starting window's m_position on every iteration).
-  xoffs += hwnd->m_position.left;
-  yoffs += hwnd->m_position.top;
+  // Add hwnd's own position within its parent only if hwnd does NOT
+  // own the backing store (i.e. it's a child). For top-level windows
+  // m_position is the screen position, not a parent-relative offset.
+  if (!hwnd->m_backingstore && !hwnd->m_oswindow) {
+    xoffs += hwnd->m_position.left;
+    yoffs += hwnd->m_position.top;
+  }
 
   // Walk parent chain — skip hwnd to avoid double-counting NCCALCSIZE.
   HWND h = (HWND)hwnd->m_parent;
