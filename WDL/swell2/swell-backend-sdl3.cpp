@@ -129,7 +129,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   if (pw < 1) pw = w;
   if (ph < 1) ph = h;
   hwnd->m_backingstore = SkSurfaces::Raster(
-      SkImageInfo::MakeN32Premul(pw, ph));
+      SkImageInfo::MakeN32(pw, ph, kUnpremul_SkAlphaType));
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +177,7 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
     SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
     if (pw > 0 && ph > 0) {
       hwnd->m_backingstore = SkSurfaces::Raster(
-          SkImageInfo::MakeN32Premul(pw, ph));
+          SkImageInfo::MakeN32(pw, ph, kUnpremul_SkAlphaType));
     }
 
     // destroy stale texture
@@ -494,8 +494,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         sk_sp<SkSurface> bs = e->hwnd->m_backingstore;
         SkCanvas *canvas = bs ? bs->getCanvas() : nullptr;
         if (canvas) {
-          canvas->clear(SWELL_TO_SKCOLOR(g_swell_ctheme._3dface, 255));
-          SWELL_internalSkiaPaint(e->hwnd, canvas, 0, 0, false);
+          SWELL_internalSkiaPaint(e->hwnd, canvas, 0, 0, true);
           swell_oswindow_updatetoscreen(e->hwnd, NULL);
         }
       }
@@ -527,7 +526,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
           if (pw > 0 && ph > 0) {
             e->hwnd->m_backingstore = SkSurfaces::Raster(
-                SkImageInfo::MakeN32Premul(pw, ph));
+                SkImageInfo::MakeN32(pw, ph, kUnpremul_SkAlphaType));
           }
           if (e->texture) { SDL_DestroyTexture(e->texture); e->texture = NULL; }
 

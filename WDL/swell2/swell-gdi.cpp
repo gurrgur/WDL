@@ -185,7 +185,7 @@ HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
   if (!ctx) return nullptr;
 
-  ctx->surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(w, h));
+  ctx->surface = SkSurfaces::Raster(SkImageInfo::MakeN32(w, h, kUnpremul_SkAlphaType));
   if (ctx->surface) {
     ctx->canvas = ctx->surface->getCanvas();
     if (ctx->canvas) {
@@ -1428,6 +1428,8 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
 
     if (canvas) canvas->restoreToCount(saveCount);
   }
+
+  hwnd->m_child_invalidated = false;
 }
 
 // ---------------------------------------------------------------------------
