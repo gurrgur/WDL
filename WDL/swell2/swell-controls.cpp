@@ -2141,13 +2141,21 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       FillRect(hdc, &btnr, btnbg);
       DeleteObject(btnbg);
 
-      // draw arrow
+      // draw filled arrow
       int ax = btnr.left + btnw/2;
       int ay = (cr.top + cr.bottom)/2;
-      HPEN ap = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme.button_text);
-      HGDIOBJ oap = SelectObject(hdc, ap);
-      MoveToEx(hdc, ax-4, ay-2, NULL); LineTo(hdc, ax, ay+2); LineTo(hdc, ax+4, ay-2);
-      SelectObject(hdc, oap); DeleteObject(ap);
+      {
+        POINT arrow_pts[3] = {
+          { ax-4, ay-2 }, { ax, ay+2 }, { ax+4, ay-2 }
+        };
+        HBRUSH abr = CreateSolidBrush((COLORREF)g_swell_ctheme._3dshadow);
+        HGDIOBJ obr = SelectObject(hdc, abr);
+        HGDIOBJ openo = SelectObject(hdc, GetStockObject(NULL_PEN));
+        SWELL_Polygon(hdc, arrow_pts, 3);
+        SelectObject(hdc, openo);
+        SelectObject(hdc, obr);
+        DeleteObject(abr);
+      }
 
       // text
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);

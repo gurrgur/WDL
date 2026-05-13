@@ -482,6 +482,8 @@ int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
   HWND dlg = SWELL_CreateDialog(reshead, resid, parent, dlgproc, param);
   if (!dlg) return s_last_dlgret;
 
+  dlg->Retain(); // keep alive past EndDialog → DestroyWindow
+
   // Push modal state
   ModalDlgState ms;
   ms.hwnd    = dlg;
@@ -523,6 +525,7 @@ int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
   int ret = ms.ret;
   g_modal_stack = ms.prev;
 
+  dlg->Release();
   return ret;
 }
 

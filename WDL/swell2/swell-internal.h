@@ -150,6 +150,7 @@ struct HWND__ {
   HWND__(HWND__ *parent, int id, const RECT *r, const char *label,
          bool visible, WNDPROC proc);
   ~HWND__();
+  void Retain();
   void Release();
   int refcnt;
 };

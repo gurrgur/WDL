@@ -87,6 +87,11 @@ HWND__::~HWND__()
   }
 }
 
+void HWND__::Retain()
+{
+  refcnt++;
+}
+
 void HWND__::Release()
 {
   if (--refcnt <= 0) {
@@ -724,7 +729,7 @@ void SetFocus(HWND hwnd)
   hwnd->m_focused_child = NULL;
 
   HWND w = hwnd;
-  while (w->m_parent) {
+  while (w->m_parent && !w->m_oswindow) {
     w->m_parent->m_focused_child = w;
     w = (HWND)w->m_parent;
   }
@@ -732,7 +737,7 @@ void SetFocus(HWND hwnd)
   g_swell_focused_oswindow_hwnd = w;
   g_swell_focus = hwnd;
 
-  swell_oswindow_focus(hwnd);
+  swell_oswindow_focus(w);
 
   if (hwnd != oldFoc) {
     SendMessage(hwnd, WM_SETFOCUS, (WPARAM)oldFoc, 0);
@@ -976,7 +981,12 @@ LONG_PTR GetWindowLong(HWND hwnd, int idx)
     case GWL_USERDATA:    return hwnd->m_userdata;
     case GWL_WNDPROC:     return (LONG_PTR)hwnd->m_wndproc;
     case DWL_DLGPROC:     return (LONG_PTR)hwnd->m_dlgproc;
-    case GWL_STYLE:       return hwnd->m_style;
+    case GWL_STYLE: {
+      LONG_PTR ret = hwnd->m_style;
+      if (hwnd->m_visible) ret |= WS_VISIBLE;
+      else ret &= ~WS_VISIBLE;
+      return ret;
+    }
     case GWL_EXSTYLE:     return hwnd->m_exstyle;
     case GWL_HWNDPARENT:  return (LONG_PTR)(hwnd->m_owner);
     default:
@@ -1012,17 +1022,17 @@ LONG_PTR SetWindowLong(HWND hwnd, int idx, LONG_PTR val)
       return old;
     case GWL_STYLE: {
       DWORD oldStyle = hwnd->m_style;
-      hwnd->m_style = (DWORD)val;
-      SendMessage(hwnd, WM_STYLECHANGED, GWL_STYLE,
-                  (LPARAM)(new STYLESTRUCT{oldStyle, (DWORD)val}));
+      DWORD newStyle = (DWORD)val & ~WS_VISIBLE;
+      bool wantVis = ((DWORD)val & WS_VISIBLE) != 0;
+      if (wantVis != hwnd->m_visible)
+        ShowWindow(hwnd, wantVis ? SW_SHOWNA : SW_HIDE);
+      hwnd->m_style = newStyle;
       swell_oswindow_update_style(hwnd, oldStyle);
       return (LONG_PTR)oldStyle;
     }
     case GWL_EXSTYLE:
       old = hwnd->m_exstyle;
       hwnd->m_exstyle = (DWORD)val;
-      SendMessage(hwnd, WM_STYLECHANGED, GWL_EXSTYLE,
-                  (LPARAM)(new STYLESTRUCT{(DWORD)old, (DWORD)val}));
       return (LONG_PTR)old;
     case GWL_HWNDPARENT:
       old = (LONG_PTR)hwnd->m_owner;
