@@ -1013,7 +1013,9 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h,
   sk_sp<SkImage> img = srcSurf->makeImageSnapshot();
   if (!img) return;
 
-  SkRect srcRect = SkRect::MakeXYWH((float)xin, (float)yin, (float)w, (float)h);
+  int sx = xin + hdcIn->surface_offs.x;
+  int sy = yin + hdcIn->surface_offs.y;
+  SkRect srcRect = SkRect::MakeXYWH((float)sx, (float)sy, (float)w, (float)h);
   SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
 
   SkPaint paint;
@@ -1041,7 +1043,9 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
   sk_sp<SkImage> img = srcSurf->makeImageSnapshot();
   if (!img) return;
 
-  SkRect srcRect = SkRect::MakeXYWH((float)xin, (float)yin, (float)srcw, (float)srch);
+  int sx = xin + hdcIn->surface_offs.x;
+  int sy = yin + hdcIn->surface_offs.y;
+  SkRect srcRect = SkRect::MakeXYWH((float)sx, (float)sy, (float)srcw, (float)srch);
   SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
 
   SkPaint paint;
