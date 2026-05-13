@@ -585,6 +585,11 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       break;
     }
 
+    // ---- application events ----
+
+    case SDL_EVENT_QUIT:
+      break; // handled by WM_CLOSE cascade on window close
+
     // ---- keyboard events ----
 
     case SDL_EVENT_KEY_DOWN: {
@@ -601,12 +606,15 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       // some extended keys get the extended bit
       if (k & SDLK_EXTENDED_MASK) lp |= 0x1000000;
 
-      LRESULT handled = SendMessage(foc, WM_KEYDOWN, vk, lp);
+      // Alt/Ctrl/Shift/GUI keys send WM_SYSKEYDOWN (matching swell-experimental)
+      UINT kmsg = WM_KEYDOWN;
+      if (k == SDLK_LALT || k == SDLK_RALT ||
+          k == SDLK_LCTRL || k == SDLK_RCTRL ||
+          k == SDLK_LSHIFT || k == SDLK_RSHIFT ||
+          k == SDLK_LGUI || k == SDLK_RGUI)
+        kmsg = WM_SYSKEYDOWN;
 
-      // synthesize WM_CHAR for printable characters
-      if (handled == 0 && vk >= 0x20 && vk < 0x7F) {
-        SendMessage(foc, WM_CHAR, vk, lp);
-      }
+      SendMessage(foc, kmsg, vk, lp);
       break;
     }
 
@@ -620,7 +628,33 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 
       if (vk) {
         HWND foc = GetFocus();
-        if (foc) SendMessage(foc, WM_KEYUP, vk, lp);
+        if (foc) {
+          UINT kmsg = WM_KEYUP;
+          if (k == SDLK_LALT || k == SDLK_RALT ||
+              k == SDLK_LCTRL || k == SDLK_RCTRL ||
+              k == SDLK_LSHIFT || k == SDLK_RSHIFT ||
+              k == SDLK_LGUI || k == SDLK_RGUI)
+            kmsg = WM_SYSKEYUP;
+          SendMessage(foc, kmsg, vk, lp);
+        }
+      }
+      break;
+    }
+
+    // ---- text input (compose/IME/dead keys) ----
+
+    case SDL_EVENT_TEXT_INPUT: {
+      HWND foc = GetFocus();
+      if (!foc || !evt->text.text[0]) break;
+      const unsigned char *p = (const unsigned char *)evt->text.text;
+      while (*p) {
+        unsigned int c = 0;
+        if (*p < 0x80) c = *p++;
+        else if ((*p & 0xE0) == 0xC0 && p[1]) { c = ((*p & 0x1F) << 6) | (p[1] & 0x3F); p += 2; }
+        else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { c = ((*p & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); p += 3; }
+        else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) { c = ((*p & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F); p += 4; }
+        else p++;
+        if (c) SendMessage(foc, WM_CHAR, c, 0);
       }
       break;
     }
@@ -641,6 +675,12 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       HWND cap = GetCapture();
       HWND target = cap;
       if (!target && e && e->hwnd) {
+        // Activate window on mousedown (matching swell-experimental)
+        if (down) {
+          SendMessage(e->hwnd, WM_MOUSEACTIVATE, 0, 0);
+          swell_oswindow_focus(e->hwnd);
+        }
+
         target = e->hwnd;
         HWND child = hittest_child(e->hwnd, mx, my);
         if (child) {
@@ -698,6 +738,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       }
       if (target) {
         SendMessage(target, WM_MOUSEMOVE, 0, MAKELPARAM((int)mx, (int)my));
+        SendMessage(target, WM_SETCURSOR, (WPARAM)target, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
       }
       break;
     }

@@ -1587,6 +1587,10 @@ BOOL GetFileTime(int filedes, FILETIME *lpCreationTime,
 
 void SWELL_RunMessageLoop()
 {
+  // Process events first — they may resize/invalidate windows
+  SWELL_RunEvents();
+
+  // Flush posted messages (matches swell-experimental ordering)
   SWELL_MessageQueue_Flush();
 
   // Paint all dirty top-level windows (deferred from InvalidateRect calls)
@@ -1602,6 +1606,5 @@ void SWELL_RunMessageLoop()
     w = w->m_next;
   }
 
-  SWELL_RunEvents();
   fireTimers();
 }
