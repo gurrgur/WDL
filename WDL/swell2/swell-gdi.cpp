@@ -301,13 +301,15 @@ HDC GetDC(HWND hwnd)
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
   if (!ctx) return nullptr;
 
-  ctx->surface.reset();
-
   if (h && h->m_backingstore)
+  {
+    ctx->surface = h->m_backingstore;
     ctx->canvas = h->m_backingstore->getCanvas();
+  }
   else
   {
     sk_sp<SkSurface> bs = hwnd->m_backingstore;
+    ctx->surface = bs;
     ctx->canvas = bs ? bs->getCanvas() : nullptr;
   }
 
@@ -1300,9 +1302,23 @@ void *SWELL_GetCtxFrameBuffer(HDC ctx)
   HDC__ *ct = (HDC__*)ctx;
   if (!ct->surface) return nullptr;
   SkPixmap pm;
-  if (ct->surface->peekPixels(&pm))
-    return const_cast<void*>(pm.addr());
-  return nullptr;
+  if (!ct->surface->peekPixels(&pm)) return nullptr;
+
+  void *ptr = pm.writable_addr();
+  if (!ptr) return nullptr;
+
+  // Account for canvas translation so returned pointer maps to
+  // window client area origin (0,0) in drawing coordinates.
+  if (ct->canvas) {
+    SkM44 m = ct->canvas->getLocalToDevice();
+    float tx = m.rc(0,3), ty = m.rc(1,3);
+    int ix = (int)tx, iy = (int)ty;
+    if (ix >= 0 && ix < pm.width())
+      ptr = (uint8_t*)ptr + ix * 4;
+    if (iy >= 0 && iy < pm.height())
+      ptr = (uint8_t*)ptr + iy * (int)pm.rowBytes();
+  }
+  return ptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -1347,6 +1363,8 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     swell_gdpLocalContext ctx_local;
     memset(&ctx_local, 0, sizeof(ctx_local));
     ctx_local.ctx.canvas = canvas;
+    if (canvas)
+      ctx_local.ctx.surface = sk_ref_sp(canvas->getSurface());
     ctx_local.ctx.dirty_rect_valid = false;
     ctx_local.ctx.surface_offs.x = bmout_xpos;
     ctx_local.ctx.surface_offs.y = bmout_ypos;
