@@ -1965,6 +1965,7 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           if (strcmp(st->items.Get(mid)->desc, rec->desc) <= 0) lo = mid+1;
           else hi = mid;
         }
+        if (st->selidx >= lo) st->selidx++;
         st->items.Insert(lo, rec);
         InvalidateRect(hwnd, NULL, FALSE);
         return lo;
@@ -1981,6 +1982,7 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       __SWELL_ComboBoxInternalState_rec *rec = new __SWELL_ComboBoxInternalState_rec();
       rec->desc = strdup(s ? s : "");
       if (pos < 0 || pos > st->items.GetSize()) pos = st->items.GetSize();
+      if (st->selidx >= pos) st->selidx++;
       st->items.Insert(pos, rec);
       InvalidateRect(hwnd, NULL, FALSE);
       return pos;
@@ -1991,7 +1993,12 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int pos = (int)wParam;
       if (pos < 0 || pos >= st->items.GetSize()) return CB_ERR;
       st->items.Delete(pos, true);
-      if (st->selidx >= st->items.GetSize()) st->selidx = st->items.GetSize() - 1;
+      if (pos == st->selidx || st->selidx >= st->items.GetSize())
+      {
+        st->selidx = -1;
+        hwnd->m_title.Set("");
+      }
+      else if (pos < st->selidx) st->selidx--;
       InvalidateRect(hwnd, NULL, FALSE);
       return st->items.GetSize();
     }
