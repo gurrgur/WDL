@@ -1134,12 +1134,11 @@ void ClientToScreen(HWND hwnd, POINT *p)
   // walk up parent chain accumulating offsets
   HWND w = hwnd;
   while (w) {
-    // account for NCCALCSIZE
     RECT r = w->m_position;
     NCCALCSIZE_PARAMS ncp = {{{r.left, r.top, r.right, r.bottom}}};
     SendMessage(w, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
-    p->x += r.left;
-    p->y += r.top;
+    p->x += ncp.rgrc[0].left;
+    p->y += ncp.rgrc[0].top;
 
     w = (HWND)w->m_parent;
   }
@@ -1152,8 +1151,10 @@ void ScreenToClient(HWND hwnd, POINT *p)
   HWND w = hwnd;
   while (w) {
     RECT r = w->m_position;
-    p->x -= r.left;
-    p->y -= r.top;
+    NCCALCSIZE_PARAMS ncp = {{{r.left, r.top, r.right, r.bottom}}};
+    SendMessage(w, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
+    p->x -= ncp.rgrc[0].left;
+    p->y -= ncp.rgrc[0].top;
     w = (HWND)w->m_parent;
   }
 }
