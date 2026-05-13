@@ -1,0 +1,225 @@
+# use make 
+# or make NOGDK=1
+# or make DEBUG=1 
+# etc
+
+ARCH := $(shell uname -m)
+UNAME_S := $(shell uname -s)
+
+ifeq ($(ARCH), aarch64)
+  ifeq ($(shell $(CC) -dumpmachine | cut -f 1 -d -), arm)
+    # helper for armv7l userspace on aarch64 cpu
+    ARCH := armv7l
+  endif
+endif
+
+PKG_CONFIG = pkg-config
+
+COMPILER=GCC
+
+CFLAGS = -pipe -fvisibility=hidden -fno-math-errno -fPIC -DPIC -Wall -Wshadow -Wno-unused-function -Wno-multichar -Wtype-limits -Wno-unused-value -fstrict-aliasing
+
+CFLAGS += -DSWELL_MAKING_DYLIB
+
+ifeq ($(UNAME_S),Darwin)
+  CFLAGS += -Wno-unused-private-field -DSWELL_FORCE_GENERIC
+  DLL_EXT=.dylib
+  COMPILER=CLANG
+else
+  DLL_EXT=.so
+  CFLAGS += -D_FILE_OFFSET_BITS=64
+endif
+
+ifeq ($(COMPILER),CLANG)
+  CC = clang
+  CXX = clang++
+endif
+
+ifeq ($(COMPILER),ICC)
+  CC = icc
+  CXX = icpc
+  CFLAGS += -D__PURE_SYS_C99_HEADERS__
+else
+  CFLAGS +=  -Wno-unused-result
+endif
+
+ifeq ($(COMPILER),GCC)
+  GCC_VER := $(shell $(CXX) --version|head -n 1| sed 's/.* \([0-9][0-9]*\)[.].*/\1/' )
+  GCC_GT_11 := $(shell [ "$(GCC_VER)" -gt 11 ] && echo true )
+  ifeq ($(GCC_GT_11),true)
+    # false positive in gcc 12/13
+    CFLAGS += -Wno-dangling-pointer
+  endif
+endif
+
+ifdef DISALLOW_WARNINGS
+  CFLAGS += -Werror
+endif
+ifndef DEPRECATED_WARNINGS
+  CFLAGS +=  -Wno-deprecated-declarations
+endif
+
+ifeq ($(ARCH),arm64)
+  CFLAGS += -fsigned-char
+else
+  ifneq ($(filter arm%,$(ARCH)),)
+    CFLAGS += -fsigned-char -marm
+  endif
+  ifeq ($(ARCH),aarch64)
+    CFLAGS += -fsigned-char
+  endif
+endif
+
+ifeq ($(COMPILER),CLANG)
+  CFLAGS += -Wbitwise-instead-of-logical
+endif
+
+ifdef DEBUG
+CFLAGS += -O0 -g -D_DEBUG
+else
+CFLAGS += -O2 -DNDEBUG
+  ifdef DEBUG_INFO
+    CFLAGS += -g
+  else
+    ifneq ($(COMPILER),CLANG)
+      CFLAGS += -s
+    endif
+  endif
+endif
+
+LINKEXTRA =  -lpthread -ldl 
+
+
+EXTRA_OBJS = 
+
+
+
+
+vpath %.cpp .. ../lice 
+
+SWELL_OBJS = swell.o swell-ini.o swell-miscdlg-generic.o swell-wnd-generic.o \
+             swell-menu-generic.o swell-kb-generic.o swell-dlg-generic.o \
+             swell-gdi-generic.o swell-misc-generic.o swell-gdi-lice.o \
+             swell-generic-headless.o swell-generic-gdk.o \
+             swell-appstub-generic.o swell-modstub-generic.o 
+
+LICE_OBJS = lice.o  lice_arc.o lice_colorspace.o lice_line.o lice_text.o \
+            lice_textnew.o lice_ico.o lice_bmp.o
+
+OBJS = $(SWELL_OBJS)
+
+ifdef USESDL
+  NOGDK=1
+  CFLAGS += -DSWELL_TARGET_SDL -DSWELL_LICE_GDI $(shell $(PKG_CONFIG) --cflags sdl2)
+  LINKEXTRA += $(shell $(PKG_CONFIG) --libs sdl2) -lX11 -lGL -lSDL2_image
+  SWELL_OBJS += swell-generic-sdl.o
+  OBJS += $(LICE_OBJS)
+
+  ifdef SKIA
+    SKIA_CFLAGS ?= $(if $(SKIA_ROOT),-I$(SKIA_ROOT),$(shell $(PKG_CONFIG) --cflags skia 2>/dev/null))
+    SKIA_LIBS ?= $(if $(SKIA_LIBDIR),-L$(SKIA_LIBDIR) -lskia,$(shell $(PKG_CONFIG) --libs skia 2>/dev/null))
+    ifeq ($(strip $(SKIA_CFLAGS)),)
+      $(error SKIA=1 requires Skia headers. Set SKIA_CFLAGS or SKIA_ROOT to the Skia checkout/install root)
+    endif
+    CFLAGS += -DSWELL_SKIA_GDI $(SKIA_CFLAGS)
+    LINKEXTRA += $(SKIA_LIBS)
+    OBJS += swell-gdi-skia.o
+  endif
+
+  ifndef NOFREETYPE
+    CFLAGS += -DSWELL_FREETYPE $(shell $(PKG_CONFIG) --cflags freetype2)
+    ifdef FREETYPE_LOAD_FLAGS
+      CFLAGS += -DSWELL_FREETYPE_LOAD_FLAGS=$(FREETYPE_LOAD_FLAGS)
+    endif
+    LINKEXTRA += $(shell $(PKG_CONFIG) --libs freetype2)
+    ifndef NOFONTCONFIG
+      CFLAGS += -DSWELL_FONTCONFIG
+      LINKEXTRA += -lfontconfig
+    endif
+  endif
+else ifndef NOGDK
+  ifdef GDK2
+    CFLAGS += -DSWELL_TARGET_GDK=2 $(shell $(PKG_CONFIG) --cflags gdk-2.0)
+    ifndef PRELOAD_GDK
+      LINKEXTRA += $(shell $(PKG_CONFIG) --libs gdk-2.0)
+    else
+      LINKEXTRA += -lX11 -lXi
+      CFLAGS += -DSWELL_PRELOAD="libgdk-x11-2.0.so.0"
+    endif
+  else
+    ifdef SWELL_SUPPORT_GTK
+      CFLAGS += -DSWELL_TARGET_GDK=3 $(shell $(PKG_CONFIG) --cflags gtk+-3.0) -DSWELL_SUPPORT_GTK
+    else
+      CFLAGS += -DSWELL_TARGET_GDK=3 $(shell $(PKG_CONFIG) --cflags gdk-3.0)
+    endif
+    ifndef PRELOAD_GDK
+      ifdef SWELL_SUPPORT_GTK
+        LINKEXTRA += $(shell $(PKG_CONFIG) --libs gtk+-3.0)
+      else
+        LINKEXTRA += $(shell $(PKG_CONFIG) --libs gdk-3.0)
+      endif
+    else
+      LINKEXTRA += -lX11 -lXi
+      ifdef SWELL_SUPPORT_GTK
+        CFLAGS += -DSWELL_PRELOAD="libgtk+-3.so.0"
+      else
+        CFLAGS += -DSWELL_PRELOAD="libgdk-3.so.0"
+      endif
+    endif
+  endif
+  CFLAGS += -DSWELL_LICE_GDI
+  OBJS += $(LICE_OBJS)
+
+  ifndef NOFREETYPE
+    CFLAGS += -DSWELL_FREETYPE $(shell $(PKG_CONFIG) --cflags freetype2)
+    ifdef FREETYPE_LOAD_FLAGS
+      CFLAGS += -DSWELL_FREETYPE_LOAD_FLAGS=$(FREETYPE_LOAD_FLAGS)
+    endif
+    ifndef PRELOAD_GDK
+      LINKEXTRA += $(shell $(PKG_CONFIG) --libs freetype2)
+    endif
+    ifndef NOFONTCONFIG
+      CFLAGS += -DSWELL_FONTCONFIG
+      LINKEXTRA += -lfontconfig
+    endif
+  endif
+  LINKEXTRA += -lGL
+  ifdef PRELOAD_GDK
+    CFLAGS += -Wl,-z,lazy
+  endif
+endif
+
+CXXFLAGS = $(CFLAGS)
+
+default: libSwell$(DLL_EXT)
+
+.PHONY: clean 
+
+SWELL_HEADERS=swell-dlggen.h swell-gdi-internalpool.h swell-gdi-skia.h swell-menugen.h swell-types.h swell-functions.h swell-internal.h
+
+swell.o: $(SWELL_HEADERS)
+swell-ini.o: $(SWELL_HEADERS)
+swell-wnd-generic.o: $(SWELL_HEADERS)
+swell-dlg-generic.o: $(SWELL_HEADERS)
+swell-menu-generic.o: $(SWELL_HEADERS)
+swell-misc-generic.o: $(SWELL_HEADERS)
+swell-gdi-generic.o: $(SWELL_HEADERS)
+swell-gdi-lice.o: $(SWELL_HEADERS)
+swell-gdi-skia.o: $(SWELL_HEADERS)
+swell-kb-generic.o: $(SWELL_HEADERS)
+swell-miscdlg-generic.o: $(SWELL_HEADERS)
+swell-modstub-generic.o: $(SWELL_HEADERS)
+swell-appstub-generic.o: $(SWELL_HEADERS)
+
+libSwell$(DLL_EXT): $(OBJS)
+	$(CXX) -shared -o $@ $(CFLAGS) $(LFLAGS) $^ $(LINKEXTRA)
+
+test: $(OBJS) test.o
+	$(CXX) -o test $(CFLAGS) $(LFLAGS) $^ $(LINKEXTRA)
+
+libSwell.colortheme: swell-gdi-generic.cpp $(SWELL_HEADERS)
+	$(CXX) $(CFLAGS) -o make-theme -DSWELL__MAKE_THEME swell-gdi-generic.cpp -lpthread
+	./make-theme > libSwell.colortheme
+
+clean: 
+	-rm -f -- $(OBJS) libSwell$(DLL_EXT) make-theme libSwell.colortheme

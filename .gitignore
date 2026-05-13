@@ -1,3 +1,6 @@
 WDL/swell2/build/
 WDL/swell2/build-*/
 WDL/swell/*.so
+WDL/swell/*.o
+WDL/swell-experimental/*.so
+WDL/swell-experimental/*.o
