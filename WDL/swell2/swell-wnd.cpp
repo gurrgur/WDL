@@ -1312,7 +1312,7 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
 
     if (!IntersectRect(&rect, &rect, &ncrect)) return FALSE;
 
-    if (h->m_oswindow || h->m_backingstore) break;
+    if (h->m_oswindow) break;
 
     h = (HWND)h->m_parent;
     if (!h) return FALSE;

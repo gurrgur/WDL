@@ -277,12 +277,12 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       RECT cr; GetClientRect(hwnd, &cr);
       DWORD style = hwnd->m_style;
-      DWORD bstyle = style & 0xFF;
+      DWORD bstyle = style & 0x0F; // bottom nibble = Win32 button type
       bool enabled = IsWindowEnabled(hwnd);
       bool focused = (GetFocus() == hwnd);
       bool pressed = (GetCapture() == hwnd);
 
-      if (bstyle == BS_GROUPBOX) {
+      if (style & BS_GROUPBOX) {
         // Draw a named border
         HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme._3dface);
         FillRect(hdc, &cr, bg);
@@ -402,7 +402,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
       } else {
         // Push button
-        bool isdef = (bstyle == BS_DEFPUSHBUTTON);
+        bool isdef = (style & BS_DEFPUSHBUTTON) != 0;
 
         HBRUSH bg = CreateSolidBrush(pressed ? (COLORREF)g_swell_ctheme.button_shadow
                                              : bgcol);

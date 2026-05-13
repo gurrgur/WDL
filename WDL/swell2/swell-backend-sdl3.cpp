@@ -492,7 +492,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 
     // ---- window events ----
 
-    case SDL_EVENT_WINDOW_EXPOSED: {
+    case SDL_EVENT_WINDOW_EXPOSED:
+    case SDL_EVENT_WINDOW_SHOWN: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2) {
         sk_sp<SkSurface> bs = e->hwnd->m_backingstore;
@@ -547,6 +548,32 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           if (e->texture) { SDL_DestroyTexture(e->texture); e->texture = NULL; }
 
           SendMessage(e->hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(nw, nh));
+        }
+      }
+      break;
+    }
+
+    case SDL_EVENT_WINDOW_MAXIMIZED:
+    case SDL_EVENT_WINDOW_RESTORED: {
+      SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
+      if (e && e->hwnd) {
+        int nx = 0, ny = 0;
+        SDL_GetWindowPosition(e->window, &nx, &ny);
+        int nw = 0, nh = 0;
+        SDL_GetWindowSize(e->window, &nw, &nh);
+        e->hwnd->m_position.left = nx;
+        e->hwnd->m_position.top = ny;
+        e->hwnd->m_position.right = nx + nw;
+        e->hwnd->m_position.bottom = ny + nh;
+        UINT szFlag = (evt->type == SDL_EVENT_WINDOW_MAXIMIZED)
+                      ? SIZE_MAXIMIZED : SIZE_RESTORED;
+        SendMessage(e->hwnd, WM_SIZE, szFlag, MAKELPARAM(nw, nh));
+        // trigger repaint
+        sk_sp<SkSurface> bs = e->hwnd->m_backingstore;
+        SkCanvas *canvas = bs ? bs->getCanvas() : nullptr;
+        if (canvas) {
+          SWELL_internalSkiaPaint(e->hwnd, canvas, 0, 0, true);
+          swell_oswindow_updatetoscreen(e->hwnd, NULL);
         }
       }
       break;
@@ -685,11 +712,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       HWND cap = GetCapture();
       HWND target = cap;
       if (!target && e && e->hwnd) {
-        // Activate window on mousedown (matching swell-experimental)
-        if (down) {
-          SendMessage(e->hwnd, WM_MOUSEACTIVATE, 0, 0);
+        if (down)
           swell_oswindow_focus(e->hwnd);
-        }
 
         target = e->hwnd;
         HWND child = hittest_child(e->hwnd, mx, my);
@@ -698,6 +722,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           my -= child->m_position.top;
           target = child;
         }
+
+        if (down && IsWindowEnabled(target))
+          SendMessage(target, WM_MOUSEACTIVATE, 0, 0);
       }
       if (!target) break;
 
