@@ -1004,7 +1004,12 @@ void SWELL_FinishDragDrop()
 
 BOOL EnumDisplayMonitors(HDC hdc, const LPRECT r, MONITORENUMPROC proc, LPARAM lp)
 {
-  return FALSE;
+  (void)hdc; (void)r;
+  if (!proc) return FALSE;
+  RECT rc = {0, 0, 1920, 1080};
+  HMONITOR hmon = (HMONITOR)1;
+  proc(hmon, (HDC)NULL, &rc, lp);
+  return TRUE;
 }
 
 BOOL GetMonitorInfo(HMONITOR hMonitor, void *info)
@@ -1014,7 +1019,31 @@ BOOL GetMonitorInfo(HMONITOR hMonitor, void *info)
 
 int GetSystemMetrics(int idx)
 {
-  return 0;
+  switch (idx) {
+    case SM_CXSCREEN: return 1920;
+    case SM_CYSCREEN: return 1080;
+    case SM_CXVSCROLL: return 16;
+    case SM_CYHSCROLL: return 16;
+    case SM_CYCAPTION: return 23;
+    case SM_CXBORDER: return 1;
+    case SM_CYBORDER: return 1;
+    case SM_CXDLGFRAME: return 3;
+    case SM_CYDLGFRAME: return 3;
+    case SM_CXICON: return 32;
+    case SM_CYICON: return 32;
+    case SM_CXCURSOR: return 32;
+    case SM_CYCURSOR: return 32;
+    case SM_CYMENU: return 20;
+    case SM_CXFULLSCREEN: return 1920;
+    case SM_CYFULLSCREEN: return 1080;
+    case SM_CXMIN: return 120;
+    case SM_CYMIN: return 40;
+    case SM_CXSIZE: return 120;
+    case SM_CYSIZE: return 40;
+    case SM_CXFRAME: return 4;
+    case SM_CYFRAME: return 4;
+    default: return 0;
+  }
 }
 
 // ============================================================================

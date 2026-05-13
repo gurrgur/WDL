@@ -1431,7 +1431,7 @@ extern struct SWELL_MenuResourceIndex *SWELL_curmodule_menuresource_head;
 #define SM_CXHSCROLL            21
 
 
-#if 0 // these are disabled until implemented
+#if 1 // enabled — swell2 GetSystemMetrics now implemented
 
 #define SM_CYCAPTION            4
 #define SM_CXBORDER             5
