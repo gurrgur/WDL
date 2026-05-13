@@ -689,26 +689,40 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       RECT tr = { cr.left+2, cr.top+1, cr.right-2, cr.bottom-1 };
 
-      // selection highlight
-      if (st && st->sel1 >= 0 && st->sel1 != st->sel2) {
+      // Draw normal text first (TRANSPARENT) — selection overpaints below
+      if (!st || st->sel1 < 0 || st->sel1 == st->sel2)
+      {
+        SetTextColor(hdc, enabled ? (COLORREF)g_swell_ctheme.edit_text
+                                  : (COLORREF)g_swell_ctheme.button_text_disabled);
+        SetBkMode(hdc, TRANSPARENT);
+        SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+      }
+      else
+      {
         int s1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
         int s2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
         int tlen = (int)strlen(txt);
         if (s1 > tlen) s1 = tlen;
         if (s2 > tlen) s2 = tlen;
 
-        // draw pre-sel, sel, post-sel
-        SetTextColor(hdc, focused ? (COLORREF)g_swell_ctheme.edit_text_sel
-                                  : (COLORREF)g_swell_ctheme.edit_text);
-        SetBkMode(hdc, OPAQUE);
-        SetBkColor(hdc, focused ? (COLORREF)g_swell_ctheme.edit_bg_sel
-                                 : (COLORREF)g_swell_ctheme.edit_bg);
-        SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-      } else {
+        // 1) Draw normal text (TRANSPARENT)
         SetTextColor(hdc, enabled ? (COLORREF)g_swell_ctheme.edit_text
                                   : (COLORREF)g_swell_ctheme.button_text_disabled);
         SetBkMode(hdc, TRANSPARENT);
         SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        // 2) Measure pre-selection width, overpaint selection
+        if (s2 > s1)
+        {
+          RECT measR = { 0, 0, 0, 0 };
+          SWELL_DrawText(hdc, txt, s1, &measR, DT_CALCRECT | DT_LEFT | DT_SINGLELINE);
+          RECT selR = tr;
+          selR.left += measR.right;
+          SetBkMode(hdc, OPAQUE);
+          SetBkColor(hdc, (COLORREF)g_swell_ctheme.edit_bg_sel);
+          SetTextColor(hdc, (COLORREF)g_swell_ctheme.edit_text_sel);
+          SWELL_DrawText(hdc, txt + s1, s2 - s1, &selR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
       }
 
       // cursor
