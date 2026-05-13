@@ -18,7 +18,11 @@
 #include <core/SkRRect.h>
 #include <core/SkFont.h>
 #include <core/SkFontMetrics.h>
+#include <core/SkTypeface.h>
+#include <core/SkFontMgr.h>
 #include <core/SkBlendMode.h>
+#include <ports/SkFontMgr_fontconfig.h>
+#include <ports/SkFontScanner_FreeType.h>
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -997,6 +1001,19 @@ void SetBkMode(HDC ctx, int col)
 // Text
 // ---------------------------------------------------------------------------
 
+static sk_sp<SkTypeface> swell_get_typeface(const char *family)
+{
+  static sk_sp<SkFontMgr> s_fontmgr;
+  if (!s_fontmgr) {
+    s_fontmgr = SkFontMgr_New_FontConfig(nullptr,
+        SkFontScanner_Make_FreeType());
+  }
+  if (!s_fontmgr || !family || !family[0]) return nullptr;
+  sk_sp<SkTypeface> tf = s_fontmgr->matchFamilyStyle(family, SkFontStyle::Normal());
+  if (!tf) tf = s_fontmgr->legacyMakeTypeface(family, SkFontStyle::Normal());
+  return tf;
+}
+
 int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 {
   fprintf(stderr, "SWELL_CALL: SWELL_DrawText\n");
@@ -1013,16 +1030,26 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
     LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
     if (lf) {
       fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
+      if (lf->lfFaceName[0]) {
+        font.setTypeface(swell_get_typeface(lf->lfFaceName));
+      }
     }
   }
   font.setSize(fontSize);
+
+  SkFontMetrics fm;
+  font.getMetrics(&fm);
+  float ascent  = -fm.fAscent;
+  float descent = fm.fDescent;
+  float lineht  = ascent + descent;
 
   // Measure text
   SkRect bounds;
   font.measureText(buf, len, SkTextEncoding::kUTF8, &bounds);
 
   int textW = (int)(bounds.width() + 0.5f);
-  int textH = (int)(bounds.height() + 0.5f);
+  int textH = (int)(lineht + 0.5f);
+  if (textH < 1) textH = (int)(fontSize + 0.5f);
 
   if (align & DT_CALCRECT) {
     r->right = r->left + textW;
@@ -1032,9 +1059,9 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 
   if (!ctx->canvas) return textH;
 
-  // Determine text position
+  // Determine text position (Skia drawString y = baseline)
   float x = (float)r->left;
-  float y = (float)r->top;
+  float y = (float)r->top + ascent;
 
   if (align & DT_CENTER)
     x = (float)(r->left + (r->right - r->left - textW) / 2);
@@ -1042,7 +1069,7 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
     x = (float)r->left; // DT_LEFT is 0; treat absent as left
 
   if (align & DT_VCENTER)
-    y = (float)(r->top + (r->bottom - r->top - textH) / 2);
+    y = (float)(r->top + (r->bottom - r->top - textH) / 2 + ascent);
 
   // Draw background if opaque
   if (ctx->curbkmode == OPAQUE) {
@@ -1075,14 +1102,17 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
   memset(tm, 0, sizeof(TEXTMETRIC));
 
   float fontSize = 12.0f;
+  const char *faceName = nullptr;
   if (HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
     LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
     if (lf) {
       fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
+      if (lf->lfFaceName[0]) faceName = lf->lfFaceName;
     }
   }
 
   SkFont font;
+  if (faceName) font.setTypeface(swell_get_typeface(faceName));
   font.setSize(fontSize);
 
   SkFontMetrics metrics;
