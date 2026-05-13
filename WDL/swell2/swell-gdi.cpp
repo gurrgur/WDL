@@ -246,21 +246,87 @@ HDC GetDC(HWND hwnd)
   fprintf(stderr, "SWELL_CALL: GetDC\n");
   if (!hwnd) return nullptr;
 
+  // Walk up to find ancestor with backing store (matching original SWELL_internalGetWindowDC).
+  // First: apply NCCALCSIZE on the starting window to get client dimensions.
+  int xoffs = 0, yoffs = 0;
+  int wndw = hwnd->m_position.right - hwnd->m_position.left;
+  int wndh = hwnd->m_position.bottom - hwnd->m_position.top;
+
+  {
+    RECT r = { 0, 0, wndw, wndh };
+    NCCALCSIZE_PARAMS p = {{{ r }}};
+    SendMessage(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&p);
+    wndw = p.rgrc[0].right - p.rgrc[0].left;
+    wndh = p.rgrc[0].bottom - p.rgrc[0].top;
+    xoffs += p.rgrc[0].left - r.left;
+    yoffs += p.rgrc[0].top - r.top;
+  }
+
+  HWND h = hwnd;
+  int ltrim = 0, ttrim = 0, rtrim = 0, btrim = 0;
+
+  for (;;)
+  {
+    if (h->m_backingstore || h->m_oswindow || !h->m_parent) break;
+
+    xoffs += h->m_position.left;
+    yoffs += h->m_position.top;
+
+    RECT r = h->m_position;
+    NCCALCSIZE_PARAMS p = {{{ 0, 0, r.right - r.left, r.bottom - r.top }}};
+    SendMessage(h, WM_NCCALCSIZE, FALSE, (LPARAM)&p);
+    yoffs += p.rgrc[0].top;
+    xoffs += p.rgrc[0].left;
+
+    ltrim = (ltrim > -xoffs) ? ltrim : -xoffs;
+    ttrim = (ttrim > -yoffs) ? ttrim : -yoffs;
+    rtrim = (rtrim > (xoffs + wndw - (h->m_position.right - h->m_position.left))) ?
+            rtrim : (xoffs + wndw - (h->m_position.right - h->m_position.left));
+    btrim = (btrim > (yoffs + wndh - (h->m_position.bottom - h->m_position.top))) ?
+            btrim : (yoffs + wndh - (h->m_position.bottom - h->m_position.top));
+
+    h = (HWND)h->m_parent;
+  }
+
+  // Also apply NCCALCSIZE to the backing store owner if different from starting window
+  if (h != hwnd && h->m_wndproc)
+  {
+    RECT r = h->m_position;
+    NCCALCSIZE_PARAMS p = {{{ 0, 0, r.right - r.left, r.bottom - r.top }}};
+    h->m_wndproc(h, WM_NCCALCSIZE, FALSE, (LPARAM)&p);
+    yoffs += p.rgrc[0].top;
+    xoffs += p.rgrc[0].left;
+  }
+
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
   if (!ctx) return nullptr;
 
-  sk_sp<SkSurface> bs = hwnd->m_backingstore;
-  if (bs) {
-    ctx->canvas = bs->getCanvas();
-  } else {
-    ctx->canvas = nullptr;
-  }
-  // surface is NOT owned — GetDC borrows from the window
   ctx->surface.reset();
-  ctx->surface_offs.x = 0;
-  ctx->surface_offs.y = 0;
+
+  if (h && h->m_backingstore)
+    ctx->canvas = h->m_backingstore->getCanvas();
+  else
+  {
+    sk_sp<SkSurface> bs = hwnd->m_backingstore;
+    ctx->canvas = bs ? bs->getCanvas() : nullptr;
+  }
+
+  if (ctx->canvas)
+  {
+    ctx->clip_save_count = 0;
+    ctx->getdc_savecount = ctx->canvas->save();
+
+    SkRect clipr = SkRect::MakeXYWH((float)ltrim, (float)ttrim,
+        (float)(wndw - ltrim - rtrim), (float)(wndh - ttrim - btrim));
+    if (clipr.width() > 0.0f && clipr.height() > 0.0f)
+      ctx->canvas->clipRect(clipr);
+
+    ctx->canvas->translate((float)xoffs, (float)yoffs);
+  }
+
+  ctx->surface_offs.x = -xoffs;
+  ctx->surface_offs.y = -yoffs;
   ctx->dirty_rect_valid = false;
-  ctx->clip_save_count = 0;
   ctx->curpen = nullptr;
   ctx->curbrush = nullptr;
   ctx->curfont = hwnd->m_font;
@@ -282,8 +348,32 @@ HDC GetWindowDC(HWND hwnd)
 void ReleaseDC(HWND hwnd, HDC ctx)
 {
   fprintf(stderr, "SWELL_CALL: ReleaseDC\n");
-  (void)hwnd;
   if (!ctx || !HDC_VALID(ctx)) return;
+
+  // If not inside a WM_PAINT cycle, blit the dirty region to screen
+  if (hwnd && !hwnd->m_paintctx && ctx->dirty_rect_valid)
+  {
+    RECT r = ctx->dirty_rect;
+    r.left   += ctx->surface_offs.x;
+    r.top    += ctx->surface_offs.y;
+    r.right  += ctx->surface_offs.x;
+    r.bottom += ctx->surface_offs.y;
+
+    // Find the window that owns the backing store
+    HWND par = hwnd;
+    while (par && !par->m_backingstore) par = (HWND)par->m_parent;
+    if (par && r.top < r.bottom && r.left < r.right)
+      swell_oswindow_updatetoscreen(par, &r);
+  }
+
+  // Restore canvas to pre-GetDC state
+  if (ctx->canvas && ctx->getdc_savecount > 0)
+  {
+    ctx->canvas->restoreToCount(ctx->getdc_savecount);
+    ctx->getdc_savecount = 0;
+    ctx->clip_save_count = 0;
+  }
+
   ctx->surface.reset();
   ctx->canvas = nullptr;
   SWELL_GDP_CTX_DELETE(ctx);

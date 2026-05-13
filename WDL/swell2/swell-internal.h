@@ -76,6 +76,7 @@ struct HDC__ {
   bool dirty_rect_valid;
 
   int clip_save_count;
+  int getdc_savecount;
 
   HGDIOBJ__ *curpen;
   HGDIOBJ__ *curbrush;

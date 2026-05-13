@@ -1329,20 +1329,53 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
   fprintf(stderr, "SWELL_CALL: InvalidateRect\n");
   if (!hwnd || !hwnd->m_visible) return FALSE;
 
+  // Convert r to top-level window's client coordinates (matching original SWELL)
+  RECT rect;
+  if (r) {
+    rect = *r;
+  } else {
+    rect = hwnd->m_position;
+    WinOffsetRect(&rect, -rect.left, -rect.top);
+  }
+
+  // rect is in client coords of hwnd. Walk up ancestor chain
+  // applying position + NCCALCSIZE offsets to reach top-level coords.
+  HWND h = hwnd;
+  HWND top = hwnd;
+  while (top->m_parent) top = (HWND)top->m_parent;
+
+  for (;;) {
+    if (!h->m_visible || h->m_hashaddestroy) return FALSE;
+
+    RECT ncrect = h->m_position;
+    if (h->m_oswindow) WinOffsetRect(&ncrect, -ncrect.left, -ncrect.top);
+
+    NCCALCSIZE_PARAMS tr;
+    memset(&tr, 0, sizeof(tr));
+    tr.rgrc[0] = ncrect;
+    if (h->m_wndproc)
+      h->m_wndproc(h, WM_NCCALCSIZE, FALSE, (LPARAM)&tr);
+
+    WinOffsetRect(&rect, tr.rgrc[0].left, tr.rgrc[0].top);
+
+    if (!IntersectRect(&rect, &rect, &ncrect)) return FALSE;
+
+    if (h == top && h->m_oswindow) break;
+
+    h = (HWND)h->m_parent;
+    if (!h) return FALSE;
+  }
+
   hwnd->m_invalidated = true;
 
-  // walk up ancestor chain
+  // walk up ancestor chain marking child_invalidated
   HWND w = (HWND)hwnd->m_parent;
   while (w) {
     w->m_child_invalidated = true;
     w = (HWND)w->m_parent;
   }
 
-  // find top-level for OS invalidation
-  HWND top = hwnd;
-  while (top->m_parent) top = (HWND)top->m_parent;
-
-  swell_oswindow_invalidate(top, r);
+  swell_oswindow_invalidate(top, (hwnd != top || r) ? &rect : NULL);
   return TRUE;
 }
 
