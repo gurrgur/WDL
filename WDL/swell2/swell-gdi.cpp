@@ -1081,17 +1081,10 @@ void StretchBltFromMem(HDC hdcOut, int x, int y, int w, int h,
 
   swell_DirtyContext(hdcOut, x, y, x + w, y + h);
 
-  SkBitmap srcBm;
-  srcBm.allocN32Pixels(srcw, srch);
-  const uint8_t *src = static_cast<const uint8_t *>(bits);
-  uint32_t *dst = srcBm.getAddr32(0, 0);
-  for (int row = 0; row < srch; row++) {
-    memcpy(dst, src, srcw * 4);
-    src += srcspan;
-    dst += srcw;
-  }
-
-  sk_sp<SkImage> img = SkImages::RasterFromBitmap(srcBm);
+  SkImageInfo info = SkImageInfo::Make(srcw, srch,
+      kBGRA_8888_SkColorType, kPremul_SkAlphaType);
+  SkPixmap pixmap(info, bits, (size_t)srcspan);
+  sk_sp<SkImage> img = SkImages::RasterFromPixmap(pixmap, nullptr, nullptr);
   if (!img) return;
 
   SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
