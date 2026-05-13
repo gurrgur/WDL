@@ -9,6 +9,7 @@
 #include "../wdlstring.h"
 #include "../ptrlist.h"
 #include "../heapbuf.h"
+#include "../assocarray.h"
 
 #include <core/SkCanvas.h>
 #include <core/SkSurface.h>
@@ -143,6 +144,8 @@ struct HWND__ {
 
   int m_oswindow_private;
   int m_oswindow_fullscreen;
+
+  WDL_StringKeyedArray<void *> m_props;
 
   HWND__(HWND__ *parent, int id, const RECT *r, const char *label,
          bool visible, WNDPROC proc);

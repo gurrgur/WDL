@@ -908,39 +908,17 @@ BOOL EnumChildWindows(HWND hwnd, BOOL (*proc)(HWND, LPARAM), LPARAM lParam)
 
 HWND FindWindowEx(HWND par, HWND lastw, const char *classname, const char *title)
 {
-  HWND list = NULL;
-  if (par) {
-    if (par->m_children.GetSize() > 0) {
-      list = par->m_children.Get(0);
+  HWND h = lastw ? GetWindow(lastw, GW_HWNDNEXT) :
+           par ? GetWindow(par, GW_CHILD) :
+           g_swell_top_level_list;
+  while (h) {
+    bool isOk = true;
+    if (title && strcmp(title, h->m_title.Get())) isOk = false;
+    else if (classname) {
+      if (!h->m_classname || strcmp(classname, h->m_classname)) isOk = false;
     }
-  } else {
-    list = g_swell_top_level_list;
-  }
-
-  bool pastStart = (lastw == NULL);
-  while (list) {
-    if (pastStart) {
-      bool match = true;
-      if (classname && list->m_classname) {
-        match = (strcmp(classname, list->m_classname) == 0);
-      }
-      if (match && title && title[0]) {
-        match = (strcmp(title, list->m_title.Get()) == 0);
-      }
-      if (match) return list;
-    }
-    if (par) {
-      for (int i = 0; i < par->m_children.GetSize(); i++) {
-        if (par->m_children.Get(i) == lastw) {
-          pastStart = true;
-          break;
-        }
-      }
-      pastStart = true; // simplified: just iterate all children after lastw
-    }
-    lastw = list;
-    list = par ? list->m_next : list->m_next;
-    pastStart = true;
+    if (isOk) return h;
+    h = GetWindow(h, GW_HWNDNEXT);
   }
   return NULL;
 }
@@ -1040,84 +1018,37 @@ LONG_PTR SetWindowLong(HWND hwnd, int idx, LONG_PTR val)
 }
 
 // ===========================================================================
-// Window properties (Prop list)
+// Window properties (stored per-HWND, matches original SWELL)
 // ===========================================================================
-
-struct PropEntry {
-  const char *name;   // for string props
-  UINT_PTR id;        // for integer props (name < 65536)
-  HANDLE data;
-  PropEntry *_next;
-  bool isById() const { return (UINT_PTR)name < 65536; }
-};
-
-static PropEntry *propList = NULL;
 
 HANDLE GetProp(HWND hwnd, const char *name)
 {
   if (!hwnd || !name) return NULL;
-
-  for (PropEntry *e = propList; e; e = e->_next) {
-    if (e->isById()) {
-      if (e->id == (UINT_PTR)name) return e->data;
-    } else {
-      if (e->name && strcmp(e->name, name) == 0) return e->data;
-    }
-  }
-  return NULL;
+  return hwnd->m_props.Get(name);
 }
 
 BOOL SetProp(HWND hwnd, const char *name, HANDLE data)
 {
   if (!hwnd || !name) return FALSE;
-
-  // remove existing
-  RemoveProp(hwnd, name);
-
-  PropEntry *e = new PropEntry();
-  if ((UINT_PTR)name < 65536) {
-    e->name = NULL;
-    e->id = (UINT_PTR)name;
-  } else {
-    e->name = name;
-    e->id = 0;
-  }
-  e->data = data;
-  e->_next = propList;
-  propList = e;
+  hwnd->m_props.Insert(name, (void *)data);
   return TRUE;
 }
 
 HANDLE RemoveProp(HWND hwnd, const char *name)
 {
   if (!hwnd || !name) return NULL;
-
-  PropEntry *prev = NULL;
-  for (PropEntry *e = propList; e; prev = e, e = e->_next) {
-    bool match = false;
-    if ((UINT_PTR)name < 65536) {
-      match = e->isById() && e->id == (UINT_PTR)name;
-    } else {
-      match = !e->isById() && e->name && strcmp(e->name, name) == 0;
-    }
-    if (match) {
-      HANDLE data = e->data;
-      if (prev) prev->_next = e->_next;
-      else propList = e->_next;
-      delete e;
-      return data;
-    }
-  }
-  return NULL;
+  HANDLE h = GetProp(hwnd, name);
+  hwnd->m_props.Delete(name);
+  return h;
 }
 
 int EnumPropsEx(HWND hwnd, PROPENUMPROCEX proc, LPARAM lParam)
 {
   if (!hwnd || !proc) return -1;
-
-  for (PropEntry *e = propList; e; e = e->_next) {
-    const char *name = e->isById() ? (const char *)(UINT_PTR)e->id : e->name;
-    if (!proc(hwnd, name, e->data, lParam)) return 0;
+  for (int x = 0; x < hwnd->m_props.GetSize(); x++) {
+    const char *k = "";
+    void *p = hwnd->m_props.Enumerate(x, &k);
+    if (!proc(hwnd, k, p, lParam)) return 0;
   }
   return 1;
 }
