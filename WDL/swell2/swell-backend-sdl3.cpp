@@ -143,6 +143,10 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   if (ph < 1) ph = h;
   hwnd->m_backingstore = SkSurfaces::Raster(
       SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+  if (hwnd->m_backingstore) {
+    SkCanvas *c = hwnd->m_backingstore->getCanvas();
+    if (c) c->clear(SK_ColorTRANSPARENT);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -194,9 +198,12 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
       hwnd->m_backingstore = SkSurfaces::Raster(
           SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
 
-      if (oldImage && hwnd->m_backingstore) {
+      if (hwnd->m_backingstore) {
         SkCanvas *c = hwnd->m_backingstore->getCanvas();
-        if (c) c->drawImage(oldImage, 0, 0);
+        if (c) {
+          c->clear(SK_ColorTRANSPARENT);
+          if (oldImage) c->drawImage(oldImage, 0, 0);
+        }
       }
     }
 
@@ -529,9 +536,12 @@ static void swell_sdlEventHandler(SDL_Event *evt)
             e->hwnd->m_backingstore = SkSurfaces::Raster(
                 SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
 
-            if (oldImage && e->hwnd->m_backingstore) {
+            if (e->hwnd->m_backingstore) {
               SkCanvas *c = e->hwnd->m_backingstore->getCanvas();
-              if (c) c->drawImage(oldImage, 0, 0);
+              if (c) {
+                c->clear(SK_ColorTRANSPARENT);
+                if (oldImage) c->drawImage(oldImage, 0, 0);
+              }
             }
           }
           if (e->texture) { SDL_DestroyTexture(e->texture); e->texture = NULL; }
