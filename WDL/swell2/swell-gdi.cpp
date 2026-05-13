@@ -1533,13 +1533,9 @@ void SWELL_FillDialogBackground(HDC hdc, const RECT *r, int level)
   (void)level;
   if (!HDC_VALID(hdc) || !hdc->canvas || !r) return;
 
-  SkPaint paint;
-  paint.setStyle(SkPaint::kFill_Style);
-  paint.setColor(SWELL_TO_SKCOLOR(g_swell_ctheme._3dface, 255));
-
-  hdc->canvas->drawRect(
-    SkRect::MakeLTRB((float)r->left, (float)r->top,
-                      (float)r->right, (float)r->bottom), paint);
+  HBRUSH br = CreateSolidBrush(g_swell_ctheme._3dface);
+  SWELL_FillRect(hdc, r, br);
+  DeleteObject(br);
 }
 
 // ---------------------------------------------------------------------------
