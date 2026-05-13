@@ -497,10 +497,7 @@ void SWELL_EnableRightClickEmulate(BOOL enable)
 {
 }
 
-void SWELL_GetViewPort(RECT *r, const RECT *sourcerect, bool wantWork)
-{
-  if (r) { WinSetRect(r, 0, 0, 1920, 1080); }
-}
+// SWELL_GetViewPort — defined per-backend (swell-backend-sdl3.cpp or swell-backend-headless.cpp)
 
 // ============================================================================
 // GDI (missing)
@@ -1059,10 +1056,17 @@ BOOL GetMonitorInfo(HMONITOR hMonitor, void *info)
 int GetSystemMetrics(int idx)
 {
   switch (idx) {
-    case SM_CXSCREEN: return 1920;
-    case SM_CYSCREEN: return 1080;
-    case SM_CXVSCROLL: return 16;
-    case SM_CYHSCROLL: return 16;
+    case SM_CXSCREEN:
+    case SM_CYSCREEN: {
+      RECT r;
+      SWELL_GetViewPort(&r, NULL, false);
+      return idx == SM_CXSCREEN ? r.right - r.left : r.bottom - r.top;
+    }
+    case SM_CXHSCROLL:
+    case SM_CYHSCROLL:
+    case SM_CXVSCROLL:
+    case SM_CYVSCROLL: return g_swell_ctheme.smscrollbar_width;
+    case SM_CYMENU: return g_swell_ctheme.menubar_height;
     case SM_CYCAPTION: return 23;
     case SM_CXBORDER: return 1;
     case SM_CYBORDER: return 1;
@@ -1072,13 +1076,6 @@ int GetSystemMetrics(int idx)
     case SM_CYICON: return 32;
     case SM_CXCURSOR: return 32;
     case SM_CYCURSOR: return 32;
-    case SM_CYMENU: return 20;
-    case SM_CXFULLSCREEN: return 1920;
-    case SM_CYFULLSCREEN: return 1080;
-    case SM_CXMIN: return 120;
-    case SM_CYMIN: return 40;
-    case SM_CXSIZE: return 120;
-    case SM_CYSIZE: return 40;
     case SM_CXFRAME: return 4;
     case SM_CYFRAME: return 4;
     default: return 0;

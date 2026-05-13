@@ -832,6 +832,34 @@ void *SWELL_GetOSEvent(const char *type)
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// SWELL_GetViewPort: query actual display dimensions via SDL3
+// ---------------------------------------------------------------------------
+
+void SWELL_GetViewPort(RECT *r, const RECT *sourcerect, bool wantWork)
+{
+  r->left = r->top = 0;
+  r->right = 1024;
+  r->bottom = 768;
+
+  SDL_DisplayID display = SDL_GetPrimaryDisplay();
+  if (sourcerect) {
+    SDL_Rect sr = { sourcerect->left, sourcerect->top,
+                    sourcerect->right - sourcerect->left,
+                    sourcerect->bottom - sourcerect->top };
+    SDL_DisplayID d = SDL_GetDisplayForRect(&sr);
+    if (d) display = d;
+  }
+  SDL_Rect dr = { 0, 0, 1024, 768 };
+  if ((wantWork ? SDL_GetDisplayUsableBounds(display, &dr) :
+                  SDL_GetDisplayBounds(display, &dr))) {
+    r->left = dr.x;
+    r->top = dr.y;
+    r->right = dr.x + dr.w;
+    r->bottom = dr.y + dr.h;
+  }
+}
+
 // SWELL_GetScaling256 defined in swell-gdi.cpp
 
 #endif // SWELL_TARGET_SDL3

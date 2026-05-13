@@ -1626,6 +1626,9 @@ swell_colortheme::swell_colortheme()
   group_bg   = RGB(212,208,200);
   group_text = RGB(0,0,0);
 
+  // Scroll metrics
+  smscrollbar_width = 16;
+
   // Font
   default_font_size = 12;
 }

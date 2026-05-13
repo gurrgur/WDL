@@ -43,6 +43,14 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
 {
 }
 
+// ---- SWELL_GetViewPort ----
+
+void SWELL_GetViewPort(RECT *r, const RECT *sourcerect, bool wantWork)
+{
+  (void)sourcerect; (void)wantWork;
+  if (r) { WinSetRect(r, 0, 0, 1920, 1080); }
+}
+
 HWND swell_oswindow_to_hwnd(SWELL_OSWINDOW osw)
 {
   return NULL;

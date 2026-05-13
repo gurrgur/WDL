@@ -404,6 +404,7 @@ struct swell_colortheme {
   int focusrect;
   int group_bg, group_text;
   int focus_hilight;
+  int smscrollbar_width;
   int default_font_size;
 
   swell_colortheme();
