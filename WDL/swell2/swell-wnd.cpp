@@ -311,9 +311,12 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     }
 
     case WM_CTLCOLORSTATIC:
-      // default: set text color and return default brush
       SetTextColor((HDC)wParam, g_swell_ctheme.label_text);
-      return (LRESULT)GetStockObject(NULL_BRUSH);
+      {
+        static HBRUSH br;
+        if (!br) br = CreateSolidBrush(g_swell_ctheme._3dface);
+        return (LRESULT)br;
+      }
 
     default:
       break;
