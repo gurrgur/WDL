@@ -31,8 +31,18 @@ static inline int sch(int h) { return (int)(h * g_dlg_yscale + 0.5f); }
 void SWELL_MakeSetCurParms(float xscale, float yscale, float xtrans, float ytrans,
                            HWND parent, bool doauto, bool dosizetofit)
 {
-  g_dlg_xscale = (xscale > 0.0f) ? xscale : 1.9f;
-  g_dlg_yscale = (yscale > 0.0f) ? yscale : 1.9f;
+  if (xscale == 0.0f) xscale = 1.9f;
+  if (yscale == 0.0f) yscale = 1.9f;
+
+  if (g_swell_ui_scale != 256 && xscale != 1.0f && yscale != 1.0f)
+  {
+    const float m = g_swell_ui_scale / 256.0f;
+    xscale *= m;
+    yscale *= m;
+  }
+
+  g_dlg_xscale = xscale;
+  g_dlg_yscale = yscale;
   g_dlg_xtrans = xtrans;
   g_dlg_ytrans = ytrans;
   g_dlg_parent = parent;
