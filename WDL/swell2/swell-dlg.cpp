@@ -327,8 +327,9 @@ void SWELL_GenerateDialogFromList(const void *list, int listsz)
     } else if (!strcmp(e->str1, "__SWELL_LISTBOX")) {
       SWELL_MakeListBox(e->p1, e->p2, e->p3, e->p4, e->p5, e->p6);
     } else if (!strcmp(e->str1, "__SWELL_ICON")) {
-      // str2 is resource name, skip for now
-      (void)e;
+      // str2=icon resid, p1=x, p2=y, p3=w, p4=h, p5=style, p6=exstyle
+      SWELL_MakeControl(e->str2, -1, "__SWELL_ICON",
+                        e->p5, e->p1, e->p2, e->p3, e->p4, e->p6);
     } else {
       // CONTROL entry: str1=cname, flag1=idx, str2=classname, p1=style, p2..p6=x,y,w,h,exstyle
       SWELL_MakeControl(e->str1, e->flag1, e->str2,
@@ -483,8 +484,8 @@ int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
     }
   }
 
-  // Ensure OS window exists and is shown
-  if (!dlg->m_oswindow) {
+  // Ensure OS window exists and is shown (top-level dialogs only)
+  if (!dlg->m_oswindow && !(dlg->m_style & WS_CHILD)) {
     swell_oswindow_manage(dlg, true);
   } else {
     ShowWindow(dlg, SW_SHOW);
