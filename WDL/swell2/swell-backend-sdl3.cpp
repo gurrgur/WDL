@@ -128,7 +128,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   if (pw < 1) pw = w;
   if (ph < 1) ph = h;
   hwnd->m_backingstore = SkSurfaces::Raster(
-      SkImageInfo::MakeN32(pw, ph, kUnpremul_SkAlphaType));
+      SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
         oldImage = hwnd->m_backingstore->makeImageSnapshot();
 
       hwnd->m_backingstore = SkSurfaces::Raster(
-          SkImageInfo::MakeN32(pw, ph, kUnpremul_SkAlphaType));
+          SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
 
       if (oldImage && hwnd->m_backingstore) {
         SkCanvas *c = hwnd->m_backingstore->getCanvas();
@@ -510,7 +510,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
               oldImage = e->hwnd->m_backingstore->makeImageSnapshot();
 
             e->hwnd->m_backingstore = SkSurfaces::Raster(
-                SkImageInfo::MakeN32(pw, ph, kUnpremul_SkAlphaType));
+                SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
 
             if (oldImage && e->hwnd->m_backingstore) {
               SkCanvas *c = e->hwnd->m_backingstore->getCanvas();

@@ -177,7 +177,7 @@ HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
   if (!ctx) return nullptr;
 
-  ctx->surface = SkSurfaces::Raster(SkImageInfo::MakeN32(w, h, kUnpremul_SkAlphaType));
+  ctx->surface = SkSurfaces::Raster(SkImageInfo::Make(w, h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
   if (ctx->surface) {
     ctx->canvas = ctx->surface->getCanvas();
     if (ctx->canvas) {
