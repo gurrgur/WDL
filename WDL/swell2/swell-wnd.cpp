@@ -101,12 +101,51 @@ void HWND__::Release()
 LRESULT SendMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   if (!hwnd) return 0;
-  if (hwnd->m_hashaddestroy >= 2) return 0;
+
+  if (msg == WM_DESTROY) {
+    if (hwnd->m_hashaddestroy) return 0;
+    hwnd->m_hashaddestroy = 1;
+    if (GetCapture() == hwnd) ReleaseCapture();
+    SWELL_MessageQueue_Clear(hwnd);
+  } else if (hwnd->m_hashaddestroy >= 2) {
+    return 0;
+  } else if (msg == WM_CAPTURECHANGED && hwnd->m_hashaddestroy) {
+    return 0;
+  }
 
   WNDPROC proc = hwnd->m_wndproc;
   if (!proc) return 0;
 
-  return proc(hwnd, msg, wParam, lParam);
+  LRESULT ret = proc(hwnd, msg, wParam, lParam);
+
+  if (msg == WM_DESTROY) {
+    // destroy children
+    HWND child = hwnd->m_children.GetSize() > 0 ? hwnd->m_children.Get(0) : NULL;
+    while (child) {
+      HWND next = HWND(NULL);
+      int idx = hwnd->m_children.Find(child);
+      if (idx >= 0 && idx + 1 < hwnd->m_children.GetSize())
+        next = hwnd->m_children.Get(idx + 1);
+      SendMessage(child, WM_DESTROY, 0, 0);
+      child = next;
+    }
+    // destroy owned windows
+    for (int i = hwnd->m_owned.GetSize() - 1; i >= 0; i--) {
+      HWND ow = hwnd->m_owned.Get(i);
+      if (ow) SendMessage(ow, WM_DESTROY, 0, 0);
+    }
+    // clear focus if this window was focused
+    if (g_swell_focused_oswindow_hwnd == hwnd) {
+      HWND h = (HWND)hwnd->m_owner;
+      while (h && !h->m_oswindow) h = h->m_owner ? (HWND)h->m_owner : (HWND)h->m_parent;
+      swell_oswindow_focus(h);
+    }
+    hwnd->m_wndproc = NULL;
+    hwnd->m_hashaddestroy = 2;
+    KillTimer(hwnd, (UINT_PTR)-1);
+  }
+
+  return ret;
 }
 
 // ===========================================================================
@@ -125,11 +164,15 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return HTCLIENT;
 
     case WM_NCCALCSIZE:
-      // for top-level with menu: adjust r->top += menubar_height
-      if (!hwnd->m_parent && hwnd->m_menu) {
-        NCCALCSIZE_PARAMS *p = (NCCALCSIZE_PARAMS *)lParam;
-        if (p) {
+      // When wParam=TRUE: lParam is NCCALCSIZE_PARAMS*
+      // When wParam=FALSE: lParam is RECT*
+      if (!hwnd->m_parent && hwnd->m_menu && lParam) {
+        if (wParam) {
+          NCCALCSIZE_PARAMS *p = (NCCALCSIZE_PARAMS *)lParam;
           p->rgrc[0].top += g_swell_ctheme.menubar_height;
+        } else {
+          RECT *r = (RECT *)lParam;
+          r->top += g_swell_ctheme.menubar_height;
         }
       }
       return 0;
@@ -502,45 +545,19 @@ void DestroyWindow(HWND hwnd)
   if (!hwnd) return;
   if (hwnd->m_hashaddestroy) return;
 
-  // step 1: WM_DESTROY
-  hwnd->m_hashaddestroy = 1;
+  // SendMessage now handles WM_DESTROY cascade (sets m_hashaddestroy, kills
+  // children, owned windows, timers, clears wndproc).
+  SendMessage(hwnd, WM_DESTROY, 0, 0);
 
-  if (hwnd->m_wndproc) {
-    hwnd->m_wndproc(hwnd, WM_DESTROY, 0, 0);
-  }
-
-  // destroy children
-  int n = hwnd->m_children.GetSize();
-  for (int i = 0; i < n; i++) {
-    HWND ch = hwnd->m_children.Get(i);
-    if (ch) DestroyWindow(ch);
-  }
-
-  // destroy owned windows
-  n = hwnd->m_owned.GetSize();
-  for (int i = 0; i < n; i++) {
-    HWND ow = hwnd->m_owned.Get(i);
-    if (ow) DestroyWindow(ow);
-  }
-
-  // clear message queue for this window
-  SWELL_MessageQueue_Clear(hwnd);
-
-  // kill all timers
-  KillTimer(hwnd, (UINT_PTR)-1);
-
-  hwnd->m_wndproc = NULL;
-  hwnd->m_hashaddestroy = 2;
-
-  // step 2: RecurseDestroyWindow
+  // RecurseDestroyWindow: physical cleanup (OS window, backing store, menu,
+  // removal from parent/top-level lists, message queue, Release).
   // destroy OS window
   if (hwnd->m_oswindow) {
     swell_oswindow_destroy(hwnd);
   }
 
-  // destroy children again (RecurseDestroyWindow behavior)
-  n = hwnd->m_children.GetSize();
-  for (int i = n - 1; i >= 0; i--) {
+  // destroy children again (RecurseDestroyWindow — second safety pass)
+  for (int i = hwnd->m_children.GetSize() - 1; i >= 0; i--) {
     HWND ch = hwnd->m_children.Get(i);
     if (ch) {
       hwnd->m_children.Delete(i, false);
@@ -549,8 +566,7 @@ void DestroyWindow(HWND hwnd)
   }
 
   // destroy owned
-  n = hwnd->m_owned.GetSize();
-  for (int i = n - 1; i >= 0; i--) {
+  for (int i = hwnd->m_owned.GetSize() - 1; i >= 0; i--) {
     HWND ow = hwnd->m_owned.Get(i);
     if (ow) {
       hwnd->m_owned.Delete(i, false);
@@ -581,7 +597,7 @@ void DestroyWindow(HWND hwnd)
     else g_swell_top_level_list_end = hwnd->m_prev;
   }
 
-  // clear message queue and timers again (safety)
+  // clear message queue and timers (safety — also done in SendMessage WM_DESTROY)
   SWELL_MessageQueue_Clear(hwnd);
   KillTimer(hwnd, (UINT_PTR)-1);
 
@@ -610,6 +626,12 @@ void ShowWindow(HWND hwnd, int cmd)
     case SW_RESTORE:
       hwnd->m_visible = true;
       break;
+  }
+
+  if (cmd == SW_HIDE && wasVisible) {
+    // invalidate parent to trigger repaint of area where child was
+    if (hwnd->m_parent)
+      InvalidateRect((HWND)hwnd->m_parent, &hwnd->m_position, FALSE);
   }
 
   if (hwnd->m_visible && !wasVisible && !hwnd->m_parent && !hwnd->m_oswindow) {
@@ -791,6 +813,9 @@ HWND SetParent(HWND hwnd, HWND newPar)
     g_swell_top_level_list_end = hwnd;
     hwnd->m_next = NULL;
   }
+
+  // Ensure OS window is created/destroyed based on new parent status
+  swell_oswindow_manage(hwnd, false);
 
   return oldPar;
 }
@@ -1311,8 +1336,6 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
   // rect is in client coords of hwnd. Walk up ancestor chain
   // applying position + NCCALCSIZE offsets to reach top-level coords.
   HWND h = hwnd;
-  HWND top = hwnd;
-  while (top->m_parent) top = (HWND)top->m_parent;
 
   for (;;) {
     if (!h->m_visible || h->m_hashaddestroy) return FALSE;
@@ -1330,7 +1353,7 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
 
     if (!IntersectRect(&rect, &rect, &ncrect)) return FALSE;
 
-    if (h == top && h->m_oswindow) break;
+    if (h->m_oswindow || h->m_backingstore) break;
 
     h = (HWND)h->m_parent;
     if (!h) return FALSE;
