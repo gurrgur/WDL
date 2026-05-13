@@ -169,12 +169,21 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
     if (h < 1) h = 1;
     SDL_SetWindowSize(e->window, w, h);
 
-    // resize backing store to match new pixel dimensions
+    // resize backing store to match new pixel dimensions, preserve old content
     int pw = 0, ph = 0;
     SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
     if (pw > 0 && ph > 0) {
+      sk_sp<SkImage> oldImage;
+      if (hwnd->m_backingstore)
+        oldImage = hwnd->m_backingstore->makeImageSnapshot();
+
       hwnd->m_backingstore = SkSurfaces::Raster(
           SkImageInfo::MakeN32(pw, ph, kUnpremul_SkAlphaType));
+
+      if (oldImage && hwnd->m_backingstore) {
+        SkCanvas *c = hwnd->m_backingstore->getCanvas();
+        if (c) c->drawImage(oldImage, 0, 0);
+      }
     }
 
     // destroy stale texture
@@ -492,12 +501,21 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           e->hwnd->m_position.right = e->hwnd->m_position.left + nw;
           e->hwnd->m_position.bottom = e->hwnd->m_position.top + nh;
 
-          // resize backing store
+          // resize backing store, preserve old content
           int pw = 0, ph = 0;
           SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
           if (pw > 0 && ph > 0) {
+            sk_sp<SkImage> oldImage;
+            if (e->hwnd->m_backingstore)
+              oldImage = e->hwnd->m_backingstore->makeImageSnapshot();
+
             e->hwnd->m_backingstore = SkSurfaces::Raster(
                 SkImageInfo::MakeN32(pw, ph, kUnpremul_SkAlphaType));
+
+            if (oldImage && e->hwnd->m_backingstore) {
+              SkCanvas *c = e->hwnd->m_backingstore->getCanvas();
+              if (c) c->drawImage(oldImage, 0, 0);
+            }
           }
           if (e->texture) { SDL_DestroyTexture(e->texture); e->texture = NULL; }
 
