@@ -97,9 +97,14 @@ struct swell_gdpLocalContext {
   RECT clipr;
 };
 
-// ---- SWELL_OSWINDOW (headless: void*) ----
+// ---- SWELL_OSWINDOW ----
 
+#ifdef SWELL_TARGET_SDL3
+#include <SDL3/SDL.h>
+typedef SDL_Window *SWELL_OSWINDOW;
+#else
 typedef void *SWELL_OSWINDOW;
+#endif
 
 // ---- HWND__ ----
 

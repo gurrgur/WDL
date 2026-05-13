@@ -1,13 +1,24 @@
 /*
   SWELL2 GDI module — headless build
-  Implements HDC lifecycle, GDI object management, drawing stubs,
-  text metrics, color conversion, and the GDI object pool.
+  Implements HDC lifecycle, GDI object management, drawing functions
+  (Skia backend), text metrics, color conversion, and the GDI object pool.
 */
 
 #include "swell-gdi-internalpool.h"
 
+// swell-functions.h defines Polygon(a,b,c) as SWELL_Polygon which clashes
+// with SkPath::Polygon. Undefine it here — our SWELL_Polygon is a real
+// function, not a macro.
+#undef Polygon
+
 #include <cstring>
 #include <mutex>
+
+#include <core/SkPath.h>
+#include <core/SkRRect.h>
+#include <core/SkFont.h>
+#include <core/SkFontMetrics.h>
+#include <core/SkBlendMode.h>
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -518,45 +529,120 @@ BOOL GetObject(HICON icon, int bmsz, void *_bm)
 }
 
 // ---------------------------------------------------------------------------
-// Drawing (stubs — no-op, but check state and update dirty rect)
+// Drawing
 // ---------------------------------------------------------------------------
 
 void Rectangle(HDC ctx, int l, int t, int r, int b)
 {
-  if (!HDC_VALID(ctx)) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, l, t, r, b);
+
+  SkRect rect = SkRect::MakeLTRB((float)l, (float)t, (float)r, (float)b);
+
+  if (brush_valid(ctx)) {
+    SkPaint fillPaint;
+    fillPaint.setStyle(SkPaint::kFill_Style);
+    fillPaint.setColor(ctx->curbrush->color);
+    fillPaint.setAlphaf(ctx->curbrush->alpha);
+    ctx->canvas->drawRect(rect, fillPaint);
+  }
+
+  if (pen_valid(ctx)) {
+    SkPaint strokePaint;
+    strokePaint.setStyle(SkPaint::kStroke_Style);
+    strokePaint.setColor(ctx->curpen->color);
+    strokePaint.setAlphaf(ctx->curpen->alpha);
+    strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+    strokePaint.setAntiAlias(true);
+    ctx->canvas->drawRect(rect, strokePaint);
+  }
 }
 
 void Ellipse(HDC ctx, int l, int t, int r, int b)
 {
-  if (!HDC_VALID(ctx)) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, l, t, r, b);
+
+  SkRect rect = SkRect::MakeLTRB((float)l, (float)t, (float)r, (float)b);
+
+  if (brush_valid(ctx)) {
+    SkPaint fillPaint;
+    fillPaint.setStyle(SkPaint::kFill_Style);
+    fillPaint.setColor(ctx->curbrush->color);
+    fillPaint.setAlphaf(ctx->curbrush->alpha);
+    fillPaint.setAntiAlias(true);
+    ctx->canvas->drawOval(rect, fillPaint);
+  }
+
+  if (pen_valid(ctx)) {
+    SkPaint strokePaint;
+    strokePaint.setStyle(SkPaint::kStroke_Style);
+    strokePaint.setColor(ctx->curpen->color);
+    strokePaint.setAlphaf(ctx->curpen->alpha);
+    strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+    strokePaint.setAntiAlias(true);
+    ctx->canvas->drawOval(rect, strokePaint);
+  }
 }
 
 void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
 {
-  (void)xrnd; (void)yrnd;
-  if (!HDC_VALID(ctx)) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, x, y, x2, y2);
+
+  SkRect rect = SkRect::MakeLTRB((float)x, (float)y, (float)x2, (float)y2);
+  SkRRect rr = SkRRect::MakeRectXY(rect, (float)xrnd, (float)yrnd);
+
+  if (brush_valid(ctx)) {
+    SkPaint fillPaint;
+    fillPaint.setStyle(SkPaint::kFill_Style);
+    fillPaint.setColor(ctx->curbrush->color);
+    fillPaint.setAlphaf(ctx->curbrush->alpha);
+    fillPaint.setAntiAlias(true);
+    ctx->canvas->drawRRect(rr, fillPaint);
+  }
+
+  if (pen_valid(ctx)) {
+    SkPaint strokePaint;
+    strokePaint.setStyle(SkPaint::kStroke_Style);
+    strokePaint.setColor(ctx->curpen->color);
+    strokePaint.setAlphaf(ctx->curpen->alpha);
+    strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+    strokePaint.setAntiAlias(true);
+    ctx->canvas->drawRRect(rr, strokePaint);
+  }
 }
 
 void SWELL_FillRect(HDC ctx, const RECT *r, HBRUSH br)
 {
-  if (!HDC_VALID(ctx) || !r) return;
-  // Use explicit brush if provided, otherwise use selected brush
-  if (br && HGDIOBJ_VALID(br, TYPE_BRUSH) && br->wid >= 0) {
-    swell_DirtyContext(ctx, r->left, r->top, r->right, r->bottom);
-  } else if (brush_valid(ctx)) {
-    swell_DirtyContext(ctx, r->left, r->top, r->right, r->bottom);
-  }
+  if (!HDC_VALID(ctx) || !ctx->canvas || !r) return;
+
+  HGDIOBJ__ *useBrush = nullptr;
+  if (br && HGDIOBJ_VALID(br, TYPE_BRUSH) && br->wid >= 0)
+    useBrush = br;
+  else if (brush_valid(ctx))
+    useBrush = ctx->curbrush;
+  else
+    return;
+
+  swell_DirtyContext(ctx, r->left, r->top, r->right, r->bottom);
+
+  SkRect rect = SkRect::MakeLTRB((float)r->left, (float)r->top,
+                                 (float)r->right, (float)r->bottom);
+
+  SkPaint fillPaint;
+  fillPaint.setStyle(SkPaint::kFill_Style);
+  fillPaint.setColor(useBrush->color);
+  fillPaint.setAlphaf(useBrush->alpha);
+  ctx->canvas->drawRect(rect, fillPaint);
 }
 
 void SWELL_Polygon(HDC ctx, POINT *pts, int npts)
 {
-  if (!HDC_VALID(ctx) || !pts || npts < 2) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas || !pts || npts < 2) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
 
   // Compute bounding box of points for dirty rect
@@ -568,6 +654,31 @@ void SWELL_Polygon(HDC ctx, POINT *pts, int npts)
     if (pts[i].y > b2) b2 = pts[i].y;
   }
   swell_DirtyContext(ctx, l, t, r2, b2);
+
+  SkPath path;
+  path.moveTo((float)pts[0].x, (float)pts[0].y);
+  for (int i = 1; i < npts; i++)
+    path.lineTo((float)pts[i].x, (float)pts[i].y);
+  path.close();
+
+  if (brush_valid(ctx)) {
+    SkPaint fillPaint;
+    fillPaint.setStyle(SkPaint::kFill_Style);
+    fillPaint.setColor(ctx->curbrush->color);
+    fillPaint.setAlphaf(ctx->curbrush->alpha);
+    fillPaint.setAntiAlias(true);
+    ctx->canvas->drawPath(path, fillPaint);
+  }
+
+  if (pen_valid(ctx)) {
+    SkPaint strokePaint;
+    strokePaint.setStyle(SkPaint::kStroke_Style);
+    strokePaint.setColor(ctx->curpen->color);
+    strokePaint.setAlphaf(ctx->curpen->alpha);
+    strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+    strokePaint.setAntiAlias(true);
+    ctx->canvas->drawPath(path, strokePaint);
+  }
 }
 
 void MoveToEx(HDC ctx, int x, int y, POINT *op)
@@ -583,7 +694,7 @@ void MoveToEx(HDC ctx, int x, int y, POINT *op)
 
 void LineTo(HDC ctx, int x, int y)
 {
-  if (!HDC_VALID(ctx)) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!pen_valid(ctx)) {
     ctx->lastpos_x = (float)x;
     ctx->lastpos_y = (float)y;
@@ -596,20 +707,32 @@ void LineTo(HDC ctx, int x, int y)
   if (t > b2) { int tmp = t; t = b2; b2 = tmp; }
   swell_DirtyContext(ctx, l, t, r2, b2);
 
+  SkPaint strokePaint;
+  strokePaint.setStyle(SkPaint::kStroke_Style);
+  strokePaint.setColor(ctx->curpen->color);
+  strokePaint.setAlphaf(ctx->curpen->alpha);
+  strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+  strokePaint.setAntiAlias(true);
+  ctx->canvas->drawLine(ctx->lastpos_x, ctx->lastpos_y, (float)x, (float)y, strokePaint);
+
   ctx->lastpos_x = (float)x;
   ctx->lastpos_y = (float)y;
 }
 
 void SetPixel(HDC ctx, int x, int y, int c)
 {
-  (void)c;
-  if (!HDC_VALID(ctx)) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
   swell_DirtyContext(ctx, x, y, x + 1, y + 1);
+
+  SkPaint paint;
+  paint.setStyle(SkPaint::kFill_Style);
+  paint.setColor(SWELL_TO_SKCOLOR(c, 255));
+  ctx->canvas->drawPoint((float)x + 0.5f, (float)y + 0.5f, paint);
 }
 
 void PolyBezierTo(HDC ctx, POINT *pts, int np)
 {
-  if (!HDC_VALID(ctx) || !pts || np < 1) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas || !pts || np < 1) return;
   if (!pen_valid(ctx)) {
     ctx->lastpos_x = (float)pts[np - 1].x;
     ctx->lastpos_y = (float)pts[np - 1].y;
@@ -626,20 +749,45 @@ void PolyBezierTo(HDC ctx, POINT *pts, int np)
   }
   swell_DirtyContext(ctx, l, t, r2, b2);
 
+  SkPath path;
+  path.moveTo(ctx->lastpos_x, ctx->lastpos_y);
+  for (int i = 0; i + 2 < np; i += 3) {
+    path.cubicTo((float)pts[i].x, (float)pts[i].y,
+                 (float)pts[i + 1].x, (float)pts[i + 1].y,
+                 (float)pts[i + 2].x, (float)pts[i + 2].y);
+  }
+
+  SkPaint strokePaint;
+  strokePaint.setStyle(SkPaint::kStroke_Style);
+  strokePaint.setColor(ctx->curpen->color);
+  strokePaint.setAlphaf(ctx->curpen->alpha);
+  strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+  strokePaint.setAntiAlias(true);
+  ctx->canvas->drawPath(path, strokePaint);
+
   ctx->lastpos_x = (float)pts[np - 1].x;
   ctx->lastpos_y = (float)pts[np - 1].y;
 }
 
 void PolyPolyline(HDC ctx, const POINT *pts, const DWORD *cnts, int nseg)
 {
-  if (!HDC_VALID(ctx) || !pts || !cnts || nseg < 1) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas || !pts || !cnts || nseg < 1) return;
   if (!pen_valid(ctx)) return;
 
   const POINT *p = pts;
   int l = 0, t = 0, r2 = 0, b2 = 0;
   bool first = true;
+  SkPath path;
+
   for (int i = 0; i < nseg; i++) {
     DWORD n = cnts[i];
+    if (n < 1) { p += n; continue; }
+
+    path.moveTo((float)p[0].x, (float)p[0].y);
+    for (DWORD j = 1; j < n; j++) {
+      path.lineTo((float)p[j].x, (float)p[j].y);
+    }
+
     for (DWORD j = 0; j < n; j++) {
       if (first) {
         l = r2 = p[j].x;
@@ -654,40 +802,101 @@ void PolyPolyline(HDC ctx, const POINT *pts, const DWORD *cnts, int nseg)
     }
     p += n;
   }
-  if (!first) swell_DirtyContext(ctx, l, t, r2, b2);
+
+  if (!first) {
+    swell_DirtyContext(ctx, l, t, r2, b2);
+
+    SkPaint strokePaint;
+    strokePaint.setStyle(SkPaint::kStroke_Style);
+    strokePaint.setColor(ctx->curpen->color);
+    strokePaint.setAlphaf(ctx->curpen->alpha);
+    strokePaint.setStrokeWidth(ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f);
+    strokePaint.setAntiAlias(true);
+    ctx->canvas->drawPath(path, strokePaint);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Blit (stubs)
+// Blit
 // ---------------------------------------------------------------------------
 
 void BitBlt(HDC hdcOut, int x, int y, int w, int h,
             HDC hdcIn, int xin, int yin, int mode)
 {
-  (void)xin; (void)yin; (void)mode;
-  if (!HDC_VALID(hdcOut)) return;
-  (void)hdcIn;
-  if (w > 0 && h > 0)
-    swell_DirtyContext(hdcOut, x, y, x + w, y + h);
+  if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !HDC_VALID(hdcIn) || !hdcIn->canvas) return;
+  if (w <= 0 || h <= 0) return;
+
+  swell_DirtyContext(hdcOut, x, y, x + w, y + h);
+
+  SkSurface *srcSurf = hdcIn->canvas->getSurface();
+  if (!srcSurf) return;
+
+  sk_sp<SkImage> img = srcSurf->makeImageSnapshot();
+  if (!img) return;
+
+  SkRect srcRect = SkRect::MakeXYWH((float)xin, (float)yin, (float)w, (float)h);
+  SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
+
+  SkPaint paint;
+  if (mode == SRCCOPY) {
+    paint.setBlendMode(SkBlendMode::kSrc);
+  }
+
+  hdcOut->canvas->drawImageRect(img, srcRect, dstRect, SkSamplingOptions(),
+                                &paint, SkCanvas::kStrict_SrcRectConstraint);
 }
 
 void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
                 HDC hdcIn, int xin, int yin, int srcw, int srch, int mode)
 {
-  (void)hdcIn; (void)xin; (void)yin; (void)srcw; (void)srch; (void)mode;
-  if (!HDC_VALID(hdcOut)) return;
-  if (w > 0 && h > 0)
-    swell_DirtyContext(hdcOut, x, y, x + w, y + h);
+  if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !HDC_VALID(hdcIn) || !hdcIn->canvas) return;
+  if (w <= 0 || h <= 0 || srcw <= 0 || srch <= 0) return;
+
+  swell_DirtyContext(hdcOut, x, y, x + w, y + h);
+
+  SkSurface *srcSurf = hdcIn->canvas->getSurface();
+  if (!srcSurf) return;
+
+  sk_sp<SkImage> img = srcSurf->makeImageSnapshot();
+  if (!img) return;
+
+  SkRect srcRect = SkRect::MakeXYWH((float)xin, (float)yin, (float)srcw, (float)srch);
+  SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
+
+  SkPaint paint;
+  if (mode == SRCCOPY) {
+    paint.setBlendMode(SkBlendMode::kSrc);
+  }
+
+  hdcOut->canvas->drawImageRect(img, srcRect, dstRect, SkSamplingOptions(),
+                                &paint, SkCanvas::kStrict_SrcRectConstraint);
 }
 
 #ifndef SWELL_TARGET_OSX
 void StretchBltFromMem(HDC hdcOut, int x, int y, int w, int h,
                        const void *bits, int srcw, int srch, int srcspan)
 {
-  (void)bits; (void)srcw; (void)srch; (void)srcspan;
-  if (!HDC_VALID(hdcOut)) return;
-  if (w > 0 && h > 0)
-    swell_DirtyContext(hdcOut, x, y, x + w, y + h);
+  if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !bits) return;
+  if (w <= 0 || h <= 0 || srcw <= 0 || srch <= 0) return;
+
+  swell_DirtyContext(hdcOut, x, y, x + w, y + h);
+
+  SkBitmap srcBm;
+  srcBm.allocN32Pixels(srcw, srch);
+  const uint8_t *src = static_cast<const uint8_t *>(bits);
+  uint32_t *dst = srcBm.getAddr32(0, 0);
+  for (int row = 0; row < srch; row++) {
+    memcpy(dst, src, srcw * 4);
+    src += srcspan;
+    dst += srcw;
+  }
+
+  sk_sp<SkImage> img = SkImages::RasterFromBitmap(srcBm);
+  if (!img) return;
+
+  SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
+
+  hdcOut->canvas->drawImageRect(img, dstRect, SkSamplingOptions());
 }
 
 int SWELL_GetScaling256(void)
@@ -698,9 +907,20 @@ int SWELL_GetScaling256(void)
 
 void DrawImageInRect(HDC ctx, HICON img, const RECT *r)
 {
-  (void)img;
-  if (!HDC_VALID(ctx) || !r) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas || !img || !r) return;
+  if (!HGDIOBJ_VALID(img, TYPE_BITMAP)) return;
+
   swell_DirtyContext(ctx, r->left, r->top, r->right, r->bottom);
+
+  SkBitmap *bm = static_cast<SkBitmap *>(img->typedata);
+  if (!bm) return;
+
+  sk_sp<SkImage> image = SkImages::RasterFromBitmap(*bm);
+  if (!image) return;
+
+  SkRect dstRect = SkRect::MakeLTRB((float)r->left, (float)r->top,
+                                    (float)r->right, (float)r->bottom);
+  ctx->canvas->drawImageRect(image, dstRect, SkSamplingOptions());
 }
 
 // ---------------------------------------------------------------------------
@@ -732,15 +952,76 @@ void SetBkMode(HDC ctx, int col)
 }
 
 // ---------------------------------------------------------------------------
-// Text (stubs / fallbacks)
+// Text
 // ---------------------------------------------------------------------------
 
 int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 {
-  (void)buf; (void)len; (void)align;
   if (!HDC_VALID(ctx) || !r) return 0;
-  // DT_CALCRECT: don't draw, just measure — but we return 0 anyway
-  return 0;
+
+  if (len == -1) len = (int)strlen(buf);
+  if (len <= 0 || !buf) return 0;
+
+  // Build SkFont from selected font or default
+  SkFont font;
+  float fontSize = 12.0f;
+
+  if (HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
+    LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
+    if (lf) {
+      fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
+    }
+  }
+  font.setSize(fontSize);
+
+  // Measure text
+  SkRect bounds;
+  font.measureText(buf, len, SkTextEncoding::kUTF8, &bounds);
+
+  int textW = (int)(bounds.width() + 0.5f);
+  int textH = (int)(bounds.height() + 0.5f);
+
+  if (align & DT_CALCRECT) {
+    r->right = r->left + textW;
+    r->bottom = r->top + textH;
+    return textH;
+  }
+
+  if (!ctx->canvas) return textH;
+
+  // Determine text position
+  float x = (float)r->left;
+  float y = (float)r->top;
+
+  if (align & DT_CENTER)
+    x = (float)(r->left + (r->right - r->left - textW) / 2);
+  else if (!(align & DT_LEFT))
+    x = (float)r->left; // DT_LEFT is 0; treat absent as left
+
+  if (align & DT_VCENTER)
+    y = (float)(r->top + (r->bottom - r->top - textH) / 2);
+
+  // Draw background if opaque
+  if (ctx->curbkmode == OPAQUE) {
+    SkPaint bgPaint;
+    bgPaint.setStyle(SkPaint::kFill_Style);
+    bgPaint.setColor(ctx->curbkcol);
+    ctx->canvas->drawRect(
+      SkRect::MakeLTRB((float)r->left, (float)r->top,
+                        (float)r->right, (float)r->bottom), bgPaint);
+  }
+
+  // Draw text
+  SkPaint textPaint;
+  textPaint.setStyle(SkPaint::kFill_Style);
+  textPaint.setColor(ctx->cur_text_color_int);
+  textPaint.setAntiAlias(true);
+
+  ctx->canvas->drawString(buf, x, y, font, textPaint);
+
+  swell_DirtyContext(ctx, (int)x, (int)y, (int)(x + textW), (int)(y + textH));
+
+  return textH;
 }
 
 BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
@@ -748,11 +1029,26 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
   if (!HDC_VALID(ctx) || !tm) return FALSE;
 
   memset(tm, 0, sizeof(TEXTMETRIC));
-  tm->tmAscent = 8;
-  tm->tmDescent = 0;
-  tm->tmHeight = 8;
-  tm->tmInternalLeading = 0;
-  tm->tmAveCharWidth = 4;
+
+  float fontSize = 12.0f;
+  if (HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
+    LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
+    if (lf) {
+      fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
+    }
+  }
+
+  SkFont font;
+  font.setSize(fontSize);
+
+  SkFontMetrics metrics;
+  font.getMetrics(&metrics);
+
+  tm->tmAscent = (int)(-metrics.fAscent + 0.5f);
+  tm->tmDescent = (int)(metrics.fDescent + 0.5f);
+  tm->tmHeight = tm->tmAscent + tm->tmDescent;
+  tm->tmInternalLeading = (int)(metrics.fLeading + 0.5f);
+  tm->tmAveCharWidth = (int)(fontSize * 0.5f + 0.5f);
 
   return TRUE;
 }
@@ -772,23 +1068,27 @@ int GetGlyphIndicesW(HDC ctx, wchar_t *buf, int len, unsigned short *indices,
 }
 
 // ---------------------------------------------------------------------------
-// Clip region (stubs)
+// Clip region
 // ---------------------------------------------------------------------------
 
 void SWELL_PushClipRegion(HDC ctx)
 {
-  (void)ctx;
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
+  ctx->clip_save_count = ctx->canvas->save();
 }
 
 void SWELL_SetClipRegion(HDC ctx, const RECT *r)
 {
-  (void)ctx;
-  (void)r;
+  if (!HDC_VALID(ctx) || !ctx->canvas || !r) return;
+  ctx->canvas->clipRect(
+    SkRect::MakeLTRB((float)r->left, (float)r->top,
+                      (float)r->right, (float)r->bottom));
 }
 
 void SWELL_PopClipRegion(HDC ctx)
 {
-  (void)ctx;
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
+  ctx->canvas->restoreToCount(ctx->clip_save_count);
 }
 
 // ---------------------------------------------------------------------------
@@ -858,7 +1158,95 @@ HFONT SWELL_GetDefaultFont()
 void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     int bmout_xpos, int bmout_ypos, bool forceref)
 {
-  (void)hwnd; (void)canvas; (void)bmout_xpos; (void)bmout_ypos; (void)forceref;
+  if (!hwnd) return;
+
+  if (hwnd->m_invalidated)
+    forceref = true;
+
+  if (forceref || hwnd->m_child_invalidated) {
+    swell_gdpLocalContext ctx_local;
+    memset(&ctx_local, 0, sizeof(ctx_local));
+    ctx_local.ctx.canvas = canvas;
+    ctx_local.ctx.dirty_rect_valid = false;
+    ctx_local.ctx.surface_offs.x = bmout_xpos;
+    ctx_local.ctx.surface_offs.y = bmout_ypos;
+    ctx_local.ctx.clip_save_count = 0;
+    ctx_local.ctx.curpen = nullptr;
+    ctx_local.ctx.curbrush = nullptr;
+    ctx_local.ctx.curfont = nullptr;
+    ctx_local.ctx.cur_text_color_int = SK_ColorBLACK;
+    ctx_local.ctx.curbkmode = TRANSPARENT;
+    ctx_local.ctx.curbkcol = 0;
+    ctx_local.ctx.lastpos_x = 0.0f;
+    ctx_local.ctx.lastpos_y = 0.0f;
+
+    ctx_local.clipr = hwnd->m_position;
+    RECT ncr = hwnd->m_position;
+
+    hwnd->m_paintctx = &ctx_local;
+
+    // WM_NCCALCSIZE for client inset
+    SendMessage(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr);
+
+    if (forceref) {
+      SendMessage(hwnd, WM_NCPAINT, 0, 0);
+    }
+
+    // Adjust surface_offs and clipr by NC inset
+    ctx_local.ctx.surface_offs.x += (ncr.left - hwnd->m_position.left);
+    ctx_local.ctx.surface_offs.y += (ncr.top - hwnd->m_position.top);
+    ctx_local.clipr = ncr;
+
+    ctx_local.ctx.curfont = hwnd->m_font;
+
+    if (forceref) {
+      SendMessage(hwnd, WM_PAINT, (WPARAM)&ctx_local, 0);
+    }
+
+    hwnd->m_paintctx = nullptr;
+    hwnd->m_invalidated = false;
+  }
+
+  // Recurse into visible children
+  for (int i = 0; i < hwnd->m_children.GetSize(); i++) {
+    HWND child = hwnd->m_children.Get(i);
+    if (!child || !child->m_visible) continue;
+
+    int saveCount = canvas ? canvas->save() : 0;
+
+    if (canvas) {
+      RECT cr = child->m_position;
+      canvas->clipRect(
+        SkRect::MakeLTRB((float)cr.left, (float)cr.top,
+                          (float)cr.right, (float)cr.bottom));
+      canvas->translate((float)cr.left, (float)cr.top);
+    }
+
+    SWELL_internalSkiaPaint(child, canvas,
+      bmout_xpos + child->m_position.left,
+      bmout_ypos + child->m_position.top,
+      forceref);
+
+    if (canvas) canvas->restoreToCount(saveCount);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SWELL_FillDialogBackground
+// ---------------------------------------------------------------------------
+
+void SWELL_FillDialogBackground(HDC hdc, const RECT *r, int level)
+{
+  (void)level;
+  if (!HDC_VALID(hdc) || !hdc->canvas || !r) return;
+
+  SkPaint paint;
+  paint.setStyle(SkPaint::kFill_Style);
+  paint.setColor(g_swell_ctheme._3dface);
+
+  hdc->canvas->drawRect(
+    SkRect::MakeLTRB((float)r->left, (float)r->top,
+                      (float)r->right, (float)r->bottom), paint);
 }
 
 // ---------------------------------------------------------------------------

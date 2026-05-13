@@ -590,9 +590,7 @@ void SWELL_GetViewPort(RECT *r, const RECT *sourcerect, bool wantWork)
 // GDI (missing)
 // ============================================================================
 
-void SWELL_FillDialogBackground(HDC hdc, const RECT *r, int level)
-{
-}
+
 
 void SetOpaque(HWND h, bool isopaque)
 {

@@ -9,15 +9,28 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SKIA REQUIRED IMPORTED_TARGET skia)
 
+# ---- find SDL3 (optional) ----
+pkg_check_modules(SDL3 IMPORTED_TARGET sdl3)
+
 # ---- swell2 sources ----
 set(SWELL2_SOURCES
   swell-ini.cpp
   swell-gdi.cpp
   swell-wnd.cpp
-  swell-backend-headless.cpp
   swell-stubs.cpp
   swell-appstub.cpp
 )
+
+# ---- backend selection ----
+if(SDL3_FOUND)
+  message(STATUS "SDL3 found — building SDL3 OS backend")
+  list(APPEND SWELL2_SOURCES swell-backend-sdl3.cpp)
+  set(SWELL2_BACKEND_DEFINE SWELL_TARGET_SDL3)
+  set(SWELL2_BACKEND_LIBS PkgConfig::SDL3)
+else()
+  message(STATUS "SDL3 NOT found — building headless OS backend")
+  list(APPEND SWELL2_SOURCES swell-backend-headless.cpp)
+endif()
 
 # ---- swell2 library ----
 add_library(Swell SHARED ${SWELL2_SOURCES})
@@ -31,7 +44,8 @@ target_link_libraries(Swell PRIVATE
   PkgConfig::SKIA
   pthread
   dl
+  ${SWELL2_BACKEND_LIBS}
 )
 
 # needed to suppress min/max macros from swell-types.h
-target_compile_definitions(Swell PRIVATE NOMINMAX)
+target_compile_definitions(Swell PRIVATE NOMINMAX ${SWELL2_BACKEND_DEFINE})
