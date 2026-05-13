@@ -552,15 +552,31 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_CHAR: {
       if (!st || (hwnd->m_style & ES_READONLY)) return 0;
-      char c = (char)wParam;
-      if (c < 32 && c != '\r' && c != '\n') return 0;
-      if ((hwnd->m_style & ES_NUMBER) && !isdigit((unsigned char)c)) return 0;
+      unsigned int ch = (unsigned int)wParam;
+      if (ch < 32 && ch != '\r' && ch != '\n') return 0;
+      if ((hwnd->m_style & ES_NUMBER) && !isdigit(ch)) return 0;
       // multiline: allow newline only if ES_MULTILINE
-      if (c == '\r' || c == '\n') {
+      if (ch == '\r' || ch == '\n') {
         if (!(hwnd->m_style & ES_MULTILINE)) return 0;
-        c = '\n';
+        ch = '\n';
       }
-      char ins[2] = { c, 0 };
+      // encode as UTF-8 (handles non-ASCII from SDL_TEXTINPUT)
+      char ins[8] = { 0 };
+      if (ch < 0x80) {
+        ins[0] = (char)ch;
+      } else if (ch < 0x800) {
+        ins[0] = (char)(0xC0 | (ch >> 6));
+        ins[1] = (char)(0x80 | (ch & 0x3F));
+      } else if (ch < 0x10000) {
+        ins[0] = (char)(0xE0 | (ch >> 12));
+        ins[1] = (char)(0x80 | ((ch >> 6) & 0x3F));
+        ins[2] = (char)(0x80 | (ch & 0x3F));
+      } else {
+        ins[0] = (char)(0xF0 | (ch >> 18));
+        ins[1] = (char)(0x80 | ((ch >> 12) & 0x3F));
+        ins[2] = (char)(0x80 | ((ch >> 6) & 0x3F));
+        ins[3] = (char)(0x80 | (ch & 0x3F));
+      }
       SendMessage(hwnd, EM_REPLACESEL, 0, (LPARAM)ins);
       return 0;
     }
