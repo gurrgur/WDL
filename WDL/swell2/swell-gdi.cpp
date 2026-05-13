@@ -1461,30 +1461,33 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
 
     hwnd->m_paintctx = nullptr;
     hwnd->m_invalidated = false;
-  }
 
-  // Recurse into visible children
-  for (int i = 0; i < hwnd->m_children.GetSize(); i++) {
-    HWND child = hwnd->m_children.Get(i);
-    if (!child || !child->m_visible) continue;
+    // Recurse into visible children that need paint.
+    // Matches original swell: only recurse when forceref or child
+    // or its descendants are invalidated.
+    for (int i = 0; i < hwnd->m_children.GetSize(); i++) {
+      HWND child = hwnd->m_children.Get(i);
+      if (!child || !child->m_visible) continue;
+      if (!forceref && !child->m_invalidated && !child->m_child_invalidated) continue;
 
-    int saveCount = canvas ? canvas->save() : 0;
+      int saveCount = canvas ? canvas->save() : 0;
 
-    if (canvas) {
-      RECT cr = child->m_position;
-      canvas->clipRect(
-        SkRect::MakeLTRB((float)cr.left, (float)cr.top,
-                          (float)cr.right, (float)cr.bottom));
-      canvas->translate((float)cr.left, (float)cr.top);
+      if (canvas) {
+        RECT cr = child->m_position;
+        canvas->clipRect(
+          SkRect::MakeLTRB((float)cr.left, (float)cr.top,
+                            (float)cr.right, (float)cr.bottom));
+        canvas->translate((float)cr.left, (float)cr.top);
+      }
+
+      SWELL_internalSkiaPaint(child, canvas,
+        bmout_xpos, bmout_ypos, forceref);
+
+      if (canvas) canvas->restoreToCount(saveCount);
     }
 
-    SWELL_internalSkiaPaint(child, canvas,
-      bmout_xpos, bmout_ypos, forceref);
-
-    if (canvas) canvas->restoreToCount(saveCount);
+    hwnd->m_child_invalidated = false;
   }
-
-  hwnd->m_child_invalidated = false;
 }
 
 // ---------------------------------------------------------------------------
