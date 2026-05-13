@@ -326,8 +326,12 @@ HDC GetDC(HWND hwnd)
     ctx->canvas->translate((float)xoffs, (float)yoffs);
   }
 
-  ctx->surface_offs.x = -xoffs;
-  ctx->surface_offs.y = -yoffs;
+  // surface_offs converts from drawing coords to surface pixel coords.
+  // Canvas is translated by +xoffs, so drawing at client (0,0)
+  // hits surface pixel (xoffs, yoffs).  surface_offs must be +xoffs
+  // so that dirty_rect + surface_offs = surface pixels.
+  ctx->surface_offs.x = xoffs;
+  ctx->surface_offs.y = yoffs;
   ctx->dirty_rect_valid = false;
   ctx->curpen = nullptr;
   ctx->curbrush = nullptr;
@@ -341,44 +345,95 @@ HDC GetDC(HWND hwnd)
   return ctx;
 }
 
+// GetWindowDC: returns HDC for full window rect (including NC area).
+// Differs from GetDC which returns client-area only (applies NCCALCSIZE on target).
 HDC GetWindowDC(HWND hwnd)
 {
   fprintf(stderr, "SWELL_CALL: GetWindowDC\n");
-  return GetDC(hwnd);
-}
+  if (!hwnd) return nullptr;
 
-void ReleaseDC(HWND hwnd, HDC ctx)
-{
-  fprintf(stderr, "SWELL_CALL: ReleaseDC\n");
-  if (!ctx || !HDC_VALID(ctx)) return;
+  // Walk up to find ancestor with backing store, but do NOT
+  // apply NCCALCSIZE on the starting window — give full window area.
+  int xoffs = 0, yoffs = 0;
+  int wndw = hwnd->m_position.right - hwnd->m_position.left;
+  int wndh = hwnd->m_position.bottom - hwnd->m_position.top;
 
-  // If not inside a WM_PAINT cycle, blit the dirty region to screen
-  if (hwnd && !hwnd->m_paintctx && ctx->dirty_rect_valid)
+  // skip NCCALCSIZE on target — full window area, not client only
+  int ltrim = 0, ttrim = 0, rtrim = 0, btrim = 0;
+  HWND h = hwnd;
+
+  for (;;)
   {
-    RECT r = ctx->dirty_rect;
-    r.left   += ctx->surface_offs.x;
-    r.top    += ctx->surface_offs.y;
-    r.right  += ctx->surface_offs.x;
-    r.bottom += ctx->surface_offs.y;
+    if (h->m_backingstore || h->m_oswindow || !h->m_parent) break;
 
-    // Find the window that owns the backing store
-    HWND par = hwnd;
-    while (par && !par->m_backingstore) par = (HWND)par->m_parent;
-    if (par && r.top < r.bottom && r.left < r.right)
-      swell_oswindow_updatetoscreen(par, &r);
+    xoffs += h->m_position.left;
+    yoffs += h->m_position.top;
+
+    // apply NCCALCSIZE on ancestors only (not the target)
+    if (h != hwnd) {
+      RECT r2 = h->m_position;
+      NCCALCSIZE_PARAMS p = {{{ 0, 0, r2.right - r2.left, r2.bottom - r2.top }}};
+      SendMessage(h, WM_NCCALCSIZE, FALSE, (LPARAM)&p);
+      yoffs += p.rgrc[0].top;
+      xoffs += p.rgrc[0].left;
+    }
+
+    ltrim = (ltrim > -xoffs) ? ltrim : -xoffs;
+    ttrim = (ttrim > -yoffs) ? ttrim : -yoffs;
+    rtrim = (rtrim > (xoffs + wndw - (h->m_position.right - h->m_position.left))) ?
+            rtrim : (xoffs + wndw - (h->m_position.right - h->m_position.left));
+    btrim = (btrim > (yoffs + wndh - (h->m_position.bottom - h->m_position.top))) ?
+            btrim : (yoffs + wndh - (h->m_position.bottom - h->m_position.top));
+
+    h = (HWND)h->m_parent;
   }
 
-  // Restore canvas to pre-GetDC state
-  if (ctx->canvas && ctx->getdc_savecount > 0)
-  {
-    ctx->canvas->restoreToCount(ctx->getdc_savecount);
-    ctx->getdc_savecount = 0;
+  // NCCALCSIZE on backing store owner if different
+  if (h != hwnd && h->m_wndproc) {
+    RECT r3 = h->m_position;
+    NCCALCSIZE_PARAMS p = {{{ 0, 0, r3.right - r3.left, r3.bottom - r3.top }}};
+    h->m_wndproc(h, WM_NCCALCSIZE, FALSE, (LPARAM)&p);
+    yoffs += p.rgrc[0].top;
+    xoffs += p.rgrc[0].left;
+  }
+
+  HDC__ *ctx = SWELL_GDP_CTX_NEW();
+  if (!ctx) return nullptr;
+
+  if (h && h->m_backingstore) {
+    ctx->surface = h->m_backingstore;
+    ctx->canvas = h->m_backingstore->getCanvas();
+  } else {
+    sk_sp<SkSurface> bs = hwnd->m_backingstore;
+    ctx->surface = bs;
+    ctx->canvas = bs ? bs->getCanvas() : nullptr;
+  }
+
+  if (ctx->canvas) {
     ctx->clip_save_count = 0;
+    ctx->getdc_savecount = ctx->canvas->save();
+
+    SkRect clipr = SkRect::MakeXYWH((float)ltrim, (float)ttrim,
+        (float)(wndw - ltrim - rtrim), (float)(wndh - ttrim - btrim));
+    if (clipr.width() > 0.0f && clipr.height() > 0.0f)
+      ctx->canvas->clipRect(clipr);
+
+    ctx->canvas->translate((float)xoffs, (float)yoffs);
   }
 
-  ctx->surface.reset();
-  ctx->canvas = nullptr;
-  SWELL_GDP_CTX_DELETE(ctx);
+  ctx->surface_offs.x = xoffs;
+  ctx->surface_offs.y = yoffs;
+  ctx->dirty_rect_valid = false;
+  ctx->curpen = nullptr;
+  ctx->curbrush = nullptr;
+  ctx->curfont = hwnd->m_font;
+  ctx->cur_text_color_int = SK_ColorBLACK;
+  ctx->curbkmode = TRANSPARENT;
+  ctx->curbkcol = 0;
+  ctx->lastpos_x = 0.0f;
+  ctx->lastpos_y = 0.0f;
+
+  return ctx;
 }
 
 // ---------------------------------------------------------------------------
