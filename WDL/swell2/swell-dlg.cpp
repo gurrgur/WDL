@@ -348,7 +348,6 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
                         DLGPROC dlgproc,
                         LPARAM param)
 {
-  fprintf(stderr, "SWELL_CALL: SWELL_CreateDialog\n");
 
   // resid==NULL + parent means bare WNDPROC (opaque child window)
   bool bare_wndproc = (resid == NULL);
@@ -469,7 +468,6 @@ int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
                     DLGPROC dlgproc,
                     LPARAM param)
 {
-  fprintf(stderr, "SWELL_CALL: SWELL_DialogBox\n");
 
   HWND dlg = SWELL_CreateDialog(reshead, resid, parent, dlgproc, param);
   if (!dlg) return s_last_dlgret;
@@ -524,7 +522,6 @@ int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
 
 void EndDialog(HWND hwnd, int result)
 {
-  fprintf(stderr, "SWELL_CALL: EndDialog\n");
   if (!hwnd) return;
 
   bool found = false;
@@ -548,7 +545,6 @@ void EndDialog(HWND hwnd, int result)
 
 void SWELL_CloseWindow(HWND hwnd)
 {
-  fprintf(stderr, "SWELL_CALL: SWELL_CloseWindow\n");
   if (!hwnd) return;
   SendMessage(hwnd, WM_CLOSE, 0, 0);
 }
@@ -559,7 +555,6 @@ void SWELL_CloseWindow(HWND hwnd)
 
 void *SWELL_ModalWindowStart(HWND hwnd)
 {
-  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowStart\n");
   if (!hwnd) return NULL;
 
   ModalDlgState *ms = new ModalDlgState();
@@ -574,7 +569,6 @@ void *SWELL_ModalWindowStart(HWND hwnd)
 
 bool SWELL_ModalWindowRun(void *ctx, int *ret)
 {
-  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowRun\n");
   if (!ctx) return false;
 
   ModalDlgState *ms = (ModalDlgState *)ctx;
@@ -590,7 +584,6 @@ bool SWELL_ModalWindowRun(void *ctx, int *ret)
 
 void SWELL_ModalWindowEnd(void *ctx)
 {
-  fprintf(stderr, "SWELL_CALL: SWELL_ModalWindowEnd\n");
   if (!ctx) return;
 
   ModalDlgState *ms = (ModalDlgState *)ctx;
