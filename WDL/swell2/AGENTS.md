@@ -73,9 +73,13 @@ Resource generation:
    pixel conversion functions in `swell-internal.h`. SDL3 reports in logical
    pixels; SWELL operates in physical pixels.
 
-6. **Color theme.** `g_swell_ctheme` (struct `swell_colortheme`) holds the
-   current system color scheme. All drawing consults these colors. No system
-   theme APIs are called — this is self-contained.
+6. **Theme.** `g_swell_theme` (struct `swell_theme`) holds a semantic
+   palette and metric set inspired by 2026 Adwaita / macOS Mojave. The
+   palette is fixed and not user-configurable — light is the default,
+   dark mode is a preview enabled by `SWELL_THEME=dark`. Metrics are in
+   logical pixels and rescaled by `swell_theme_rescale()` when DPI
+   changes. `GetSysColor()` maps the Win32 color constants onto the
+   palette so legacy host code still works.
 
 7. **Cockos WDL dependency.** swell2 depends on sibling WDL utilities in `../`:
    - `mutex.h` — `WDL_Mutex` (pthread mutex wrapper)
