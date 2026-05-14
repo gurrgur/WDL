@@ -489,13 +489,28 @@ UINT EnumClipboardFormats(UINT lastfmt)
 HANDLE GlobalAlloc(int flags, int sz)
 {
   (void)flags;
-  return (HANDLE)calloc(1, sz > 0 ? sz : 1);
+  size_t alloc_sz = sz > 0 ? (size_t)sz : 1;
+  // Prefix allocation with size header so GlobalSize can return it
+  char *raw = (char *)calloc(1, sizeof(size_t) + alloc_sz);
+  if (!raw) return NULL;
+  *(size_t *)raw = alloc_sz;
+  return (HANDLE)(raw + sizeof(size_t));
 }
 
 void *GlobalLock(HANDLE h)   { return (void *)h; }
-int   GlobalSize(HANDLE h)   { (void)h; return 0; }
+int   GlobalSize(HANDLE h)
+{
+  if (!h) return 0;
+  size_t *hdr = (size_t *)h;
+  return (int)hdr[-1];
+}
 void  GlobalUnlock(HANDLE h) { (void)h; }
-void  GlobalFree(HANDLE h)   { free((void *)h); }
+void  GlobalFree(HANDLE h)
+{
+  if (!h) return;
+  char *raw = (char *)h;
+  free(raw - sizeof(size_t));
+}
 
 // ============================================================================
 // Drag-drop (stubs — no DnD implementation)
