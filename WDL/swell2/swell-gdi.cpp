@@ -37,7 +37,8 @@
 // Global state
 // ---------------------------------------------------------------------------
 
-swell_colortheme g_swell_ctheme;
+swell_theme g_swell_theme;
+int g_swell_theme_mode = SWELL_THEME_LIGHT;
 const char *g_swell_deffont_face = "Arial";
 
 static HFONT g_swell_default_font_instance = nullptr;
@@ -1405,17 +1406,20 @@ void SWELL_PopClipRegion(HDC ctx)
 
 int GetSysColor(int idx)
 {
+  // Map Win32 system color constants onto the semantic palette so legacy
+  // host code keeps working. The traditional bevel highlight/shadow pair
+  // collapses to a single subtle border color in flat modern UIs.
   switch (idx) {
-    case COLOR_3DFACE:       return g_swell_ctheme._3dface;
-    case COLOR_3DSHADOW:     return g_swell_ctheme._3dshadow;
-    case COLOR_3DHILIGHT:    return g_swell_ctheme._3dhilight;
-    case COLOR_3DDKSHADOW:   return g_swell_ctheme._3ddkshadow;
-    case COLOR_BTNFACE:      return g_swell_ctheme._3dface;
-    case COLOR_BTNTEXT:      return g_swell_ctheme.button_text;
-    case COLOR_WINDOW:       return g_swell_ctheme.edit_bg;
-    case COLOR_SCROLLBAR:    return g_swell_ctheme.scrollbar;
-    case COLOR_INFOBK:       return g_swell_ctheme.info_bg;
-    case COLOR_INFOTEXT:     return g_swell_ctheme.info_text;
+    case COLOR_3DFACE:       return g_swell_theme.bg_window;
+    case COLOR_3DSHADOW:     return g_swell_theme.border;
+    case COLOR_3DHILIGHT:    return g_swell_theme.bg_surface;
+    case COLOR_3DDKSHADOW:   return g_swell_theme.border_strong;
+    case COLOR_BTNFACE:      return g_swell_theme.bg_button;
+    case COLOR_BTNTEXT:      return g_swell_theme.fg_text;
+    case COLOR_WINDOW:       return g_swell_theme.bg_input;
+    case COLOR_SCROLLBAR:    return g_swell_theme.bg_scrollbar;
+    case COLOR_INFOBK:       return g_swell_theme.info_bg;
+    case COLOR_INFOTEXT:     return g_swell_theme.info_text;
     default:                 return 0;
   }
 }
@@ -1471,7 +1475,7 @@ HFONT SWELL_GetDefaultFont()
     return g_swell_default_font_instance;
 
   g_swell_default_font_instance = CreateFont(
-      -g_swell_ctheme.default_font_size, 0, 0, 0, FW_NORMAL,
+      -g_swell_theme.default_font_size, 0, 0, 0, FW_NORMAL,
       0, 0, 0, 0, 0, 0, 0, 0, g_swell_deffont_face);
 
   g_swell_default_font = g_swell_default_font_instance;
@@ -1590,115 +1594,192 @@ void SWELL_FillDialogBackground(HDC hdc, const RECT *r, int level)
   (void)level;
   if (!HDC_VALID(hdc) || !hdc->canvas || !r) return;
 
-  HBRUSH br = CreateSolidBrush(g_swell_ctheme._3dface);
+  HBRUSH br = CreateSolidBrush(g_swell_theme.bg_window);
   SWELL_FillRect(hdc, r, br);
   DeleteObject(br);
 }
 
 // ---------------------------------------------------------------------------
-// swell_colortheme constructor — default light theme values
+// swell_theme: light + dark presets, Adwaita 2026 / macOS Mojave inspired
 // ---------------------------------------------------------------------------
+// All metric fields below are in *logical* pixels at 1.0x DPI. Colors are
+// COLORREF (0x00BBGGRR). swell_theme_rescale() converts metrics to physical
+// pixels using the current g_swell_ui_scale.
 
-swell_colortheme::swell_colortheme()
+static void swell_theme_populate_light(swell_theme &t)
 {
-  // 3D / chrome colors
-  _3dface       = RGB(212,208,200);
-  _3dshadow     = RGB(128,128,128);
-  _3dhilight    = RGB(255,255,255);
-  _3ddkshadow   = RGB(64,64,64);
+  // Accent — Adwaita blue
+  const int accent_base = RGB(0x35, 0x84, 0xE4);
 
-  // Button
-  button_bg              = RGB(212,208,200);
-  button_text            = RGB(0,0,0);
-  button_text_disabled   = RGB(128,128,128);
-  button_shadow          = RGB(128,128,128);
-  button_hilight         = RGB(255,255,255);
+  // Surfaces
+  t.bg_window    = RGB(0xFA, 0xFA, 0xFA);
+  t.bg_surface   = RGB(0xFF, 0xFF, 0xFF);
+  t.bg_input     = RGB(0xFF, 0xFF, 0xFF);
+  t.bg_input_alt = RGB(0xF6, 0xF6, 0xF6);
+  t.bg_header    = RGB(0xF0, 0xF0, 0xF0);
 
-  // Checkbox
-  checkbox_bg            = RGB(212,208,200);
-  checkbox_text          = RGB(0,0,0);
-  checkbox_text_disabled = RGB(128,128,128);
+  // Buttons (neutral; default button uses accent at draw time)
+  t.bg_button         = RGB(0xFF, 0xFF, 0xFF);
+  t.bg_button_hover   = RGB(0xF2, 0xF2, 0xF2);
+  t.bg_button_pressed = RGB(0xE5, 0xE5, 0xE5);
 
-  // Scrollbar
-  scrollbar    = RGB(212,208,200);
-  scrollbar_fg = RGB(128,128,128);
-  scrollbar_bg = RGB(212,208,200);
+  // Accent
+  t.accent         = accent_base;
+  t.accent_hover   = RGB(0x52, 0x94, 0xE5);
+  t.accent_pressed = RGB(0x1B, 0x6F, 0xD0);
+  t.fg_on_accent   = RGB(0xFF, 0xFF, 0xFF);
 
-  // Edit
-  edit_bg      = RGB(255,255,255);
-  edit_text    = RGB(0,0,0);
-  edit_text_sel = RGB(255,255,255);
-  edit_bg_sel  = RGB(0,0,128);
-  edit_cursor  = RGB(0,0,0);
+  // Menus
+  t.bg_menu          = RGB(0xFF, 0xFF, 0xFF);
+  t.bg_menu_hover    = accent_base;
+  t.bg_menubar       = RGB(0xFA, 0xFA, 0xFA);
+  t.bg_menubar_hover = RGB(0xED, 0xED, 0xED);
 
-  // Info tip
-  info_bg   = RGB(255,255,225);
-  info_text = RGB(0,0,0);
+  // Tabs
+  t.bg_tab        = RGB(0xF0, 0xF0, 0xF0);
+  t.bg_tab_active = RGB(0xFF, 0xFF, 0xFF);
 
-  // Menu
-  menu_bg          = RGB(212,208,200);
-  menu_text        = RGB(0,0,0);
-  menu_hilight_bg  = RGB(0,0,128);
-  menu_hilight_text = RGB(255,255,255);
+  // Scrollbar / trackbar / progress
+  t.bg_scrollbar          = RGB(0xF5, 0xF5, 0xF5);
+  t.scrollbar_thumb       = RGB(0xC0, 0xC0, 0xC0);
+  t.scrollbar_thumb_hover = RGB(0xA0, 0xA0, 0xA0);
+  t.trackbar_track        = RGB(0xDC, 0xDC, 0xDC);
+  t.trackbar_fill         = accent_base;
+  t.trackbar_thumb        = RGB(0xFF, 0xFF, 0xFF);
+  t.progress_track        = RGB(0xDC, 0xDC, 0xDC);
+  t.progress_fill         = accent_base;
 
-  // Menubar
-  menubar_bg          = RGB(212,208,200);
-  menubar_text        = RGB(0,0,0);
-  menubar_hilight_bg  = RGB(0,0,128);
-  menubar_hilight_text = RGB(255,255,255);
-  menubar_height      = 20;
+  // Text
+  t.fg_text          = RGB(0x1E, 0x1E, 0x1E);
+  t.fg_text_dim      = RGB(0x5C, 0x5C, 0x5C);
+  t.fg_text_disabled = RGB(0xA0, 0xA0, 0xA0);
 
-  // Trackbar
-  trackbar_bg    = RGB(212,208,200);
-  trackbar_fg    = RGB(128,128,128);
-  trackbar_thumb = RGB(212,208,200);
+  // Borders / focus
+  t.border        = RGB(0xD4, 0xD4, 0xD4);
+  t.border_strong = RGB(0xA0, 0xA0, 0xA0);
+  t.focus_ring    = accent_base;
 
-  // Progress
-  progress = RGB(0,0,128);
+  // Tooltip
+  t.info_bg   = RGB(0xFF, 0xFC, 0xE5);
+  t.info_text = RGB(0x1E, 0x1E, 0x1E);
 
-  // Label
-  label_text = RGB(0,0,0);
+  // Caret
+  t.caret = RGB(0x1E, 0x1E, 0x1E);
 
-  // Combo
-  combo_bg   = RGB(255,255,255);
-  combo_text = RGB(0,0,0);
-
-  // ListView
-  listview_bg          = RGB(255,255,255);
-  listview_text        = RGB(0,0,0);
-  listview_header_bg   = RGB(212,208,200);
-  listview_header_text = RGB(0,0,0);
-
-  // TreeView
-  treeview_bg   = RGB(255,255,255);
-  treeview_text = RGB(0,0,0);
-
-  // Tab
-  tab_bg       = RGB(212,208,200);
-  tab_text     = RGB(0,0,0);
-  tab_sel_bg   = RGB(255,255,255);
-  tab_sel_text = RGB(0,0,0);
-
-  // Focus rect
-  focusrect     = RGB(0,0,0);
-  focus_hilight = RGB(192,192,192);
-
-  // Group box
-  group_bg   = RGB(212,208,200);
-  group_text = RGB(0,0,0);
-
-  // Scroll metrics
-  smscrollbar_width = 16;
-
-  // Font
-  default_font_size = 12;
+  // Drop shadow approximation
+  t.shadow = RGB(0xBF, 0xBF, 0xBF);
 }
 
-void swell_scale_theme()
+static void swell_theme_populate_dark(swell_theme &t)
 {
+  const int accent_base = RGB(0x35, 0x84, 0xE4);
+
+  t.bg_window    = RGB(0x24, 0x24, 0x24);
+  t.bg_surface   = RGB(0x2E, 0x2E, 0x2E);
+  t.bg_input     = RGB(0x1E, 0x1E, 0x1E);
+  t.bg_input_alt = RGB(0x23, 0x23, 0x23);
+  t.bg_header    = RGB(0x2A, 0x2A, 0x2A);
+
+  t.bg_button         = RGB(0x35, 0x35, 0x35);
+  t.bg_button_hover   = RGB(0x40, 0x40, 0x40);
+  t.bg_button_pressed = RGB(0x4A, 0x4A, 0x4A);
+
+  t.accent         = accent_base;
+  t.accent_hover   = RGB(0x52, 0x94, 0xE5);
+  t.accent_pressed = RGB(0x1B, 0x6F, 0xD0);
+  t.fg_on_accent   = RGB(0xFF, 0xFF, 0xFF);
+
+  t.bg_menu          = RGB(0x2E, 0x2E, 0x2E);
+  t.bg_menu_hover    = accent_base;
+  t.bg_menubar       = RGB(0x24, 0x24, 0x24);
+  t.bg_menubar_hover = RGB(0x35, 0x35, 0x35);
+
+  t.bg_tab        = RGB(0x24, 0x24, 0x24);
+  t.bg_tab_active = RGB(0x2E, 0x2E, 0x2E);
+
+  t.bg_scrollbar          = RGB(0x1E, 0x1E, 0x1E);
+  t.scrollbar_thumb       = RGB(0x55, 0x55, 0x55);
+  t.scrollbar_thumb_hover = RGB(0x6A, 0x6A, 0x6A);
+  t.trackbar_track        = RGB(0x40, 0x40, 0x40);
+  t.trackbar_fill         = accent_base;
+  t.trackbar_thumb        = RGB(0xE0, 0xE0, 0xE0);
+  t.progress_track        = RGB(0x40, 0x40, 0x40);
+  t.progress_fill         = accent_base;
+
+  t.fg_text          = RGB(0xFF, 0xFF, 0xFF);
+  t.fg_text_dim      = RGB(0xB5, 0xB5, 0xB5);
+  t.fg_text_disabled = RGB(0x70, 0x70, 0x70);
+
+  t.border        = RGB(0x1A, 0x1A, 0x1A);
+  t.border_strong = RGB(0x60, 0x60, 0x60);
+  t.focus_ring    = accent_base;
+
+  t.info_bg   = RGB(0x3A, 0x3A, 0x2A);
+  t.info_text = RGB(0xFF, 0xFF, 0xFF);
+
+  t.caret = RGB(0xFF, 0xFF, 0xFF);
+
+  t.shadow = RGB(0x10, 0x10, 0x10);
+}
+
+static void swell_theme_populate_metrics(swell_theme &t)
+{
+  t.corner_radius           = 6;
+  t.corner_radius_large     = 8;
+  t.border_width            = 1;
+  t.focus_ring_width        = 2;
+  t.focus_ring_offset       = 2;
+
+  t.padding_button_h        = 14;
+  t.padding_button_v        = 6;
+  t.padding_edit_h          = 8;
+  t.padding_edit_v          = 4;
+  t.padding_menu_item_h     = 12;
+  t.padding_menu_item_v     = 6;
+  t.padding_listheader_h    = 8;
+  t.padding_listheader_v    = 4;
+
+  t.button_min_h            = 28;
+  t.edit_min_h              = 26;
+  t.menubar_height          = 28;
+  t.menu_item_height        = 26;
+  t.menu_separator_height   = 8;
+  t.tab_height              = 30;
+  t.scrollbar_width         = 14;
+  t.checkbox_size           = 18;
+  t.radio_size              = 18;
+
+  t.default_font_size       = 13;
+  t.small_font_size         = 11;
+}
+
+void swell_theme_init(int mode)
+{
+  g_swell_theme_mode = mode;
+  if (mode == SWELL_THEME_DARK) swell_theme_populate_dark(g_swell_theme);
+  else                          swell_theme_populate_light(g_swell_theme);
+  swell_theme_populate_metrics(g_swell_theme);
+  swell_theme_rescale();
+}
+
+void swell_theme_rescale()
+{
+  // Rescale only metric fields (logical -> physical px). Re-populate metrics
+  // first so repeated calls don't compound the scale factor.
+  swell_theme_populate_metrics(g_swell_theme);
   if (g_swell_ui_scale == 256) return;
-  double sc = g_swell_ui_scale * (1.0 / 256.0);
-  g_swell_ctheme.menubar_height      = (int)(g_swell_ctheme.menubar_height      * sc + 0.5);
-  g_swell_ctheme.smscrollbar_width   = (int)(g_swell_ctheme.smscrollbar_width   * sc + 0.5);
-  g_swell_ctheme.default_font_size   = (int)(g_swell_ctheme.default_font_size   * sc + 0.5);
+  const double sc = g_swell_ui_scale * (1.0 / 256.0);
+  #define SC(x) g_swell_theme.x = (int)(g_swell_theme.x * sc + 0.5)
+  SC(corner_radius); SC(corner_radius_large); SC(border_width);
+  SC(focus_ring_width); SC(focus_ring_offset);
+  SC(padding_button_h);    SC(padding_button_v);
+  SC(padding_edit_h);      SC(padding_edit_v);
+  SC(padding_menu_item_h); SC(padding_menu_item_v);
+  SC(padding_listheader_h); SC(padding_listheader_v);
+  SC(button_min_h); SC(edit_min_h);
+  SC(menubar_height); SC(menu_item_height); SC(menu_separator_height);
+  SC(tab_height); SC(scrollbar_width);
+  SC(checkbox_size); SC(radio_size);
+  SC(default_font_size); SC(small_font_size);
+  #undef SC
 }

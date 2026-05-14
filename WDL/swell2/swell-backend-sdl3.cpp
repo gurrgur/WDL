@@ -6,6 +6,7 @@
 #include "swell-internal.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #ifdef SWELL_TARGET_SDL3
@@ -944,7 +945,12 @@ void SWELL_initargs(int *argc, char ***argv)
   }
 
   swell_scaling_init(false);
-  swell_scale_theme();
+  // Initialize the theme. SWELL_THEME=dark forces dark mode (preview only;
+  // dark mode is not yet finalized).
+  int themeMode = SWELL_THEME_LIGHT;
+  const char *th = getenv("SWELL_THEME");
+  if (th && (!strcmp(th, "dark") || !strcmp(th, "DARK"))) themeMode = SWELL_THEME_DARK;
+  swell_theme_init(themeMode);
 }
 #endif
 

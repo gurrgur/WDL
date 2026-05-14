@@ -171,7 +171,7 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!hwnd->m_parent && hwnd->m_menu) {
         RECT r;
         GetWindowContentViewRect(hwnd, &r);
-        const int mbh = g_swell_ctheme.menubar_height;
+        const int mbh = g_swell_theme.menubar_height;
         if (GET_Y_LPARAM(lParam) >= 0 && GET_Y_LPARAM(lParam) < mbh)
           return HTMENU;
       }
@@ -183,10 +183,10 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!hwnd->m_parent && hwnd->m_menu && lParam) {
         if (wParam) {
           NCCALCSIZE_PARAMS *p = (NCCALCSIZE_PARAMS *)lParam;
-          p->rgrc[0].top += g_swell_ctheme.menubar_height;
+          p->rgrc[0].top += g_swell_theme.menubar_height;
         } else {
           RECT *r = (RECT *)lParam;
-          r->top += g_swell_ctheme.menubar_height;
+          r->top += g_swell_theme.menubar_height;
         }
       }
       return 0;
@@ -347,10 +347,10 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     }
 
     case WM_CTLCOLORSTATIC:
-      SetTextColor((HDC)wParam, g_swell_ctheme.label_text);
+      SetTextColor((HDC)wParam, g_swell_theme.fg_text);
       {
         static HBRUSH br;
-        if (!br) br = CreateSolidBrush(g_swell_ctheme._3dface);
+        if (!br) br = CreateSolidBrush(g_swell_theme.bg_window);
         return (LRESULT)br;
       }
 

@@ -275,6 +275,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HDC hdc = BeginPaint(hwnd, &ps);
       if (!hdc) return 0;
 
+      const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
       DWORD style = hwnd->m_style;
       DWORD bstyle = style & 0x0F; // bottom nibble = Win32 button type
@@ -283,41 +284,39 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       bool pressed = (GetCapture() == hwnd);
 
       if (style & BS_GROUPBOX) {
-        // Draw a named border
-        HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme._3dface);
+        // Modern group box: subtle filled card with rounded corners and a
+        // floating title that overlaps the top border.
+        HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_window);
         FillRect(hdc, &cr, bg);
         DeleteObject(bg);
 
-        HPEN pen = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme._3dshadow);
-        HGDIOBJ oldpen = SelectObject(hdc, pen);
-        // Box: leave gap at top for title text
         HFONT fnt = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
         HGDIOBJ oldfont = SelectObject(hdc, fnt);
         TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
         int titlegap = tm.tmHeight / 2;
-        SelectObject(hdc, oldfont);
 
-        // draw border rect skipping top-left where text goes
-        MoveToEx(hdc, cr.left + 8, cr.top + titlegap, NULL);
-        LineTo(hdc, cr.left, cr.top + titlegap);
-        LineTo(hdc, cr.left, cr.bottom - 1);
-        LineTo(hdc, cr.right - 1, cr.bottom - 1);
-        LineTo(hdc, cr.right - 1, cr.top + titlegap);
-        LineTo(hdc, cr.left + 8, cr.top + titlegap);
+        HPEN pen = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.border);
+        HBRUSH frameBr = CreateSolidBrush((COLORREF)th.bg_surface);
+        HGDIOBJ oldpen = SelectObject(hdc, pen);
+        HGDIOBJ oldbr  = SelectObject(hdc, frameBr);
+        const int r = th.corner_radius_large;
+        RoundRect(hdc, cr.left, cr.top + titlegap,
+                  cr.right - 1, cr.bottom - 1, r*2, r*2);
+        SelectObject(hdc, oldpen); DeleteObject(pen);
+        SelectObject(hdc, oldbr);  DeleteObject(frameBr);
 
-        SelectObject(hdc, oldpen);
-        DeleteObject(pen);
-
-        // draw title
         if (hwnd->m_title.GetLength() > 0) {
-          HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
-          SelectObject(hdc, f);
-          SetTextColor(hdc, enabled ? (COLORREF)g_swell_ctheme.group_text
-                                    : (COLORREF)g_swell_ctheme.button_text_disabled);
+          SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
+                                    : (COLORREF)th.fg_text_disabled);
+          SetBkColor(hdc, (COLORREF)th.bg_window);
+          SetBkMode(hdc, OPAQUE);
+          RECT tr = { cr.left + r + 4, cr.top,
+                      cr.right - r - 4, cr.top + titlegap * 2 };
+          SWELL_DrawText(hdc, hwnd->m_title.Get(), -1, &tr,
+                         DT_LEFT | DT_VCENTER | DT_SINGLELINE);
           SetBkMode(hdc, TRANSPARENT);
-          RECT tr = { cr.left + 8, 0, cr.right - 8, titlegap * 2 };
-          SWELL_DrawText(hdc, hwnd->m_title.Get(), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
+        SelectObject(hdc, oldfont);
         EndPaint(hwnd, &ps);
         return 0;
       }
@@ -327,69 +326,81 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                        bstyle == BS_CHECKBOX || bstyle == BS_3STATE);
       bool is_radio = (bstyle == BS_AUTORADIOBUTTON || bstyle == BS_RADIOBUTTON);
 
-      COLORREF bgcol = (COLORREF)g_swell_ctheme.button_bg;
-      COLORREF fgcol = enabled ? (COLORREF)g_swell_ctheme.button_text
-                                : (COLORREF)g_swell_ctheme.button_text_disabled;
-
-      if (is_check || is_radio) {
-        // Background
-        HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme._3dface);
+      // Background — parent dialog color so the control blends in.
+      {
+        HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_window);
         FillRect(hdc, &cr, bg);
         DeleteObject(bg);
+      }
 
-        int box_size = cr.bottom - cr.top - 4;
-        if (box_size > 14) box_size = 14;
+      COLORREF fgcol = enabled ? (COLORREF)th.fg_text
+                               : (COLORREF)th.fg_text_disabled;
+
+      if (is_check || is_radio) {
+        int box_size = th.checkbox_size;
+        if (box_size > cr.bottom - cr.top - 2) box_size = cr.bottom - cr.top - 2;
         int box_x = cr.left + 2;
         int box_y = cr.top + (cr.bottom - cr.top - box_size) / 2;
         RECT box = { box_x, box_y, box_x + box_size, box_y + box_size };
 
-        HPEN pen = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme._3dshadow);
-        HGDIOBJ oldpen = SelectObject(hdc, pen);
-        HBRUSH boxbr = CreateSolidBrush((COLORREF)g_swell_ctheme.checkbox_bg);
-        HGDIOBJ oldbr = SelectObject(hdc, boxbr);
+        int cstate = st ? st->state : 0;
+        bool checked = (cstate != BST_UNCHECKED);
 
+        // Indicator fill: accent when checked, input bg otherwise.
+        COLORREF ind_bg = checked && enabled
+            ? (COLORREF)th.accent
+            : (COLORREF)th.bg_input;
+        COLORREF ind_border = checked && enabled
+            ? (COLORREF)th.accent
+            : (COLORREF)th.border_strong;
+        if (!enabled) {
+          ind_bg = (COLORREF)th.bg_input_alt;
+          ind_border = (COLORREF)th.border;
+        }
+
+        HPEN pen   = CreatePen(PS_SOLID, th.border_width, ind_border);
+        HBRUSH ibr = CreateSolidBrush(ind_bg);
+        HGDIOBJ oldpen = SelectObject(hdc, pen);
+        HGDIOBJ oldbr  = SelectObject(hdc, ibr);
         if (is_radio) {
           Ellipse(hdc, box.left, box.top, box.right, box.bottom);
         } else {
-          Rectangle(hdc, box.left, box.top, box.right, box.bottom);
+          int rr = th.corner_radius / 2; if (rr < 2) rr = 2;
+          RoundRect(hdc, box.left, box.top, box.right, box.bottom, rr*2, rr*2);
         }
-
         SelectObject(hdc, oldpen); DeleteObject(pen);
-        SelectObject(hdc, oldbr);  DeleteObject(boxbr);
+        SelectObject(hdc, oldbr);  DeleteObject(ibr);
 
-        // check mark
-        int cstate = st ? st->state : 0;
-        if (cstate != BST_UNCHECKED) {
-          HPEN cpen = CreatePen(PS_SOLID, 2,
-              enabled ? (COLORREF)g_swell_ctheme.checkbox_text
-                      : (COLORREF)g_swell_ctheme.checkbox_text_disabled);
-          HGDIOBJ op = SelectObject(hdc, cpen);
-
+        if (checked) {
+          COLORREF mark = enabled ? (COLORREF)th.fg_on_accent
+                                  : (COLORREF)th.fg_text_disabled;
           if (is_radio) {
-            // filled circle
-            HBRUSH fb = CreateSolidBrush(
-                enabled ? (COLORREF)g_swell_ctheme.checkbox_text
-                        : (COLORREF)g_swell_ctheme.checkbox_text_disabled);
+            HBRUSH fb = CreateSolidBrush(mark);
             HGDIOBJ ob = SelectObject(hdc, fb);
-            int m = 3;
+            HPEN np = (HPEN)GetStockObject(NULL_PEN);
+            HGDIOBJ op = SelectObject(hdc, np);
+            int m = box_size / 4;
             Ellipse(hdc, box.left+m, box.top+m, box.right-m, box.bottom-m);
             SelectObject(hdc, ob); DeleteObject(fb);
+            SelectObject(hdc, op);
           } else if (cstate == BST_INDETERMINATE) {
-            // filled square
-            RECT ir = { box.left+3, box.top+3, box.right-3, box.bottom-3 };
-            HBRUSH fb = CreateSolidBrush(
-                enabled ? (COLORREF)g_swell_ctheme.checkbox_text
-                        : (COLORREF)g_swell_ctheme.checkbox_text_disabled);
+            HBRUSH fb = CreateSolidBrush(mark);
+            int m = box_size / 4;
+            RECT ir = { box.left+m, box.top+box_size/2 - 1,
+                        box.right-m, box.top+box_size/2 + 1 };
             FillRect(hdc, &ir, fb);
             DeleteObject(fb);
           } else {
-            // checkmark: two lines
-            MoveToEx(hdc, box.left+2, box.top + box_size/2, NULL);
-            LineTo(hdc, box.left + box_size/3, box.bottom - 3);
-            LineTo(hdc, box.right - 2, box.top + 2);
+            int pw = th.border_width * 2; if (pw < 2) pw = 2;
+            HPEN cpen = CreatePen(PS_SOLID, pw, mark);
+            HGDIOBJ op = SelectObject(hdc, cpen);
+            int pad = box_size / 5;
+            MoveToEx(hdc, box.left + pad, box.top + box_size / 2, NULL);
+            LineTo(hdc, box.left + box_size * 2 / 5,
+                        box.bottom - pad - 1);
+            LineTo(hdc, box.right - pad, box.top + pad);
+            SelectObject(hdc, op); DeleteObject(cpen);
           }
-
-          SelectObject(hdc, op); DeleteObject(cpen);
         }
 
         // label
@@ -397,40 +408,81 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         SelectObject(hdc, f);
         SetTextColor(hdc, fgcol);
         SetBkMode(hdc, TRANSPARENT);
-        RECT tr = { box.right + 4, cr.top, cr.right, cr.bottom };
+        RECT tr = { box.right + 6, cr.top, cr.right, cr.bottom };
         SWELL_DrawText(hdc, hwnd->m_title.Get(), -1, &tr,
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        if (focused) {
+          // Focus ring around the indicator
+          HPEN fp = CreatePen(PS_SOLID, th.focus_ring_width,
+                              (COLORREF)th.focus_ring);
+          HGDIOBJ op = SelectObject(hdc, fp);
+          HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+          HGDIOBJ ob = SelectObject(hdc, nb);
+          int o = th.focus_ring_offset;
+          if (is_radio)
+            Ellipse(hdc, box.left-o, box.top-o, box.right+o, box.bottom+o);
+          else {
+            int rr = th.corner_radius / 2; if (rr < 2) rr = 2;
+            RoundRect(hdc, box.left-o, box.top-o, box.right+o, box.bottom+o,
+                      (rr+o)*2, (rr+o)*2);
+          }
+          SelectObject(hdc, op); DeleteObject(fp);
+          SelectObject(hdc, ob);
+        }
       } else {
         // Push button
         bool isdef = (style & BS_DEFPUSHBUTTON) != 0;
 
-        HBRUSH bg = CreateSolidBrush(pressed ? (COLORREF)g_swell_ctheme.button_shadow
-                                             : bgcol);
-        FillRect(hdc, &cr, bg);
-        DeleteObject(bg);
+        COLORREF fillcol;
+        COLORREF bordercol;
+        COLORREF textcol;
+        if (!enabled) {
+          fillcol   = (COLORREF)th.bg_input_alt;
+          bordercol = (COLORREF)th.border;
+          textcol   = (COLORREF)th.fg_text_disabled;
+        } else if (isdef) {
+          // Accent-colored default button
+          fillcol   = pressed ? (COLORREF)th.accent_pressed
+                              : (COLORREF)th.accent;
+          bordercol = pressed ? (COLORREF)th.accent_pressed
+                              : (COLORREF)th.accent_hover;
+          textcol   = (COLORREF)th.fg_on_accent;
+        } else {
+          fillcol   = pressed ? (COLORREF)th.bg_button_pressed
+                              : (COLORREF)th.bg_button;
+          bordercol = (COLORREF)th.border_strong;
+          textcol   = (COLORREF)th.fg_text;
+        }
 
-        HPEN pen = CreatePen(PS_SOLID, isdef ? 2 : 1,
-                             (COLORREF)g_swell_ctheme.button_shadow);
+        HPEN pen   = CreatePen(PS_SOLID, th.border_width, bordercol);
+        HBRUSH br  = CreateSolidBrush(fillcol);
         HGDIOBJ op = SelectObject(hdc, pen);
-        HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-        HGDIOBJ ob = SelectObject(hdc, nb);
-        Rectangle(hdc, cr.left, cr.top, cr.right, cr.bottom);
+        HGDIOBJ ob = SelectObject(hdc, br);
+        const int r = th.corner_radius;
+        RoundRect(hdc, cr.left, cr.top, cr.right - 1, cr.bottom - 1,
+                  r * 2, r * 2);
         SelectObject(hdc, op); DeleteObject(pen);
-        SelectObject(hdc, ob);
+        SelectObject(hdc, ob); DeleteObject(br);
 
         HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
         SelectObject(hdc, f);
-        SetTextColor(hdc, fgcol);
+        SetTextColor(hdc, textcol);
         SetBkMode(hdc, TRANSPARENT);
         SWELL_DrawText(hdc, hwnd->m_title.Get(), -1, &cr,
                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         if (focused) {
-          RECT fr = { cr.left+2, cr.top+2, cr.right-2, cr.bottom-2 };
-          HPEN fp = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme.focusrect);
+          // Focus ring drawn just outside the button bounds.
+          int o = th.focus_ring_offset;
+          RECT fr = { cr.left - o, cr.top - o,
+                      cr.right + o - 1, cr.bottom + o - 1 };
+          HPEN fp = CreatePen(PS_SOLID, th.focus_ring_width,
+                              (COLORREF)th.focus_ring);
           HGDIOBJ ofp = SelectObject(hdc, fp);
           HGDIOBJ ofb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-          Rectangle(hdc, fr.left, fr.top, fr.right, fr.bottom);
+          int rr = r + o;
+          RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr*2, rr*2);
           SelectObject(hdc, ofp); DeleteObject(fp);
           SelectObject(hdc, ofb);
         }
@@ -656,24 +708,34 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HDC hdc = BeginPaint(hwnd, &ps);
       if (!hdc) return 0;
 
+      const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
       bool enabled = IsWindowEnabled(hwnd);
       bool focused = (GetFocus() == hwnd);
 
-      // Background
-      COLORREF bgcol = enabled ? (COLORREF)g_swell_ctheme.edit_bg
-                                : (COLORREF)g_swell_ctheme._3dface;
-      HBRUSH bg = CreateSolidBrush(bgcol);
-      FillRect(hdc, &cr, bg);
-      DeleteObject(bg);
+      // Backfill outer area in window bg so rounded corners blend cleanly.
+      {
+        HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_window);
+        FillRect(hdc, &cr, bg);
+        DeleteObject(bg);
+      }
 
-      // Border
-      HPEN pen = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme._3dshadow);
+      // Rounded input field
+      COLORREF fillcol = enabled ? (COLORREF)th.bg_input
+                                 : (COLORREF)th.bg_input_alt;
+      COLORREF bordercol = focused ? (COLORREF)th.accent
+                                   : (COLORREF)th.border_strong;
+      int bw = focused ? (th.focus_ring_width > 0 ? th.focus_ring_width
+                                                  : th.border_width)
+                       : th.border_width;
+      HPEN pen  = CreatePen(PS_SOLID, bw, bordercol);
+      HBRUSH br = CreateSolidBrush(fillcol);
       HGDIOBJ op = SelectObject(hdc, pen);
-      HGDIOBJ ob = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-      Rectangle(hdc, cr.left, cr.top, cr.right, cr.bottom);
+      HGDIOBJ ob = SelectObject(hdc, br);
+      const int r = th.corner_radius;
+      RoundRect(hdc, cr.left, cr.top, cr.right - 1, cr.bottom - 1, r*2, r*2);
       SelectObject(hdc, op); DeleteObject(pen);
-      SelectObject(hdc, ob);
+      SelectObject(hdc, ob); DeleteObject(br);
 
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       SelectObject(hdc, f);
@@ -687,13 +749,13 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         txt = disp.Get();
       }
 
-      RECT tr = { cr.left+2, cr.top+1, cr.right-2, cr.bottom-1 };
+      RECT tr = { cr.left + th.padding_edit_h, cr.top + th.padding_edit_v,
+                  cr.right - th.padding_edit_h, cr.bottom - th.padding_edit_v };
 
-      // Draw normal text first (TRANSPARENT) — selection overpaints below
       if (!st || st->sel1 < 0 || st->sel1 == st->sel2)
       {
-        SetTextColor(hdc, enabled ? (COLORREF)g_swell_ctheme.edit_text
-                                  : (COLORREF)g_swell_ctheme.button_text_disabled);
+        SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
+                                  : (COLORREF)th.fg_text_disabled);
         SetBkMode(hdc, TRANSPARENT);
         SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
       }
@@ -705,13 +767,11 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (s1 > tlen) s1 = tlen;
         if (s2 > tlen) s2 = tlen;
 
-        // 1) Draw normal text (TRANSPARENT)
-        SetTextColor(hdc, enabled ? (COLORREF)g_swell_ctheme.edit_text
-                                  : (COLORREF)g_swell_ctheme.button_text_disabled);
+        SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
+                                  : (COLORREF)th.fg_text_disabled);
         SetBkMode(hdc, TRANSPARENT);
         SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-        // 2) Measure pre-selection width, overpaint selection
         if (s2 > s1)
         {
           RECT measR = { 0, 0, 0, 0 };
@@ -719,23 +779,21 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           RECT selR = tr;
           selR.left += measR.right;
           SetBkMode(hdc, OPAQUE);
-          SetBkColor(hdc, (COLORREF)g_swell_ctheme.edit_bg_sel);
-          SetTextColor(hdc, (COLORREF)g_swell_ctheme.edit_text_sel);
+          SetBkColor(hdc, (COLORREF)th.accent);
+          SetTextColor(hdc, (COLORREF)th.fg_on_accent);
           SWELL_DrawText(hdc, txt + s1, s2 - s1, &selR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
       }
 
-      // cursor
+      // Caret
       if (st && st->cursor_state && focused) {
-        // approximate cursor x
         TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
         int cpos = st->cursor_pos;
         int tlen = (int)strlen(txt);
         if (cpos > tlen) cpos = tlen;
-        // use char width * cursor_pos as rough estimate
-        int cx = tr.left + (int)(cpos * (float)(cr.right - cr.left - 4) / (tlen > 0 ? tlen : 1));
-        if (cx > cr.right-2) cx = cr.right-2;
-        HPEN cp = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme.edit_cursor);
+        int cx = tr.left + (int)(cpos * (float)(tr.right - tr.left) / (tlen > 0 ? tlen : 1));
+        if (cx > tr.right - 1) cx = tr.right - 1;
+        HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
         HGDIOBJ ocp = SelectObject(hdc, cp);
         MoveToEx(hdc, cx, tr.top, NULL);
         LineTo(hdc, cx, tr.bottom);
@@ -795,8 +853,8 @@ LRESULT labelWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       RECT cr; GetClientRect(hwnd, &cr);
 
       COLORREF fgcol = hwnd->m_enabled
-        ? (COLORREF)g_swell_ctheme.label_text
-        : (COLORREF)g_swell_ctheme.button_text_disabled;
+        ? (COLORREF)g_swell_theme.fg_text
+        : (COLORREF)g_swell_theme.fg_text_disabled;
       SetTextColor(hdc, fgcol);
 
       HBRUSH br = get_window_brush(hwnd, hdc, WM_CTLCOLORSTATIC);
@@ -1428,8 +1486,10 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         st->m_last_row_height = rh;
       }
 
+      const swell_theme &th = g_swell_theme;
+
       // Background
-      HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme.listview_bg);
+      HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_input);
       FillRect(hdc, &cr, bg);
       DeleteObject(bg);
 
@@ -1439,24 +1499,32 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       // Draw column headers (ListView only)
       if (!st->m_is_listbox && st->m_cols.GetSize() > 0 &&
           !(hwnd->m_style & LVS_NOCOLUMNHEADER)) {
-        hdr = rh + 2;
+        hdr = rh + th.padding_listheader_v * 2;
         RECT hr = { cr.left, cr.top, cr.right, cr.top + hdr };
-        HBRUSH hbg = CreateSolidBrush((COLORREF)g_swell_ctheme.listview_header_bg);
+        HBRUSH hbg = CreateSolidBrush((COLORREF)th.bg_header);
         FillRect(hdc, &hr, hbg);
         DeleteObject(hbg);
 
-        SetTextColor(hdc, (COLORREF)g_swell_ctheme.listview_header_text);
+        // Separator line under header
+        HPEN sp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.border);
+        HGDIOBJ osp = SelectObject(hdc, sp);
+        MoveToEx(hdc, cr.left, cr.top + hdr - 1, NULL);
+        LineTo(hdc, cr.right, cr.top + hdr - 1);
+        SelectObject(hdc, osp); DeleteObject(sp);
+
+        SetTextColor(hdc, (COLORREF)th.fg_text_dim);
         SetBkMode(hdc, TRANSPARENT);
         int cx = cr.left - st->m_scroll_x;
         for (int c = 0; c < st->m_cols.GetSize(); c++) {
           const SWELL_ListView_Col &col = st->m_cols.Get()[c];
-          RECT tr = { cx, cr.top, cx + col.xwid, cr.top + hdr };
+          RECT tr = { cx + th.padding_listheader_h, cr.top,
+                      cx + col.xwid - th.padding_listheader_h, cr.top + hdr };
           if (col.name) SWELL_DrawText(hdc, col.name, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-          // divider
-          HPEN dp = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme._3dshadow);
+          // Column divider (subtle)
+          HPEN dp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.border);
           HGDIOBJ op = SelectObject(hdc, dp);
-          MoveToEx(hdc, cx + col.xwid - 1, cr.top, NULL);
-          LineTo(hdc, cx + col.xwid - 1, cr.top + hdr);
+          MoveToEx(hdc, cx + col.xwid - 1, cr.top + 2, NULL);
+          LineTo(hdc, cx + col.xwid - 1, cr.top + hdr - 2);
           SelectObject(hdc, op); DeleteObject(dp);
           cx += col.xwid;
         }
@@ -1475,19 +1543,16 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         bool sel = (st->m_selitem == i) ||
                    (i < st->m_data.GetSize() && (st->m_data.Get(i)->m_tmp & 1));
 
-        COLORREF rowbg = sel ? (focused ? (COLORREF)g_swell_ctheme.listview_bg
-                                        : (COLORREF)g_swell_ctheme.listview_bg)
-                             : (COLORREF)g_swell_ctheme.listview_bg;
-        COLORREF rowfg = sel ? (focused ? (COLORREF)g_swell_ctheme.listview_text
-                                        : (COLORREF)g_swell_ctheme.listview_text)
-                             : (COLORREF)g_swell_ctheme.listview_text;
-
+        COLORREF rowbg, rowfg;
         if (sel) {
-          rowbg = focused ? (COLORREF)g_swell_ctheme.listview_bg
-                          : (COLORREF)g_swell_ctheme.listview_bg;
-          // use slightly highlighted colors
-          rowbg = focused ? 0x0078D7 : 0xCCCCCC;
-          rowfg = focused ? 0xFFFFFF : 0x000000;
+          rowbg = focused ? (COLORREF)th.accent
+                          : (COLORREF)th.bg_input_alt;
+          rowfg = focused ? (COLORREF)th.fg_on_accent
+                          : (COLORREF)th.fg_text;
+        } else {
+          rowbg = (i & 1) ? (COLORREF)th.bg_input_alt
+                          : (COLORREF)th.bg_input;
+          rowfg = (COLORREF)th.fg_text;
         }
 
         RECT rr = { cr.left, ry, cr.right, ry + rh };
@@ -1862,7 +1927,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         st->m_last_row_height = rh;
       }
 
-      HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme.treeview_bg);
+      const swell_theme &th = g_swell_theme;
+      HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_input);
       FillRect(hdc, &cr, bg);
       DeleteObject(bg);
 
@@ -1898,26 +1964,31 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (sel) {
           RECT sr = { cr.left, ry, cr.right, ry + rh };
-          HBRUSH sb = CreateSolidBrush(focused ? (COLORREF)0x0078D7 : (COLORREF)0xCCCCCC);
+          HBRUSH sb = CreateSolidBrush(focused ? (COLORREF)th.accent
+                                                : (COLORREF)th.bg_input_alt);
           FillRect(hdc, &sr, sb);
           DeleteObject(sb);
         }
 
-        // expand arrow
+        // Expand chevron
         if (item->m_children.GetSize() > 0 || item->m_haschildren) {
           int ax = x - indent/2;
           int ay = ry + rh/2;
+          COLORREF arrowc = sel && focused ? (COLORREF)th.fg_on_accent
+                                            : (COLORREF)th.fg_text_dim;
+          HPEN ap = CreatePen(PS_SOLID, th.border_width, arrowc);
+          HGDIOBJ oap = SelectObject(hdc, ap);
           if (item->m_state & TVIS_EXPANDED) {
-            // down arrow
             MoveToEx(hdc, ax-4, ay-2, NULL); LineTo(hdc, ax, ay+3); LineTo(hdc, ax+4, ay-2);
           } else {
-            // right arrow
             MoveToEx(hdc, ax-2, ay-4, NULL); LineTo(hdc, ax+3, ay); LineTo(hdc, ax-2, ay+4);
           }
+          SelectObject(hdc, oap); DeleteObject(ap);
         }
 
-        SetTextColor(hdc, sel ? (focused ? (COLORREF)0xFFFFFF : (COLORREF)0x000000)
-                               : (COLORREF)g_swell_ctheme.treeview_text);
+        SetTextColor(hdc, sel ? (focused ? (COLORREF)th.fg_on_accent
+                                          : (COLORREF)th.fg_text)
+                               : (COLORREF)th.fg_text);
         RECT tr = { x + 2, ry, cr.right, ry + rh };
         SWELL_DrawText(hdc, item->m_value.Get(), -1, &tr,
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -2121,48 +2192,52 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HDC hdc = BeginPaint(hwnd, &ps);
       if (!hdc) return 0;
 
+      const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
-      int btnw = 16;
+      bool focused = (GetFocus() == hwnd);
+      int btnw = th.button_min_h;  // square dropdown affordance
 
-      HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme.combo_bg);
-      FillRect(hdc, &cr, bg);
-      DeleteObject(bg);
-
-      HPEN pen = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme._3dshadow);
-      HGDIOBJ op = SelectObject(hdc, pen);
-      HGDIOBJ ob = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-      Rectangle(hdc, cr.left, cr.top, cr.right, cr.bottom);
-      SelectObject(hdc, op); DeleteObject(pen);
-      SelectObject(hdc, ob);
-
-      // dropdown button
-      RECT btnr = { cr.right - btnw, cr.top, cr.right, cr.bottom };
-      HBRUSH btnbg = CreateSolidBrush((COLORREF)g_swell_ctheme.button_bg);
-      FillRect(hdc, &btnr, btnbg);
-      DeleteObject(btnbg);
-
-      // draw filled arrow
-      int ax = btnr.left + btnw/2;
-      int ay = (cr.top + cr.bottom)/2;
+      // Backfill window bg so rounded corners blend.
       {
-        POINT arrow_pts[3] = {
-          { ax-4, ay-2 }, { ax, ay+2 }, { ax+4, ay-2 }
-        };
-        HBRUSH abr = CreateSolidBrush((COLORREF)g_swell_ctheme._3dshadow);
-        HGDIOBJ obr = SelectObject(hdc, abr);
-        HGDIOBJ openo = SelectObject(hdc, GetStockObject(NULL_PEN));
-        SWELL_Polygon(hdc, arrow_pts, 3);
-        SelectObject(hdc, openo);
-        SelectObject(hdc, obr);
-        DeleteObject(abr);
+        HBRUSH wb = CreateSolidBrush((COLORREF)th.bg_window);
+        FillRect(hdc, &cr, wb);
+        DeleteObject(wb);
       }
 
-      // text
+      // Rounded card body
+      COLORREF bordercol = focused ? (COLORREF)th.accent
+                                   : (COLORREF)th.border_strong;
+      int bw = focused ? th.focus_ring_width : th.border_width;
+      HPEN pen   = CreatePen(PS_SOLID, bw, bordercol);
+      HBRUSH br  = CreateSolidBrush((COLORREF)th.bg_input);
+      HGDIOBJ op = SelectObject(hdc, pen);
+      HGDIOBJ ob = SelectObject(hdc, br);
+      const int r = th.corner_radius;
+      RoundRect(hdc, cr.left, cr.top, cr.right - 1, cr.bottom - 1, r*2, r*2);
+      SelectObject(hdc, op); DeleteObject(pen);
+      SelectObject(hdc, ob); DeleteObject(br);
+
+      // Chevron (no separator bar — flatter look)
+      int ax = cr.right - btnw/2 - 2;
+      int ay = (cr.top + cr.bottom) / 2;
+      {
+        HPEN ap = CreatePen(PS_SOLID,
+            (th.border_width * 2 > 2) ? th.border_width * 2 : 2,
+            (COLORREF)th.fg_text_dim);
+        HGDIOBJ oap = SelectObject(hdc, ap);
+        MoveToEx(hdc, ax-4, ay-2, NULL);
+        LineTo(hdc, ax, ay+3);
+        LineTo(hdc, ax+4, ay-2);
+        SelectObject(hdc, oap); DeleteObject(ap);
+      }
+
+      // Text
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       SelectObject(hdc, f);
-      SetTextColor(hdc, (COLORREF)g_swell_ctheme.combo_text);
+      SetTextColor(hdc, (COLORREF)th.fg_text);
       SetBkMode(hdc, TRANSPARENT);
-      RECT tr = { cr.left+2, cr.top, cr.right - btnw - 2, cr.bottom };
+      RECT tr = { cr.left + th.padding_edit_h, cr.top,
+                  cr.right - btnw, cr.bottom };
       SWELL_DrawText(hdc, hwnd->m_title.Get(), -1, &tr,
                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
@@ -2286,10 +2361,12 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HDC hdc = BeginPaint(hwnd, &ps);
       if (!hdc || !st) { if (hdc) EndPaint(hwnd, &ps); return 0; }
 
+      const swell_theme &thm = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
-      int th = SWELL_UI_SCALE(20);
+      int tabH = thm.tab_height;
 
-      HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme.tab_bg);
+      // Bar background
+      HBRUSH bg = CreateSolidBrush((COLORREF)thm.bg_window);
       FillRect(hdc, &cr, bg);
       DeleteObject(bg);
 
@@ -2299,38 +2376,39 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       TEXTMETRIC tmtab; GetTextMetrics(hdc, &tmtab);
       int avgcwp = tmtab.tmAveCharWidth > 0 ? tmtab.tmAveCharWidth : 8;
-      int x = cr.left;
+      int x = cr.left + thm.padding_button_h;
       for (int i = 0; i < st->m_tabs.GetSize(); i++) {
         const char *s = st->m_tabs.Get(i);
-        int tw = (int)strlen(s) * avgcwp + 16;
+        int tw = (int)strlen(s) * avgcwp + thm.padding_button_h * 2;
         bool sel = (i == st->m_curtab);
 
-        RECT tr = { x, cr.top, x + tw, cr.top + th };
-        HBRUSH tbbr = CreateSolidBrush(sel ? (COLORREF)g_swell_ctheme.tab_sel_bg
-                                           : (COLORREF)g_swell_ctheme.tab_bg);
-        FillRect(hdc, &tr, tbbr);
-        DeleteObject(tbbr);
+        RECT tr = { x, cr.top + 2, x + tw, cr.top + tabH };
 
-        SetTextColor(hdc, sel ? (COLORREF)g_swell_ctheme.tab_sel_text
-                               : (COLORREF)g_swell_ctheme.tab_text);
+        // Tab pill: rounded top corners only via RoundRect (full pill ok too).
+        const int r = thm.corner_radius;
+        HPEN tbp  = CreatePen(PS_SOLID, thm.border_width,
+                              sel ? (COLORREF)thm.border
+                                  : (COLORREF)thm.bg_window);
+        HBRUSH tbbr = CreateSolidBrush(sel ? (COLORREF)thm.bg_tab_active
+                                            : (COLORREF)thm.bg_tab);
+        HGDIOBJ otp = SelectObject(hdc, tbp);
+        HGDIOBJ otb = SelectObject(hdc, tbbr);
+        RoundRect(hdc, tr.left, tr.top, tr.right, tr.bottom + r, r*2, r*2);
+        SelectObject(hdc, otp); DeleteObject(tbp);
+        SelectObject(hdc, otb); DeleteObject(tbbr);
+
+        SetTextColor(hdc, sel ? (COLORREF)thm.fg_text
+                               : (COLORREF)thm.fg_text_dim);
         SWELL_DrawText(hdc, s, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-        // border
-        HPEN tbp = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme._3dshadow);
-        HGDIOBJ otp = SelectObject(hdc, tbp);
-        HGDIOBJ otb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        Rectangle(hdc, tr.left, tr.top, tr.right + 1, tr.bottom + (sel ? 1 : 0));
-        SelectObject(hdc, otp); DeleteObject(tbp);
-        SelectObject(hdc, otb);
-
-        x += tw + 2;
+        x += tw + 4;
       }
 
-      // bottom border line
-      HPEN bp = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme._3dshadow);
+      // Bottom border under the tab strip
+      HPEN bp = CreatePen(PS_SOLID, thm.border_width, (COLORREF)thm.border);
       HGDIOBJ obp = SelectObject(hdc, bp);
-      MoveToEx(hdc, cr.left, cr.top + th, NULL);
-      LineTo(hdc, cr.right, cr.top + th);
+      MoveToEx(hdc, cr.left, cr.top + tabH, NULL);
+      LineTo(hdc, cr.right, cr.top + tabH);
       SelectObject(hdc, obp); DeleteObject(bp);
 
       EndPaint(hwnd, &ps);
@@ -2443,32 +2521,64 @@ LRESULT trackbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HDC hdc = BeginPaint(hwnd, &ps);
       if (!hdc) return 0;
 
+      const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
 
-      HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme.trackbar_bg);
+      HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_window);
       FillRect(hdc, &cr, bg);
       DeleteObject(bg);
 
-      int cx = (cr.left + cr.right) / 2;
       int cy = (cr.top + cr.bottom) / 2;
 
       if (!p || p[2] <= p[1]) { EndPaint(hwnd, &ps); return 0; }
 
-      // Track line
-      HPEN tp = CreatePen(PS_SOLID, 2, (COLORREF)g_swell_ctheme.trackbar_fg);
-      HGDIOBJ otp = SelectObject(hdc, tp);
-      MoveToEx(hdc, cr.left + 4, cy, NULL);
-      LineTo(hdc, cr.right - 4, cy);
-      SelectObject(hdc, otp); DeleteObject(tp);
+      const int track_h = 4;
+      const int thumb_r = 7;
+      const int track_left = cr.left + thumb_r;
+      const int track_right = cr.right - thumb_r;
 
-      // Thumb
       float frac = (float)(p[0] - p[1]) / (p[2] - p[1]);
-      int tx = cr.left + 4 + (int)(frac * (cr.right - cr.left - 8));
-      int th = 10, tw2 = 5;
-      RECT thumb = { tx - tw2, cy - th/2, tx + tw2, cy + th/2 };
-      HBRUSH thb = CreateSolidBrush((COLORREF)g_swell_ctheme.trackbar_thumb);
-      FillRect(hdc, &thumb, thb);
-      DeleteObject(thb);
+      if (frac < 0) frac = 0; if (frac > 1) frac = 1;
+      int tx = track_left + (int)(frac * (track_right - track_left));
+
+      // Track (rounded) — unfilled portion
+      {
+        HPEN np = (HPEN)GetStockObject(NULL_PEN);
+        HBRUSH trbr = CreateSolidBrush((COLORREF)th.trackbar_track);
+        HGDIOBJ op = SelectObject(hdc, np);
+        HGDIOBJ ob = SelectObject(hdc, trbr);
+        RoundRect(hdc, track_left, cy - track_h/2,
+                  track_right, cy + track_h/2,
+                  track_h, track_h);
+        SelectObject(hdc, op);
+        SelectObject(hdc, ob); DeleteObject(trbr);
+      }
+
+      // Filled portion (accent)
+      if (tx > track_left) {
+        HPEN np = (HPEN)GetStockObject(NULL_PEN);
+        HBRUSH fbr = CreateSolidBrush((COLORREF)th.trackbar_fill);
+        HGDIOBJ op = SelectObject(hdc, np);
+        HGDIOBJ ob = SelectObject(hdc, fbr);
+        RoundRect(hdc, track_left, cy - track_h/2,
+                  tx, cy + track_h/2,
+                  track_h, track_h);
+        SelectObject(hdc, op);
+        SelectObject(hdc, ob); DeleteObject(fbr);
+      }
+
+      // Thumb: solid circle with border
+      {
+        HPEN pen = CreatePen(PS_SOLID, th.border_width,
+                             (COLORREF)th.border_strong);
+        HBRUSH br = CreateSolidBrush((COLORREF)th.trackbar_thumb);
+        HGDIOBJ op = SelectObject(hdc, pen);
+        HGDIOBJ ob = SelectObject(hdc, br);
+        Ellipse(hdc, tx - thumb_r, cy - thumb_r,
+                     tx + thumb_r, cy + thumb_r);
+        SelectObject(hdc, op); DeleteObject(pen);
+        SelectObject(hdc, ob); DeleteObject(br);
+      }
 
       EndPaint(hwnd, &ps);
       return 0;
@@ -2527,28 +2637,43 @@ LRESULT progressWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HDC hdc = BeginPaint(hwnd, &ps);
       if (!hdc) return 0;
 
+      const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
 
-      HBRUSH bg = CreateSolidBrush((COLORREF)g_swell_ctheme._3dshadow);
-      FillRect(hdc, &cr, bg);
-      DeleteObject(bg);
+      // Window backfill behind rounded track
+      {
+        HBRUSH wb = CreateSolidBrush((COLORREF)th.bg_window);
+        FillRect(hdc, &cr, wb);
+        DeleteObject(wb);
+      }
+
+      const int r = (cr.bottom - cr.top) / 2;
+
+      // Track (rounded pill)
+      {
+        HPEN np = (HPEN)GetStockObject(NULL_PEN);
+        HBRUSH trbr = CreateSolidBrush((COLORREF)th.progress_track);
+        HGDIOBJ op = SelectObject(hdc, np);
+        HGDIOBJ ob = SelectObject(hdc, trbr);
+        RoundRect(hdc, cr.left, cr.top, cr.right, cr.bottom, r*2, r*2);
+        SelectObject(hdc, op);
+        SelectObject(hdc, ob); DeleteObject(trbr);
+      }
 
       if (p && p[2] > p[1]) {
         float frac = (float)(p[0] - p[1]) / (p[2] - p[1]);
         if (frac < 0) frac = 0; if (frac > 1) frac = 1;
         int fw = (int)(frac * (cr.right - cr.left));
-        RECT fr = { cr.left, cr.top, cr.left + fw, cr.bottom };
-        HBRUSH fb = CreateSolidBrush((COLORREF)g_swell_ctheme.progress);
-        FillRect(hdc, &fr, fb);
-        DeleteObject(fb);
+        if (fw > 0) {
+          HPEN np = (HPEN)GetStockObject(NULL_PEN);
+          HBRUSH fb = CreateSolidBrush((COLORREF)th.progress_fill);
+          HGDIOBJ op = SelectObject(hdc, np);
+          HGDIOBJ ob = SelectObject(hdc, fb);
+          RoundRect(hdc, cr.left, cr.top, cr.left + fw, cr.bottom, r*2, r*2);
+          SelectObject(hdc, op);
+          SelectObject(hdc, ob); DeleteObject(fb);
+        }
       }
-
-      HPEN bp = CreatePen(PS_SOLID, 1, (COLORREF)g_swell_ctheme._3ddkshadow);
-      HGDIOBJ obp = SelectObject(hdc, bp);
-      HGDIOBJ obb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-      Rectangle(hdc, cr.left, cr.top, cr.right, cr.bottom);
-      SelectObject(hdc, obp); DeleteObject(bp);
-      SelectObject(hdc, obb);
 
       EndPaint(hwnd, &ps);
       return 0;

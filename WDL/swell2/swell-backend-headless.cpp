@@ -72,6 +72,8 @@ void SWELL_RunEvents()
 #ifndef SWELL_TARGET_OSX
 void SWELL_initargs(int *argc, char ***argv)
 {
+  (void)argc; (void)argv;
+  swell_theme_init(SWELL_THEME_LIGHT);
 }
 #endif
 

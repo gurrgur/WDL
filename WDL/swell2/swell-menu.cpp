@@ -495,13 +495,15 @@ static sk_sp<SkTypeface> menu_get_typeface()
 // Menu layout constants (base, scaled at runtime by DPI)
 // ---------------------------------------------------------------------------
 
-static inline int menu_item_h()  { return SWELL_UI_SCALE(26); }
-static inline int menu_sep_h()   { return SWELL_UI_SCALE(9);  }
-static inline int menu_lpad()    { return SWELL_UI_SCALE(32); }
-static inline int menu_rpad()    { return SWELL_UI_SCALE(20); }
-static inline int menu_vpad()    { return SWELL_UI_SCALE(4);  }
-static inline int menu_min_w()   { return SWELL_UI_SCALE(140); }
-static inline int menu_font_sz() { return SWELL_UI_SCALE(13); }
+// Metrics are now sourced from the global theme (already in physical pixels).
+static inline int menu_item_h()  { return g_swell_theme.menu_item_height; }
+static inline int menu_sep_h()   { return g_swell_theme.menu_separator_height; }
+static inline int menu_lpad()    { return g_swell_theme.padding_menu_item_h * 2 + g_swell_theme.checkbox_size; }
+static inline int menu_rpad()    { return g_swell_theme.padding_menu_item_h + g_swell_theme.checkbox_size; }
+static inline int menu_vpad()    { return g_swell_theme.padding_menu_item_v; }
+static inline int menu_min_w()   { return SWELL_UI_SCALE(160); }
+static inline int menu_font_sz() { return g_swell_theme.default_font_size; }
+static inline int menu_corner_r(){ return g_swell_theme.corner_radius_large; }
 
 // Convert native SWELL RGB color to SkColor (premul alpha)
 static SkColor swell_to_sk(int c, uint8_t a = 255)
@@ -631,23 +633,40 @@ static void menu_draw(MenuWindow *mw)
   SkCanvas *c = mw->surface->getCanvas();
   if (!c) return;
 
-  const swell_colortheme &th = g_swell_ctheme;
+  const swell_theme &th = g_swell_theme;
+  const float radius = (float)menu_corner_r();
 
-  // Background
-  SkPaint bgp;
-  bgp.setAntiAlias(false);
-  bgp.setColor(swell_to_sk(th.menu_bg));
+  // Clear to transparent (rounded card sits on transparent SDL window bg)
+  SkPaint clearp;
+  clearp.setBlendMode(SkBlendMode::kSrc);
+  clearp.setColor(SK_ColorTRANSPARENT);
+  c->drawPaint(clearp);
+
+  // Surface fill — rounded card
   SkRect full = SkRect::MakeWH((float)mw->w, (float)mw->h);
-  c->drawRect(full, bgp);
+  SkRRect outer; outer.setRectXY(full, radius, radius);
 
-  // Border
+  SkPaint bgp;
+  bgp.setAntiAlias(true);
+  bgp.setColor(swell_to_sk(th.bg_menu));
+  c->drawRRect(outer, bgp);
+
+  // 1-px subtle border
   SkPaint border;
   border.setStyle(SkPaint::kStroke_Style);
-  border.setColor(swell_to_sk(th._3dshadow));
-  border.setStrokeWidth(1.0f);
-  border.setAntiAlias(false);
-  SkRect borderR = SkRect::MakeWH((float)mw->w - 0.5f, (float)mw->h - 0.5f);
-  c->drawRect(borderR, border);
+  border.setColor(swell_to_sk(th.border));
+  border.setStrokeWidth((float)th.border_width);
+  border.setAntiAlias(true);
+  SkRect innerR = SkRect::MakeLTRB(0.5f, 0.5f,
+                                   (float)mw->w - 0.5f, (float)mw->h - 0.5f);
+  SkRRect innerRR; innerRR.setRectXY(innerR, radius, radius);
+  c->drawRRect(innerRR, border);
+
+  // Clip subsequent drawing to the rounded card
+  c->save();
+  c->clipRRect(outer, true);
+
+  const int item_pad = th.padding_menu_item_h / 2;
 
   for (int i = 0; i < mw->n_items; i++) {
     SWELL_MenuItem *it = mw->menu->m_items.Get(i);
@@ -658,11 +677,12 @@ static void menu_draw(MenuWindow *mw)
 
     if (it->m_flags & MF_SEPARATOR) {
       SkPaint sep;
-      sep.setColor(swell_to_sk(th._3dshadow, 160));
-      sep.setStrokeWidth(1.0f);
+      sep.setColor(swell_to_sk(th.border, 160));
+      sep.setStrokeWidth((float)th.border_width);
       sep.setAntiAlias(false);
       float sy = iy + menu_sep_h() / 2.0f + 0.5f;
-      c->drawLine(menu_lpad() * 0.5f, sy, (float)(mw->w - 4), sy, sep);
+      c->drawLine((float)item_pad, sy,
+                  (float)(mw->w - item_pad), sy, sep);
       continue;
     }
 
@@ -671,34 +691,40 @@ static void menu_draw(MenuWindow *mw)
     bool checked  = (it->m_flags & MF_CHECKED) != 0;
     bool is_popup = (it->m_flags & MF_POPUP) != 0;
 
-    // Hover highlight
+    // Hover highlight: rounded accent bar inset by item_pad
     if (hovered && !disabled) {
       SkPaint hp;
       hp.setAntiAlias(true);
-      hp.setColor(swell_to_sk(th.menu_hilight_bg));
-      SkRect hr = SkRect::MakeLTRB(2, (float)iy + 1,
-                                   (float)(mw->w - 2), (float)(iy + ih - 1));
+      hp.setColor(swell_to_sk(th.bg_menu_hover));
+      SkRect hr = SkRect::MakeLTRB((float)item_pad, (float)iy + 1,
+                                   (float)(mw->w - item_pad),
+                                   (float)(iy + ih - 1));
       SkRRect rr;
-      rr.setRectXY(hr, 3.0f, 3.0f);
+      rr.setRectXY(hr, (float)th.corner_radius / 2.0f,
+                       (float)th.corner_radius / 2.0f);
       c->drawRRect(rr, hp);
     }
+
+    SkColor textCol;
+    if (disabled)      textCol = swell_to_sk(th.fg_text_disabled);
+    else if (hovered)  textCol = swell_to_sk(th.fg_on_accent);
+    else               textCol = swell_to_sk(th.fg_text);
 
     // Checkmark
     if (checked) {
       SkPaint cp;
       cp.setAntiAlias(true);
-      cp.setColor(hovered ? swell_to_sk(th.menu_hilight_text)
-                           : swell_to_sk(th.menu_text));
+      cp.setColor(textCol);
       cp.setStrokeWidth(2.0f);
       cp.setStyle(SkPaint::kStroke_Style);
       cp.setStrokeCap(SkPaint::kRound_Cap);
       cp.setStrokeJoin(SkPaint::kRound_Join);
       float cy = (float)(iy + ih / 2);
-      // Simple checkmark: ✓ drawn as two lines
+      float cx = (float)(item_pad + th.checkbox_size / 2);
       SkPath ck;
-      ck.moveTo(7.0f, cy);
-      ck.lineTo(11.0f, cy + 4.0f);
-      ck.lineTo(17.0f, cy - 5.0f);
+      ck.moveTo(cx - 5.0f, cy);
+      ck.lineTo(cx - 1.0f, cy + 4.0f);
+      ck.lineTo(cx + 5.0f, cy - 5.0f);
       c->drawPath(ck, cp);
     }
 
@@ -710,16 +736,11 @@ static void menu_draw(MenuWindow *mw)
       if (txt && txt[0]) {
         SkPaint tp;
         tp.setAntiAlias(true);
-        if (disabled)
-          tp.setColor(swell_to_sk(th._3dshadow));
-        else if (hovered)
-          tp.setColor(swell_to_sk(th.menu_hilight_text));
-        else
-          tp.setColor(swell_to_sk(th.menu_text));
+        tp.setColor(textCol);
 
         SkFontMetrics fm;
         mw->font.getMetrics(&fm);
-        float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f;// - fm.fAscent;
+        float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f;
 
         c->drawSimpleText(txt, strlen(txt), SkTextEncoding::kUTF8,
                           (float)menu_lpad(), ty, mw->font, tp);
@@ -730,14 +751,9 @@ static void menu_draw(MenuWindow *mw)
     if (is_popup) {
       SkPaint ap;
       ap.setAntiAlias(true);
-      if (disabled)
-        ap.setColor(swell_to_sk(th._3dshadow));
-      else if (hovered)
-        ap.setColor(swell_to_sk(th.menu_hilight_text));
-      else
-        ap.setColor(swell_to_sk(th.menu_text));
+      ap.setColor(textCol);
       ap.setStyle(SkPaint::kFill_Style);
-      float ax = (float)(mw->w - 10);
+      float ax = (float)(mw->w - item_pad - 6);
       float ay = (float)(iy + ih / 2);
       SkPath arrow;
       arrow.moveTo(ax,       ay - 4.0f);
@@ -747,6 +763,8 @@ static void menu_draw(MenuWindow *mw)
       c->drawPath(arrow, ap);
     }
   }
+
+  c->restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,7 +1052,7 @@ static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *
 {
   if (!hwnd || !hwnd->m_menu) return -1;
   HMENU menu = hwnd->m_menu;
-  const swell_colortheme &th = g_swell_ctheme;
+  const swell_theme &th = g_swell_theme;
   int barH = th.menubar_height;
 
   // Need a scratch DC for text measurement when no paint DC is available
@@ -1048,10 +1066,12 @@ static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *
 
   HFONT oldf = (HFONT)SelectObject(mdc, SWELL_GetDefaultFont());
 
-  int x = 4;
+  int x = th.padding_button_h / 2;
   int hit = -1;
   int n = menu->m_items.GetSize();
   WDL_FastString stripMb;
+  const int pad_h = th.padding_button_h;
+  const int item_r = th.corner_radius / 2;
   for (int i = 0; i < n; i++) {
     SWELL_MenuItem *it = menu->m_items.Get(i);
     if (!it) continue;
@@ -1062,7 +1082,7 @@ static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *
 
     RECT msz = { 0, 0, 0, 0 };
     SWELL_DrawText(mdc, txt, -1, &msz, DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
-    int itemW = (msz.right - msz.left) + 12;
+    int itemW = (msz.right - msz.left) + pad_h;
     RECT itemR = { x, 0, x + itemW, barH };
 
     if (hit_x >= x && hit_x < x + itemW) {
@@ -1072,12 +1092,19 @@ static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *
 
     if (hdc) {
       bool hl = (i == hilight_idx);
-      HBRUSH bgbr = CreateSolidBrush(hl ? (COLORREF)th.menubar_hilight_bg
-                                        : (COLORREF)th.menubar_bg);
-      FillRect(hdc, &itemR, bgbr);
-      DeleteObject(bgbr);
-      SetTextColor(hdc, hl ? (COLORREF)th.menubar_hilight_text
-                           : (COLORREF)th.menubar_text);
+      if (hl) {
+        HPEN np = (HPEN)GetStockObject(NULL_PEN);
+        HBRUSH bgbr = CreateSolidBrush((COLORREF)th.bg_menubar_hover);
+        HGDIOBJ op = SelectObject(hdc, np);
+        HGDIOBJ ob = SelectObject(hdc, bgbr);
+        int inset = 2;
+        RoundRect(hdc, itemR.left, itemR.top + inset,
+                  itemR.right, itemR.bottom - inset,
+                  item_r * 2, item_r * 2);
+        SelectObject(hdc, op);
+        SelectObject(hdc, ob); DeleteObject(bgbr);
+      }
+      SetTextColor(hdc, (COLORREF)th.fg_text);
       SetBkMode(hdc, TRANSPARENT);
       SWELL_DrawText(hdc, txt, -1, &itemR,
                      DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
@@ -1094,14 +1121,21 @@ static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *
 void swell_paint_menubar(HWND hwnd, HDC hdc)
 {
   if (!hwnd || !hwnd->m_menu || !hdc) return;
-  const swell_colortheme &th = g_swell_ctheme;
+  const swell_theme &th = g_swell_theme;
   int barH = th.menubar_height;
 
   RECT cr; GetClientRect(hwnd, &cr);
   RECT barR = { 0, 0, cr.right, barH };
-  HBRUSH br = CreateSolidBrush(th.menubar_bg);
+  HBRUSH br = CreateSolidBrush(th.bg_menubar);
   FillRect(hdc, &barR, br);
   DeleteObject(br);
+
+  // 1-px separator at bottom of the bar
+  HPEN sp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.border);
+  HGDIOBJ osp = SelectObject(hdc, sp);
+  MoveToEx(hdc, 0, barH - 1, NULL);
+  LineTo(hdc, cr.right, barH - 1);
+  SelectObject(hdc, osp); DeleteObject(sp);
 
   menubar_layout(hwnd, hdc, -1, -1, NULL);
 }

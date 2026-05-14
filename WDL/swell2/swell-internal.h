@@ -381,7 +381,6 @@ extern HWND g_swell_top_level_list_end;
 
 extern int g_swell_ui_scale;              // DPI scaling: 256 = 1.0x
 #define SWELL_UI_SCALE(x) (((x)*g_swell_ui_scale)/256)
-void swell_scale_theme();                 // rescale theme sizes after g_swell_ui_scale changes
 void swell_scaling_init(bool no_auto_hidpi); // auto-detect DPI via hidden SDL test window
 
 // SDL3 uses logical pixels (CSS pixels) for window positions, sizes, and
@@ -411,35 +410,107 @@ extern const char *g_swell_deffont_face;
 extern HFONT g_swell_default_font;
 HFONT SWELL_GetDefaultFont();
 
-// ---- swell_colortheme ----
+// ---- swell_theme ----
+// Semantic, non-user-configurable theme inspired by 2026 Adwaita and macOS
+// Mojave. Light and dark variants are both defined; the active theme is
+// selected once at startup. Metrics are stored in logical pixels and scaled
+// up to physical pixels by swell_theme_rescale() when DPI changes.
 
-struct swell_colortheme {
-  int _3dface, _3dshadow, _3dhilight, _3ddkshadow;
-  int button_bg, button_text, button_text_disabled, button_shadow, button_hilight;
-  int checkbox_bg, checkbox_text, checkbox_text_disabled;
-  int scrollbar, scrollbar_fg, scrollbar_bg;
-  int edit_bg, edit_text, edit_text_sel, edit_bg_sel, edit_cursor;
-  int info_bg, info_text;
-  int menu_bg, menu_text, menu_hilight_bg, menu_hilight_text;
-  int menubar_bg, menubar_text, menubar_hilight_bg, menubar_hilight_text;
+struct swell_theme {
+  // ---------- Colors (semantic) ----------
+  // Surfaces
+  int bg_window;          // dialog/window content
+  int bg_surface;         // elevated surface (popups, group box)
+  int bg_input;           // edit / list / tree / combo content
+  int bg_input_alt;       // alternating row
+  int bg_header;          // listview column header
+
+  // Push button
+  int bg_button;
+  int bg_button_hover;
+  int bg_button_pressed;
+
+  // Accent (selection, default button, focus, progress)
+  int accent;
+  int accent_hover;
+  int accent_pressed;
+  int fg_on_accent;
+
+  // Menu / menubar
+  int bg_menu;
+  int bg_menu_hover;
+  int bg_menubar;
+  int bg_menubar_hover;
+
+  // Tabs
+  int bg_tab;
+  int bg_tab_active;
+
+  // Scrollbar / trackbar / progress
+  int bg_scrollbar;
+  int scrollbar_thumb;
+  int scrollbar_thumb_hover;
+  int trackbar_track;
+  int trackbar_fill;
+  int trackbar_thumb;
+  int progress_track;
+  int progress_fill;
+
+  // Text
+  int fg_text;
+  int fg_text_dim;
+  int fg_text_disabled;
+
+  // Borders + focus
+  int border;
+  int border_strong;
+  int focus_ring;
+
+  // Tooltip
+  int info_bg;
+  int info_text;
+
+  // Caret
+  int caret;
+
+  // Drop shadow (solid approximation)
+  int shadow;
+
+  // ---------- Metrics (logical px @ 1.0x; rescaled into place) ----------
+  int corner_radius;          // standard control corner (Win11 ~6 px)
+  int corner_radius_large;    // popups / menus (~8 px)
+  int border_width;
+  int focus_ring_width;
+  int focus_ring_offset;
+
+  int padding_button_h, padding_button_v;
+  int padding_edit_h, padding_edit_v;
+  int padding_menu_item_h, padding_menu_item_v;
+  int padding_listheader_h, padding_listheader_v;
+
+  int button_min_h;
+  int edit_min_h;
   int menubar_height;
-  int trackbar_bg, trackbar_fg, trackbar_thumb;
-  int progress;
-  int label_text;
-  int combo_bg, combo_text;
-  int listview_bg, listview_text, listview_header_bg, listview_header_text;
-  int treeview_bg, treeview_text;
-  int tab_bg, tab_text, tab_sel_bg, tab_sel_text;
-  int focusrect;
-  int group_bg, group_text;
-  int focus_hilight;
-  int smscrollbar_width;
-  int default_font_size;
+  int menu_item_height;
+  int menu_separator_height;
+  int tab_height;
+  int scrollbar_width;
+  int checkbox_size;
+  int radio_size;
 
-  swell_colortheme();
+  int default_font_size;
+  int small_font_size;
 };
 
-extern swell_colortheme g_swell_ctheme;
+// Active theme. Populated by swell_theme_init() at startup.
+extern swell_theme g_swell_theme;
+
+// Theme mode. Dark mode plumbing is in place but not yet user-exposed.
+enum swell_theme_mode { SWELL_THEME_LIGHT = 0, SWELL_THEME_DARK = 1 };
+extern int g_swell_theme_mode;
+
+void swell_theme_init(int mode);   // populate g_swell_theme (logical units)
+void swell_theme_rescale();        // apply g_swell_ui_scale to metrics
 
 // ---- Internal function declarations ----
 
