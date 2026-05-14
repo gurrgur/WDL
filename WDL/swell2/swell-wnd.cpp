@@ -121,7 +121,9 @@ LRESULT SendMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
   WNDPROC proc = hwnd->m_wndproc;
   if (!proc) return 0;
 
+  hwnd->Retain();
   LRESULT ret = proc(hwnd, msg, wParam, lParam);
+  hwnd->Release();
 
   if (msg == WM_DESTROY) {
     // destroy children
@@ -300,7 +302,8 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_KEYDOWN: {
       if (!hwnd->m_parent) {
         if (wParam == VK_ESCAPE) {
-          if (SendMessage(hwnd, WM_CLOSE, 0, 0) == 0) {
+          if (SendMessage(hwnd, WM_CLOSE, 0, 0) == 0 &&
+              hwnd->m_hashaddestroy < 2) {
             SendMessage(hwnd, WM_COMMAND, IDCANCEL, 0);
           }
           return 1;
@@ -1189,20 +1192,39 @@ int IsDlgButtonChecked(HWND hwnd, int idx)
 
 // ===========================================================================
 // Coordinate conversion
+//
+// All coordinates are in physical device pixels. SWELL handles DPI scaling
+// via SWELL_UI_SCALE applied to dialog window dimensions and control layout.
+// SDL3 backend does NOT use SDL_WINDOW_HIGH_PIXEL_DENSITY — there is no
+// separate logical coordinate space.
+//
+// Three coordinate spaces (all in physical pixels):
+//   1. Screen coords   — absolute position on display.
+//                         Top-level m_position is in screen coords.
+//   2. Client coords    — relative to window client origin (0,0 = top-left
+//                          after NCCALCSIZE insets). Child m_position is
+//                          parent-relative (client coords within parent).
+//   3. Surface pixels   — backing store pixel grid. surface_offs maps
+//                          client→surface: surface_pixel = client + surface_offs.
+//                          Both sides are physical pixel offsets.
 // ===========================================================================
 
 void ClientToScreen(HWND hwnd, POINT *p)
 {
   if (!hwnd || !p) return;
 
-  // walk up parent chain accumulating offsets
   HWND w = hwnd;
   while (w) {
-    RECT r = w->m_position;
-    NCCALCSIZE_PARAMS ncp = {{{r.left, r.top, r.right, r.bottom}}};
+    // Separate position offset from NC (non-client) area offset.
+    // m_position is parent-relative for children, screen-absolute for
+    // top-level.  NCCALCSIZE receives {0,0,w,h} — a proper window-size
+    // rect — and returns NC insets in .left / .top.
+    int ww = w->m_position.right - w->m_position.left;
+    int wh = w->m_position.bottom - w->m_position.top;
+    NCCALCSIZE_PARAMS ncp = {{{0, 0, ww, wh}}};
     SendMessage(w, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
-    p->x += ncp.rgrc[0].left;
-    p->y += ncp.rgrc[0].top;
+    p->x += w->m_position.left + ncp.rgrc[0].left;
+    p->y += w->m_position.top  + ncp.rgrc[0].top;
 
     w = (HWND)w->m_parent;
   }
@@ -1214,11 +1236,12 @@ void ScreenToClient(HWND hwnd, POINT *p)
 
   HWND w = hwnd;
   while (w) {
-    RECT r = w->m_position;
-    NCCALCSIZE_PARAMS ncp = {{{r.left, r.top, r.right, r.bottom}}};
+    int ww = w->m_position.right - w->m_position.left;
+    int wh = w->m_position.bottom - w->m_position.top;
+    NCCALCSIZE_PARAMS ncp = {{{0, 0, ww, wh}}};
     SendMessage(w, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
-    p->x -= ncp.rgrc[0].left;
-    p->y -= ncp.rgrc[0].top;
+    p->x -= w->m_position.left + ncp.rgrc[0].left;
+    p->y -= w->m_position.top  + ncp.rgrc[0].top;
     w = (HWND)w->m_parent;
   }
 }
@@ -1290,25 +1313,48 @@ void SetWindowPos(HWND hwnd, HWND unused, int x, int y, int cx, int cy, int flag
   }
 }
 
+// Recursive helper: search `parent`'s children in parent-relative coordinates.
+// `p` must already be in parent-client coordinates (subtract NC offsets first).
+static HWND windowfrompoint_recurse(HWND parent, POINT p)
+{
+  if (!parent) return NULL;
+  for (int i = parent->m_children.GetSize() - 1; i >= 0; i--) {
+    HWND ch = parent->m_children.Get(i);
+    if (!ch || !ch->m_visible) continue;
+    RECT cr = ch->m_position; // parent-relative
+    if (p.x >= cr.left && p.x < cr.right &&
+        p.y >= cr.top && p.y < cr.bottom) {
+      // Descend: convert p to child-client coords (subtract position + NC)
+      POINT cp = { p.x - cr.left, p.y - cr.top };
+      int cw = cr.right - cr.left;
+      int chh = cr.bottom - cr.top;
+      NCCALCSIZE_PARAMS ncp = {{{0, 0, cw, chh}}};
+      SendMessage(ch, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
+      cp.x -= ncp.rgrc[0].left;
+      cp.y -= ncp.rgrc[0].top;
+      HWND deeper = windowfrompoint_recurse(ch, cp);
+      return deeper ? deeper : ch;
+    }
+  }
+  return NULL;
+}
+
 HWND WindowFromPoint(POINT p)
 {
-  // search top-level windows for containment
   HWND w = g_swell_top_level_list;
   while (w) {
     RECT r = w->m_position;
     if (p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom) {
-      // search children for deeper match
-      for (int i = w->m_children.GetSize() - 1; i >= 0; i--) {
-        HWND ch = w->m_children.Get(i);
-        if (ch && ch->m_visible) {
-          RECT cr = ch->m_position;
-          if (p.x >= cr.left && p.x < cr.right &&
-              p.y >= cr.top && p.y < cr.bottom) {
-            return ch;
-          }
-        }
-      }
-      return w;
+      // Convert screen point to top-level client coords
+      POINT cp = { p.x - r.left, p.y - r.top };
+      int ww = r.right - r.left;
+      int wh = r.bottom - r.top;
+      NCCALCSIZE_PARAMS ncp = {{{0, 0, ww, wh}}};
+      SendMessage(w, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
+      cp.x -= ncp.rgrc[0].left;
+      cp.y -= ncp.rgrc[0].top;
+      HWND ch = windowfrompoint_recurse(w, cp);
+      return ch ? ch : w;
     }
     w = w->m_next;
   }

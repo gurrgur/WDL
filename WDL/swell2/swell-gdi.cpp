@@ -24,6 +24,15 @@
 #include <ports/SkFontMgr_fontconfig.h>
 #include <ports/SkFontScanner_FreeType.h>
 
+// Image decoding (for LoadNamedImage)
+#include <core/SkData.h>
+#include <codec/SkCodec.h>
+#include <codec/SkPngDecoder.h>
+#include <codec/SkJpegDecoder.h>
+#include <codec/SkBmpDecoder.h>
+#include <codec/SkGifDecoder.h>
+#include <codec/SkWebpDecoder.h>
+
 // ---------------------------------------------------------------------------
 // Global state
 // ---------------------------------------------------------------------------
@@ -610,9 +619,52 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
 
 HICON LoadNamedImage(const char *name, bool alphaFromMask)
 {
-  (void)name;
   (void)alphaFromMask;
-  return nullptr;
+  if (!name || !name[0]) return nullptr;
+
+  sk_sp<SkData> data = SkData::MakeFromFileName(name);
+  if (!data || data->size() == 0) return nullptr;
+
+  // Try decoders in order of popularity for REAPER assets
+  using DecodeFn = std::unique_ptr<SkCodec> (*)(sk_sp<const SkData>,
+                                                 SkCodec::Result *,
+                                                 SkCodecs::DecodeContext);
+  struct { bool (*is)(const void *, size_t); DecodeFn dec; } decoders[] = {
+    { SkPngDecoder::IsPng,   SkPngDecoder::Decode  },
+    { SkJpegDecoder::IsJpeg, SkJpegDecoder::Decode },
+    { SkBmpDecoder::IsBmp,   SkBmpDecoder::Decode  },
+    { SkWebpDecoder::IsWebp, SkWebpDecoder::Decode },
+    { SkGifDecoder::IsGif,   SkGifDecoder::Decode  },
+  };
+
+  std::unique_ptr<SkCodec> codec;
+  for (auto &d : decoders) {
+    if (d.is(data->data(), data->size())) {
+      SkCodec::Result r;
+      codec = d.dec(sk_sp<const SkData>(data), &r, nullptr);
+      if (codec && r == SkCodec::kSuccess) break;
+      codec.reset();
+    }
+  }
+  if (!codec) return nullptr;
+
+  SkImageInfo info = codec->getInfo()
+                          .makeColorType(kBGRA_8888_SkColorType)
+                          .makeAlphaType(kPremul_SkAlphaType);
+  SkBitmap *bm = new SkBitmap();
+  if (!bm->tryAllocPixels(info)) { delete bm; return nullptr; }
+
+  SkCodec::Result res = codec->getPixels(bm->info(), bm->getPixels(), bm->rowBytes());
+  if (res != SkCodec::kSuccess && res != SkCodec::kIncompleteInput) {
+    delete bm;
+    return nullptr;
+  }
+
+  HGDIOBJ__ *obj = GDP_OBJECT_NEW();
+  if (!obj) { delete bm; return nullptr; }
+  obj->type     = TYPE_BITMAP;
+  obj->typedata = bm;
+  return (HICON)obj;
 }
 
 HGDIOBJ SelectObject(HDC ctx, HGDIOBJ pen)
@@ -1640,4 +1692,13 @@ swell_colortheme::swell_colortheme()
 
   // Font
   default_font_size = 12;
+}
+
+void swell_scale_theme()
+{
+  if (g_swell_ui_scale == 256) return;
+  double sc = g_swell_ui_scale * (1.0 / 256.0);
+  g_swell_ctheme.menubar_height      = (int)(g_swell_ctheme.menubar_height      * sc + 0.5);
+  g_swell_ctheme.smscrollbar_width   = (int)(g_swell_ctheme.smscrollbar_width   * sc + 0.5);
+  g_swell_ctheme.default_font_size   = (int)(g_swell_ctheme.default_font_size   * sc + 0.5);
 }

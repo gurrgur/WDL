@@ -109,7 +109,9 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
     flags |= SDL_WINDOW_BORDERLESS;
   if (!wantFocus)
     flags |= SDL_WINDOW_NOT_FOCUSABLE;
-  flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+  // Do NOT use SDL_WINDOW_HIGH_PIXEL_DENSITY — SWELL handles DPI scaling
+  // itself via SWELL_UI_SCALE on window dimensions and control layout.
+  // HIGH_PIXEL_DENSITY would double-scale: SWELL_UI_SCALE × SDL logical→physical.
   flags |= SDL_WINDOW_HIDDEN; // show after position is set
 
   SDL_Window *sdlwin = SDL_CreateWindow(
@@ -526,8 +528,10 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
-      if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2) {
-        SendMessage(e->hwnd, WM_CLOSE, 0, 0);
+      if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2 && IsWindowEnabled(e->hwnd)) {
+        if (!SendMessage(e->hwnd, WM_CLOSE, 0, 0) &&
+            e->hwnd->m_hashaddestroy < 2)
+          SendMessage(e->hwnd, WM_COMMAND, IDCANCEL, 0);
       }
       break;
     }
@@ -896,8 +900,30 @@ void SWELL_initargs(int *argc, char ***argv)
   if (!SDL_WasInit(SDL_INIT_VIDEO) && !SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "SWELL SDL3: SDL_Init failed: %s\n", SDL_GetError());
   }
+
+  swell_scaling_init(false);
+  swell_scale_theme();
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// swell_scaling_init: auto-detect DPI via hidden SDL3 test window
+// ---------------------------------------------------------------------------
+
+void swell_scaling_init(bool no_auto_hidpi)
+{
+  if (no_auto_hidpi || g_swell_ui_scale != 256) return;
+
+  SDL_Window *test = SDL_CreateWindow("swell_dpi_test", 1, 1,
+      SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
+  if (!test) return;
+
+  float cs = SDL_GetWindowDisplayScale(test);
+  SDL_DestroyWindow(test);
+
+  if (cs > 1.0f && cs < 8.0f)
+    g_swell_ui_scale = (int)(cs * 256.0f + 0.5f);
+}
 
 // ---- SWELL_RunMessageLoop ----
 // Defined in swell-wnd.cpp (overrides backend stub)

@@ -409,8 +409,10 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
     style |= WS_CHILD;
   }
 
-  int dlg_w = res ? res->width  : 400;
-  int dlg_h = res ? res->height : 300;
+  // Scale to physical device pixels (matching original SWELL dlg-generic.cpp:295).
+  // SDL3 backend does NOT use HIGH_PIXEL_DENSITY — SWELL owns DPI scaling itself.
+  int dlg_w = SWELL_UI_SCALE(res ? res->width  : 400);
+  int dlg_h = SWELL_UI_SCALE(res ? res->height : 300);
 
   // Center on screen for top-level and owned windows
   int dlg_x = 0, dlg_y = 0;

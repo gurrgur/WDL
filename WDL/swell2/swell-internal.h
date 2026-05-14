@@ -119,6 +119,15 @@ struct HWND__ {
   WDL_PtrList<HWND__> m_owned;
 
   WDL_FastString m_title;
+
+  // m_position stores physical device pixels (NOT logical points).
+  // SWELL handles DPI scaling itself via SWELL_UI_SCALE; SDL3 backend
+  // does NOT use SDL_WINDOW_HIGH_PIXEL_DENSITY.
+  // Semantics depend on window hierarchy level:
+  //   Top-level (owns m_backingstore or m_oswindow): screen coordinates
+  //   Child: parent-relative coordinates within immediate parent
+  // Do not compare m_position of a child against screen coordinates;
+  // walk the parent chain and accumulate offsets first.
   RECT m_position;
   DWORD m_style;
   DWORD m_exstyle;
@@ -381,6 +390,8 @@ extern HWND g_swell_top_level_list_end;
 
 extern int g_swell_ui_scale;              // DPI scaling: 256 = 1.0x
 #define SWELL_UI_SCALE(x) (((x)*g_swell_ui_scale)/256)
+void swell_scaling_init(bool no_auto_hidpi);  // auto-detect DPI from OS
+void swell_scale_theme();                 // rescale theme sizes after g_swell_ui_scale changes
 
 extern const char *g_swell_deffont_face;
 

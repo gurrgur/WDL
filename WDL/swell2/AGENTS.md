@@ -395,6 +395,81 @@ pointer → SIGSEGV at 0x0). See `docs/DEBUGGING.md`.
 
 ---
 
+## Coordinate Systems
+
+swell2 has three coordinate spaces. Know which one you're in before touching
+rects or offsets.
+
+### 1. Screen coordinates (logical points)
+
+Absolute position on the display. Top-level window `m_position` stores screen
+coordinates. SDL reports positions/sizes in these units via
+`SDL_GetWindowPosition` / `SDL_GetWindowSize`.
+
+### 2. Client / window-local coordinates (logical points)
+
+Relative to a window's origin. Child window `m_position` is parent-relative
+within its immediate parent — effectively a client-coordinate rect inside the
+parent.
+
+Drawing operations through HDC use client coordinates: `(0,0)` means the
+top-left corner of the client area (after NCCALCSIZE insets).
+
+### 3. Surface pixel coordinates (physical device pixels)
+
+Raw pixels in the Skia backing store (`m_backingstore`). `HDC__::surface_offs`
+maps from client coords to surface pixel coords:
+
+```
+surface_pixel = (client_x + surface_offs.x, client_y + surface_offs.y)
+```
+
+### `m_position` — dual meaning
+
+| Window type | `m_position` meaning |
+|---|---|
+| Top-level (has `m_backingstore` or `m_oswindow`) | Screen coordinates (physical pixels) |
+| Child | Parent-relative coordinates (physical pixels) |
+
+Never compare a child's `m_position` against screen coordinates. Walk the
+parent chain and accumulate offsets, or use `ClientToScreen`/`ScreenToClient`.
+
+### HiDPI — SWELL owns DPI scaling
+
+- swell2 does NOT use `SDL_WINDOW_HIGH_PIXEL_DENSITY`. SDL gets physical
+  pixel coordinates; SWELL handles all DPI scaling via `SWELL_UI_SCALE`.
+  (Matches original swell: `SWELL_UI_SCALE` on dialog window dimensions
+  in `swell-dlg-generic.cpp:295`, and SDL2's `SDL_WINDOW_ALLOW_HIGHDPI`
+  similarly avoids SDL-level scaling.)
+- `m_position` stores physical device pixels (consistent with `swell-dlg.cpp`
+  applying `SWELL_UI_SCALE` to dialog dimensions).
+- `m_backingstore` (Skia surface) matches `m_position` dimensions.
+- `GetDC` / `surface_offs` use physical pixel offsets — no logical↔physical
+  gap. Drawing at client (0,0) maps directly to surface pixel (0,0).
+- `g_swell_ui_scale` (256 = 1.0×) scales dialog window dimensions, control
+  layout, and theme element sizes. Set once at startup from
+  `SDL_GetWindowDisplayScale`.
+- `swell_oswindow_updatetoscreen()` blits the full surface; SDL renderer
+  output matches surface pixel dimensions.
+
+### Coordinate conversion functions — all in swell-wnd.cpp
+
+| Function | Input → Output |
+|---|---|
+| `ClientToScreen` | Client coords → Screen coords |
+| `ScreenToClient` | Screen coords → Client coords |
+| `GetClientRect` | Window → client-area rect (client coords, NC excluded) |
+| `GetWindowRect` | Window → screen-coordinate rect |
+| `GetWindowContentViewRect` | Window → full content rect (client coords, NC included) |
+| `WindowFromPoint` | Screen coords → deepest HWND |
+
+All coordinate math is in logical pixels. The NCCALCSIZE message protocol
+expects a window-size rect `{0, 0, w, h}` and returns NC insets in `.left`
+and `.top`. Pass position offsets separately — never bundle window position
+into the NCCALCSIZE input rect. (Fixed 2026-05-14.)
+
+---
+
 ## Key Design Constraints
 
 ### ABI compatibility
