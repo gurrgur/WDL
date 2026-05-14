@@ -183,6 +183,14 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
 
     case WM_NCPAINT:
+      if (hwnd->m_menu && !hwnd->m_parent) {
+        // Paint menu bar into NC area using the window's backing store canvas.
+        // swell_internalSkiaPaint calls WM_NCPAINT before WM_PAINT, so the
+        // backing store canvas is available (held in m_paintctx).
+        swell_gdpLocalContext *ctx = hwnd->m_paintctx;
+        if (ctx) swell_paint_menubar(hwnd, &ctx->ctx);
+      }
+      return 0;
     case WM_NCMOUSEMOVE:
     case WM_NCLBUTTONDOWN:
     case WM_NCLBUTTONUP:

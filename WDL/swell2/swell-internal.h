@@ -465,6 +465,9 @@ extern int g_pmq_count;
 // swell-dlg.cpp spare window
 void swell_dlg_destroyspare();
 
+// swell-menu.cpp: paint menu bar into NC area of top-level window
+void swell_paint_menubar(HWND hwnd, HDC hdc);
+
 // swell-wnd.cpp: invoke registered custom control creators
 HWND swell_invoke_control_creators(HWND parent, const char *cname, int idx,
                                    const char *classname, int style,

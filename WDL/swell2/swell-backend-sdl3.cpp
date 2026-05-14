@@ -463,7 +463,25 @@ static LPARAM make_key_lparam(SDL_Keymod mod)
 }
 
 // ---------------------------------------------------------------------------
-// Mouse hit-test: find deepest visible child at position
+// NC offset: top-level windows may have a NC area (e.g. menu bar) above client
+// ---------------------------------------------------------------------------
+
+static void get_nc_offsets(HWND hwnd, int *nc_left_out, int *nc_top_out)
+{
+  *nc_left_out = 0;
+  *nc_top_out  = 0;
+  if (!hwnd || hwnd->m_parent) return;
+  // Use NCCALCSIZE to get the client inset from a zero-origin rect
+  RECT nr = { 0, 0,
+    hwnd->m_position.right - hwnd->m_position.left,
+    hwnd->m_position.bottom - hwnd->m_position.top };
+  SendMessage(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&nr);
+  *nc_left_out = nr.left;
+  *nc_top_out  = nr.top;
+}
+
+// ---------------------------------------------------------------------------
+// Mouse hit-test: find deepest visible child at (x,y) in CLIENT coords
 // ---------------------------------------------------------------------------
 
 static HWND hittest_child(HWND parent, float x, float y)
@@ -715,16 +733,47 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         if (down)
           swell_oswindow_focus(e->hwnd);
 
+        // Translate SDL window coords to client coords (subtract NC inset)
+        int nc_left = 0, nc_top = 0;
+        get_nc_offsets(e->hwnd, &nc_left, &nc_top);
+        float cx = mx - nc_left;
+        float cy = my - nc_top;
+
+        // NC area click (menu bar etc.)
+        if (down && btn == SDL_BUTTON_LEFT && (cy < 0 || cx < 0)) {
+          UINT ncmsg = (clicks >= 2) ? WM_NCLBUTTONDBLCLK : WM_NCLBUTTONDOWN;
+          SendMessage(e->hwnd, ncmsg, HTMENU, MAKELPARAM((int)mx, (int)my));
+          break;
+        }
+
         target = e->hwnd;
-        HWND child = hittest_child(e->hwnd, mx, my);
+        HWND child = hittest_child(e->hwnd, cx, cy);
         if (child) {
-          mx -= child->m_position.left;
-          my -= child->m_position.top;
+          // coords relative to child's client origin
+          cx -= child->m_position.left;
+          cy -= child->m_position.top;
           target = child;
         }
+        mx = cx;
+        my = cy;
 
         if (down && IsWindowEnabled(target))
           SendMessage(target, WM_MOUSEACTIVATE, 0, 0);
+      } else if (cap) {
+        // Captured control — translate to top-level client coords first
+        HWND toplevel = cap;
+        while (toplevel->m_parent) toplevel = (HWND)toplevel->m_parent;
+        int nc_left = 0, nc_top = 0;
+        get_nc_offsets(toplevel, &nc_left, &nc_top);
+        mx -= nc_left;
+        my -= nc_top;
+        // Convert to cap-local coords
+        HWND p = cap;
+        while (p && p->m_parent) {
+          mx -= p->m_position.left;
+          my -= p->m_position.top;
+          p = (HWND)p->m_parent;
+        }
       }
       if (!target) break;
 
@@ -764,13 +813,19 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       if (!target) {
         SDL_WindowEntry *e = find_entry_by_windowID(evt->motion.windowID);
         if (e && e->hwnd) {
+          int nc_left = 0, nc_top = 0;
+          get_nc_offsets(e->hwnd, &nc_left, &nc_top);
+          float cx = mx - nc_left;
+          float cy = my - nc_top;
           target = e->hwnd;
-          HWND child = hittest_child(e->hwnd, mx, my);
+          HWND child = hittest_child(e->hwnd, cx, cy);
           if (child) {
-            mx -= child->m_position.left;
-            my -= child->m_position.top;
+            cx -= child->m_position.left;
+            cy -= child->m_position.top;
             target = child;
           }
+          mx = cx;
+          my = cy;
         }
       }
       if (target) {
@@ -786,8 +841,12 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       SDL_WindowEntry *e = find_entry_by_windowID(evt->wheel.windowID);
       HWND target = NULL;
       if (e && e->hwnd) {
+        int nc_left = 0, nc_top = 0;
+        get_nc_offsets(e->hwnd, &nc_left, &nc_top);
+        float cx = evt->wheel.mouse_x - nc_left;
+        float cy = evt->wheel.mouse_y - nc_top;
         target = e->hwnd;
-        HWND child = hittest_child(e->hwnd, evt->wheel.mouse_x, evt->wheel.mouse_y);
+        HWND child = hittest_child(e->hwnd, cx, cy);
         if (child) target = child;
       }
       if (!target) break;

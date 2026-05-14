@@ -1465,20 +1465,25 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
 
     hwnd->m_paintctx = &ctx_local;
 
-    // WM_NCCALCSIZE for client inset
+    // WM_NCCALCSIZE: compute client inset (e.g. menu bar at top)
     SendMessage(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr);
+    int nc_left = ncr.left;
+    int nc_top  = ncr.top;
 
     if (forceref) {
       SendMessage(hwnd, WM_NCPAINT, 1, 0);
     }
 
-    // clipr is the client-area rect (NCCALCSIZE result), which tells
-    // the WM_PAINT handler what region to draw.  surface_offs already
-    // tracks the absolute pixel position of drawing coordinate (0,0)
-    // in the surface — it stays at bmout_xpos/ypos (set above) because
-    // the canvas is not translated by the NC inset and drawing coords
-    // inside the paint handler are already relative to the NC-adjusted frame.
-    ctx_local.clipr = ncr;
+    // Translate canvas for client area painting: WM_PAINT draws at (0,0)
+    // which should map to window pixel (nc_left, nc_top).
+    int nc_save = canvas ? canvas->save() : 0;
+    if (canvas && (nc_left || nc_top))
+      canvas->translate((float)nc_left, (float)nc_top);
+
+    ctx_local.clipr = { 0, 0,
+      ncr.right - ncr.left, ncr.bottom - ncr.top };
+    ctx_local.ctx.surface_offs.x = bmout_xpos + nc_left;
+    ctx_local.ctx.surface_offs.y = bmout_ypos + nc_top;
 
     ctx_local.ctx.curfont = hwnd->m_font;
 
@@ -1486,16 +1491,12 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
       SendMessage(hwnd, WM_PAINT, (WPARAM)&ctx_local, 0);
     }
 
-    // Restore paintctx before child recursion so re-entrancy is
-    // detectable (matching SWELL_internalLICEpaint which restores
-    // oldpaintctx after WM_PAINT).  m_invalidated is cleared now
-    // so the window won't be repainted unnecessarily.
     hwnd->m_paintctx = nullptr;
     hwnd->m_invalidated = false;
 
     // Recurse into visible children that need paint.
-    // Matches original swell: only recurse when forceref or child
-    // or its descendants are invalidated.
+    // Child m_position is in client coordinates; canvas is already translated
+    // to (nc_left, nc_top) so children render at the right window position.
     for (int i = 0; i < hwnd->m_children.GetSize(); i++) {
       HWND child = hwnd->m_children.Get(i);
       if (!child || !child->m_visible) continue;
@@ -1511,15 +1512,18 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
         canvas->translate((float)cr.left, (float)cr.top);
       }
 
-      // Pass bmout plus child position so child's surface_offs
-      // accounts for child position within parent.
+      // bmout offsets are in window (not client) pixels, so add nc inset.
       SWELL_internalSkiaPaint(child, canvas,
-        bmout_xpos + child->m_position.left,
-        bmout_ypos + child->m_position.top,
+        bmout_xpos + nc_left + child->m_position.left,
+        bmout_ypos + nc_top  + child->m_position.top,
         forceref);
 
       if (canvas) canvas->restoreToCount(saveCount);
     }
+
+    // Undo the NC translation for child recursion
+    if (canvas && (nc_left || nc_top))
+      canvas->restoreToCount(nc_save);
 
     hwnd->m_child_invalidated = false;
   }
