@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include <signal.h>
 #include <time.h>
 
@@ -179,22 +180,86 @@ void *SWELL_GetBundle(HINSTANCE hInst)
 }
 
 // ============================================================================
-// Message Box (simple stderr + return)
+// Message Box — SDL3 native dialog
 // ============================================================================
 
 int MessageBox(HWND hwndParent, const char *text, const char *caption, int type)
 {
+#ifdef SWELL_TARGET_SDL3
+  int btntype = type & 0xF;
+
+  SDL_MessageBoxButtonData btns[3];
+  int nbtn = 0;
+  int default_id = IDOK;
+
+  switch (btntype) {
+    case MB_OKCANCEL:
+      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDOK,     "OK"     };
+      btns[1] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDCANCEL, "Cancel" };
+      nbtn = 2; default_id = IDOK;
+      break;
+    case MB_YESNO:
+      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDYES, "Yes" };
+      btns[1] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDNO,  "No"  };
+      nbtn = 2; default_id = IDYES;
+      break;
+    case MB_YESNOCANCEL:
+      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDYES,    "Yes"    };
+      btns[1] = { 0,                                       IDNO,     "No"     };
+      btns[2] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDCANCEL, "Cancel" };
+      nbtn = 3; default_id = IDYES;
+      break;
+    case MB_RETRYCANCEL:
+      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDRETRY,  "Retry"  };
+      btns[1] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDCANCEL, "Cancel" };
+      nbtn = 2; default_id = IDRETRY;
+      break;
+    case MB_ABORTRETRYIGNORE:
+      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDABORT,  "Abort"  };
+      btns[1] = { 0,                                       IDRETRY,  "Retry"  };
+      btns[2] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDIGNORE, "Ignore" };
+      nbtn = 3; default_id = IDABORT;
+      break;
+    default: // MB_OK
+      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT | SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT,
+                  IDOK, "OK" };
+      nbtn = 1; default_id = IDOK;
+      break;
+  }
+
+  SDL_MessageBoxFlags flags = SDL_MESSAGEBOX_INFORMATION;
+  if (type & MB_ICONERROR)       flags = SDL_MESSAGEBOX_ERROR;
+  else if (type & MB_ICONWARNING) flags = SDL_MESSAGEBOX_WARNING;
+
+  SDL_Window *sdlpar = NULL;
+  if (hwndParent) {
+    HWND top = hwndParent;
+    while (top->m_parent) top = (HWND)top->m_parent;
+    sdlpar = (SDL_Window*)top->m_oswindow;
+  }
+
+  SDL_MessageBoxData mbd = {};
+  mbd.flags       = flags;
+  mbd.window      = sdlpar;
+  mbd.title       = caption ? caption : "";
+  mbd.message     = text ? text : "";
+  mbd.numbuttons  = nbtn;
+  mbd.buttons     = btns;
+
+  int clicked = default_id;
+  SDL_ShowMessageBox(&mbd, &clicked);
+  return clicked;
+#else
   (void)hwndParent;
   fprintf(stderr, "[MessageBox] %s: %s\n",
           caption ? caption : "", text ? text : "");
-
-  // Without a display, just return the default affirmative
-  if ((type & 0xF) == MB_YESNO)  return IDYES;
-  if ((type & 0xF) == MB_YESNOCANCEL) return IDYES;
-  if ((type & 0xF) == MB_RETRYCANCEL) return IDRETRY;
-  if ((type & 0xF) == MB_ABORTRETRYIGNORE) return IDIGNORE;
-  if ((type & 0xF) == MB_OKCANCEL) return IDOK;
+  int btntype = type & 0xF;
+  if (btntype == MB_YESNO || btntype == MB_YESNOCANCEL) return IDYES;
+  if (btntype == MB_RETRYCANCEL) return IDRETRY;
+  if (btntype == MB_ABORTRETRYIGNORE) return IDIGNORE;
+  if (btntype == MB_OKCANCEL) return IDOK;
   return IDOK;
+#endif
 }
 
 // ============================================================================
@@ -887,9 +952,80 @@ void ImageList_Destroy(HIMAGELIST list)
 // Extended API / Misc
 // ============================================================================
 
+static const char *g_swell_appname    = NULL;
+static char       *g_swell_defini     = NULL;
+static const char *g_swell_fontpangram = NULL;
+
+// Drag-drop callbacks (set by app via SWELL_ExtendedAPI)
+void (*SWELL_DDrop_onDragLeave)(void)                = NULL;
+void (*SWELL_DDrop_onDragOver)(HWND, int, int)       = NULL;
+void (*SWELL_DDrop_onDragEnter)(void *, HWND, int, int) = NULL;
+const char *(*SWELL_DDrop_getDroppedFileTargetPath)(const char *) = NULL;
+
 void *SWELL_ExtendedAPI(const char *key, void *v)
 {
-  (void)key; (void)v; return NULL;
+  if (!key) return NULL;
+
+  if (!strcmp(key, "APPNAME")) {
+    g_swell_appname = (const char *)v;
+    return NULL;
+  }
+  if (!strcmp(key, "FONTPANGRAM")) {
+    g_swell_fontpangram = (const char *)v;
+    return NULL;
+  }
+  if (!strcmp(key, "INIFILE")) {
+    free(g_swell_defini);
+    g_swell_defini = v ? strdup((const char *)v) : NULL;
+
+    // Raise file descriptor limit for audio workloads
+    struct rlimit rl = {};
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+      rlim_t want = 16384;
+      if (want > rl.rlim_max) want = rl.rlim_max;
+      if (want > rl.rlim_cur) {
+        rl.rlim_cur = want;
+        setrlimit(RLIMIT_NOFILE, &rl);
+      }
+    }
+    return NULL;
+  }
+  if (!strcmp(key, "activate_app")) {
+    // Raise the frontmost SDL window
+#ifdef SWELL_TARGET_SDL3
+    extern HWND g_swell_focused_oswindow_hwnd;
+    if (g_swell_focused_oswindow_hwnd && g_swell_focused_oswindow_hwnd->m_oswindow)
+      SDL_RaiseWindow((SDL_Window*)g_swell_focused_oswindow_hwnd->m_oswindow);
+#endif
+    return NULL;
+  }
+#ifdef SWELL_TARGET_SDL3
+  if (!strcmp(key, "FULLSCREEN") || !strcmp(key, "-FULLSCREEN") || !strcmp(key, "oFULLSCREEN")) {
+    HWND hwnd = (HWND)v;
+    if (!hwnd || !hwnd->m_oswindow) return NULL;
+    SDL_Window *w = (SDL_Window*)hwnd->m_oswindow;
+    if (key[0] == '-')
+      SDL_SetWindowFullscreen(w, false);
+    else
+      SDL_SetWindowFullscreen(w, true);
+    return v;
+  }
+  if (!strcmp(key, "PREVENT_SCREENSAVER")) {
+    SDL_DisableScreenSaver();
+    return NULL;
+  }
+  if (!strcmp(key, "-PREVENT_SCREENSAVER")) {
+    SDL_EnableScreenSaver();
+    return NULL;
+  }
+#endif
+  if (!strcmp(key, "SWELL_DDrop_onDragLeave"))   { *(void**)&SWELL_DDrop_onDragLeave = v; return v; }
+  if (!strcmp(key, "SWELL_DDrop_onDragOver"))    { *(void**)&SWELL_DDrop_onDragOver = v; return v; }
+  if (!strcmp(key, "SWELL_DDrop_onDragEnter"))   { *(void**)&SWELL_DDrop_onDragEnter = v; return v; }
+  if (!strcmp(key, "SWELL_DDrop_getDroppedFileTargetPath")) {
+    *(void**)&SWELL_DDrop_getDroppedFileTargetPath = v; return v;
+  }
+  return NULL;
 }
 
 unsigned int _controlfp(unsigned int flag, unsigned int mask)

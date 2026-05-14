@@ -329,7 +329,7 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
   if (!e->texture || e->tex_w != pw || e->tex_h != ph) {
     if (e->texture) SDL_DestroyTexture(e->texture);
     e->texture = SDL_CreateTexture(e->renderer,
-        SDL_PIXELFORMAT_BGRA8888,
+        SDL_PIXELFORMAT_BGRA32,  // B,G,R,A in memory = Skia kBGRA_8888_SkColorType
         SDL_TEXTUREACCESS_STREAMING,
         pw, ph);
     if (!e->texture) return;
