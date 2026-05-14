@@ -662,14 +662,15 @@ void ShowWindow(HWND hwnd, int cmd)
 
   bool wasVisible = hwnd->m_visible;
 
+  // Matching original SWELL: if already visible, don't steal focus
+  if ((cmd == SW_SHOW || cmd == SW_SHOWNA) && hwnd->m_visible)
+    cmd = SW_SHOWNA;
+
   switch (cmd) {
     case SW_HIDE:
       hwnd->m_visible = false;
       break;
     case SW_SHOW:
-      hwnd->m_visible = true;
-      SetForegroundWindow(hwnd);
-      break;
     case SW_SHOWNA:
     case SW_SHOWMINIMIZED:
     case SW_SHOWMAXIMIZED:
@@ -683,9 +684,14 @@ void ShowWindow(HWND hwnd, int cmd)
       InvalidateRect((HWND)hwnd->m_parent, &hwnd->m_position, FALSE);
   }
 
+  // swell_oswindow_manage BEFORE SetForegroundWindow (matching original)
+  // so the OS window exists before focus-switch tries to raise it.
   if (hwnd->m_visible && !wasVisible && !hwnd->m_parent && !hwnd->m_oswindow) {
     swell_oswindow_manage(hwnd, cmd != SW_SHOWNA);
   }
+
+  if (cmd == SW_SHOW)
+    SetForegroundWindow(hwnd);
 
   if (hwnd->m_visible) {
     InvalidateRect(hwnd, NULL, FALSE);
@@ -822,7 +828,10 @@ void ReleaseCapture()
 HWND GetParent(HWND hwnd)
 {
   if (!hwnd) return NULL;
-  return (HWND)hwnd->m_parent;
+  // Win32: GetParent returns the owner for top-level owned windows
+  if (hwnd->m_parent) return (HWND)hwnd->m_parent;
+  if (hwnd->m_owner) return (HWND)hwnd->m_owner;
+  return NULL;
 }
 
 HWND SetParent(HWND hwnd, HWND newPar)

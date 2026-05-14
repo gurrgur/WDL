@@ -383,23 +383,38 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
 
   int wflags = res ? res->windowTypeFlags : 0;
 
+  // Matching original SWELL:
+  //   bare WNDPROC with parent → child window (opaque child, spec)
+  //   resource with SWELL_DLG_WS_CHILD → child window
+  //   resource with parent but no WS_CHILD → top-level owned window
+  //     (parent converted to owner, window gets own OS window)
+  bool is_child = bare_wndproc ? (parent != NULL) : ((wflags & SWELL_DLG_WS_CHILD) != 0);
+  HWND__ *owner = NULL;
+  HWND__ *hwnd_parent = parent;
+
+  if (!is_child && parent) {
+    owner       = parent;
+    hwnd_parent = NULL;   // top-level window — gets own OS window
+  }
+
   DWORD style = WS_CLIPCHILDREN;
   DWORD exstyle = 0;
 
-  if (parent || (wflags & SWELL_DLG_WS_CHILD)) {
-    style |= WS_CHILD | WS_VISIBLE;
-  } else {
+  if (!hwnd_parent) {
+    // top-level (may be owned): always get caption+sysmenu
     style |= WS_CAPTION | WS_SYSMENU;
     if (wflags & SWELL_DLG_WS_RESIZABLE) style |= WS_THICKFRAME;
     if (wflags & SWELL_DLG_WS_DROPTARGET) exstyle |= WS_EX_ACCEPTFILES;
+  } else {
+    style |= WS_CHILD;
   }
 
   int dlg_w = res ? res->width  : 400;
   int dlg_h = res ? res->height : 300;
 
-  // Center on screen if top-level
+  // Center on screen for top-level and owned windows
   int dlg_x = 0, dlg_y = 0;
-  if (!parent) {
+  if (!hwnd_parent) {
     int sx = GetSystemMetrics(SM_CXSCREEN);
     int sy = GetSystemMetrics(SM_CYSCREEN);
     dlg_x = (sx - dlg_w) / 2;
@@ -412,18 +427,18 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
 
   WNDPROC wproc = bare_wndproc ? (WNDPROC)dlgproc : SwellDialogDefaultWindowProc;
 
-  HWND hwnd = new HWND__(parent, 0, &r,
+  // Create HWND invisible (matching original). ShowWindow will set visible
+  // and trigger swell_oswindow_manage for top-level windows.
+  HWND hwnd = new HWND__(hwnd_parent, 0, &r,
                          res ? (res->title ? res->title : "") : "",
-                         !parent,  // visible if top-level
+                         false,  // not visible yet — ShowWindow handles this
                          wproc);
   hwnd->m_style   = style;
   hwnd->m_exstyle = exstyle;
 
-  // Create OS window early for top-level dialogs, before createFunc or
-  // WM_INITDIALOG which may enter a nested modal loop (e.g. splash screen)
-  // and prevent the later swell_oswindow_manage call from ever executing.
-  if (!parent && !(wflags & SWELL_DLG_WS_CHILD)) {
-    swell_oswindow_manage(hwnd, true);
+  if (owner) {
+    hwnd->m_owner = owner;
+    owner->m_owned.Add(hwnd);
   }
 
   if (bare_wndproc) {
@@ -460,11 +475,6 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
     SetFocus(firstFocus);
   }
 
-  // Manage OS window for top-level (non-child) dialogs
-  if (!parent && !(wflags & SWELL_DLG_WS_CHILD)) {
-    swell_oswindow_manage(hwnd, true);
-  }
-
   return hwnd;
 }
 
@@ -478,6 +488,18 @@ int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
                     DLGPROC dlgproc,
                     LPARAM param)
 {
+  // Reject child-flagged resources for modal dialogs (matching original)
+  if (resid) {
+    bool resid_is_int = ((size_t)resid <= 0xFFFF);
+    SWELL_DialogResourceIndex *r = NULL;
+    for (SWELL_DialogResourceIndex *p = reshead; p; p = p->_next) {
+      bool match = (p->resid == resid);
+      if (!match && !resid_is_int && p->resid && (size_t)p->resid > 0xFFFF)
+        match = !strcmp(p->resid, resid);
+      if (match) { r = p; break; }
+    }
+    if (!r || (r->windowTypeFlags & SWELL_DLG_WS_CHILD)) return -1;
+  }
 
   HWND dlg = SWELL_CreateDialog(reshead, resid, parent, dlgproc, param);
   if (!dlg) return s_last_dlgret;
@@ -501,12 +523,9 @@ int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
     }
   }
 
-  // Ensure OS window exists and is shown (top-level dialogs only)
-  if (!dlg->m_oswindow && !(dlg->m_style & WS_CHILD)) {
-    swell_oswindow_manage(dlg, true);
-  } else {
-    ShowWindow(dlg, SW_SHOW);
-  }
+  // Show the dialog — ShowWindow calls swell_oswindow_manage for top-level
+  // windows that don't have an OS window yet (matching original).
+  ShowWindow(dlg, SW_SHOW);
 
   // Modal loop
   while (!ms.has_ret && dlg->m_hashaddestroy < 2) {

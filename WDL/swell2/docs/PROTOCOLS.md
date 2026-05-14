@@ -50,9 +50,9 @@ Called as the actual WNDPROC for dialog windows. In order:
    WM_PAINT as well (so dlgproc can draw over the background).
 2. Calls the dlgproc with the message.
 3. If dlgproc returned non-zero: return that value.
-4. If dlgproc returned 0 and message is `WM_KEYDOWN`:
-   - Top-level only (no parent):
-     - `VK_ESCAPE` → send `WM_CLOSE`; if that returns 0, send
+ 4. If dlgproc returned 0 and message is `WM_KEYDOWN`:
+    - Top-level only (no parent, includes owned dialogs):
+      - `VK_ESCAPE` → send `WM_CLOSE`; if that returns 0, send
        `WM_COMMAND(IDCANCEL, 0, 0)`.
      - `VK_RETURN` → find first child button with `BS_DEFPUSHBUTTON`, send
        `WM_COMMAND(id, 0, 0)`; or `WM_COMMAND(IDOK, 0, 0)` if no default button.
@@ -92,9 +92,14 @@ Handles the following messages; all others return 0:
 
 Sequence:
 
-1. `SWELL_CreateDialog` called → window created, `WM_INITDIALOG` fired.
-2. All other top-level windows disabled (`EnableWindow(FALSE)`).
-3. Window shown (`SW_SHOW` or `SW_SHOWNA` if reusing OS window from spare pool).
+1. Resource looked up. Child-flagged (`SWELL_DLG_WS_CHILD`) resources are
+   rejected — modal dialogs cannot be children.
+2. `SWELL_CreateDialog` called → `HWND__` allocated (invisible), parent
+   converted to owner for non-child dialogs, controls created, `WM_INITDIALOG` fired.
+   No OS window created at this stage.
+3. All other top-level windows disabled (`EnableWindow(FALSE)`).
+4. `ShowWindow(dlg, SW_SHOW)` called → sets visible, creates OS window via
+   `swell_oswindow_manage`, sets foreground, invalidates for paint.
 4. Run loop: `SWELL_RunMessageLoop()` + `Sleep(10)` until `EndDialog` sets
    `has_ret=true` or window is destroyed.
 5. All other top-level windows re-enabled.
@@ -121,7 +126,11 @@ EndDialog(hwnd, ret)
 Sequence:
 
 1. `HWND__` allocated.
-2. Style set based on `windowTypeFlags` (child vs top-level, resizable, etc.).
+2. Style set based on `windowTypeFlags` and parent:
+   - If `SWELL_DLG_WS_CHILD` or bare-WNDPROC with parent: `WS_CHILD | WS_VISIBLE`.
+   - Otherwise: `WS_CAPTION | WS_SYSMENU` (top-level window). If parent is given
+     it becomes the **owner** (`m_owner`), not the parent — the dialog gets its own
+     OS window and stays above the owner in Z-order.
 3. `createFunc` called → controls created via `SWELL_MakeButton` etc.
 4. Title set from `SWELL_DialogResourceIndex::title`.
 5. `m_dlgproc = dlgproc; m_wndproc = SwellDialogDefaultWindowProc`.
