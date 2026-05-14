@@ -552,9 +552,14 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2 && IsWindowEnabled(e->hwnd)) {
-        if (!SendMessage(e->hwnd, WM_CLOSE, 0, 0) &&
-            e->hwnd->m_hashaddestroy < 2)
-          SendMessage(e->hwnd, WM_COMMAND, IDCANCEL, 0);
+        HWND hwnd = e->hwnd;
+        if (!SendMessage(hwnd, WM_CLOSE, 0, 0)) {
+          // WM_CLOSE may have triggered DestroyWindow.  Reload the window
+          // entry — the old `e` and `hwnd` may be dangling pointers.
+          e = find_entry_by_windowID(evt->window.windowID);
+          if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2)
+            SendMessage(e->hwnd, WM_COMMAND, IDCANCEL, 0);
+        }
       }
       break;
     }
