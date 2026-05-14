@@ -299,7 +299,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HBRUSH frameBr = CreateSolidBrush((COLORREF)th.bg_surface);
         HGDIOBJ oldpen = SelectObject(hdc, pen);
         HGDIOBJ oldbr  = SelectObject(hdc, frameBr);
-        const int r = th.corner_radius_large;
+        const int r = th.corner_radius;
         RoundRect(hdc, cr.left, cr.top + titlegap,
                   cr.right - 1, cr.bottom - 1, r*2, r*2);
         SelectObject(hdc, oldpen); DeleteObject(pen);

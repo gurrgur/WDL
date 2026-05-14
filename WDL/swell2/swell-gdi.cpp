@@ -1724,8 +1724,8 @@ static void swell_theme_populate_dark(swell_theme &t)
 
 static void swell_theme_populate_metrics(swell_theme &t)
 {
-  t.corner_radius           = 6;
-  t.corner_radius_large     = 8;
+  t.corner_radius           = 2;
+  t.corner_radius_large     = 4;
   t.border_width            = 1;
   t.focus_ring_width        = 2;
   t.focus_ring_offset       = 2;
