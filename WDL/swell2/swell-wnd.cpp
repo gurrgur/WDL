@@ -1241,7 +1241,12 @@ void GetClientRect(HWND hwnd, RECT *r)
   RECT wr = hwnd->m_position;
   NCCALCSIZE_PARAMS ncp = {{{0, 0, wr.right - wr.left, wr.bottom - wr.top}}};
   SendMessage(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
-  *r = ncp.rgrc[0];
+  // Normalize to client-local coordinates: Win32 contract requires top-left = (0,0).
+  int l = ncp.rgrc[0].left, t = ncp.rgrc[0].top;
+  r->left   = 0;
+  r->top    = 0;
+  r->right  = ncp.rgrc[0].right  - l;
+  r->bottom = ncp.rgrc[0].bottom - t;
 }
 
 bool GetWindowRect(HWND hwnd, RECT *r)
@@ -1290,7 +1295,10 @@ void SetWindowPos(HWND hwnd, HWND unused, int x, int y, int cx, int cy, int flag
   }
 
   if (sized) {
-    SendMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(cx, cy));
+    RECT ncr = {0, 0, cx, cy};
+    SendMessage(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr);
+    SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
+                MAKELPARAM(ncr.right - ncr.left, ncr.bottom - ncr.top));
   }
   if (moved) {
     SendMessage(hwnd, WM_MOVE, 0, MAKELPARAM(x, y));

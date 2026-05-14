@@ -583,7 +583,10 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           }
           if (e->texture) { SDL_DestroyTexture(e->texture); e->texture = NULL; }
 
-          SendMessage(e->hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(nw, nh));
+          RECT ncr1 = {0, 0, nw, nh};
+          SendMessage(e->hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr1);
+          SendMessage(e->hwnd, WM_SIZE, SIZE_RESTORED,
+                      MAKELPARAM(ncr1.right - ncr1.left, ncr1.bottom - ncr1.top));
         }
       }
       break;
@@ -607,7 +610,10 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         e->hwnd->m_position.bottom = ny + nh;
         UINT szFlag = (evt->type == SDL_EVENT_WINDOW_MAXIMIZED)
                       ? SIZE_MAXIMIZED : SIZE_RESTORED;
-        SendMessage(e->hwnd, WM_SIZE, szFlag, MAKELPARAM(nw, nh));
+        RECT ncr2 = {0, 0, nw, nh};
+        SendMessage(e->hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr2);
+        SendMessage(e->hwnd, WM_SIZE, szFlag,
+                    MAKELPARAM(ncr2.right - ncr2.left, ncr2.bottom - ncr2.top));
         // trigger repaint
         sk_sp<SkSurface> bs = e->hwnd->m_backingstore;
         SkCanvas *canvas = bs ? bs->getCanvas() : nullptr;
