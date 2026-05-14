@@ -184,7 +184,11 @@ struct HMENU__ {
 // ---- HIMAGELIST__ ----
 
 struct HIMAGELIST__ {
-  // stub
+  struct Entry {
+    HGDIOBJ__ *image; // HICON or HBITMAP
+    HGDIOBJ__ *mask;  // HBITMAP mask (or NULL)
+  };
+  WDL_PtrList_DeleteOnDestroy<Entry> m_entries;
 };
 
 // ---- HTREEITEM__ ----
