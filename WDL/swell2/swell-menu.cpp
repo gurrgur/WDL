@@ -543,6 +543,28 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
                            MenuWindow *parent_mw, int parent_item_y);
 
 // ---------------------------------------------------------------------------
+// Strip Win32 & accelerator prefix for display.
+// "&File" -> "File", "Save && Exit" -> "Save & Exit"
+// Not thread-safe; only call from main thread (as all menu code is).
+// ---------------------------------------------------------------------------
+static const char *menu_strip_accel(const char *src, WDL_FastString &buf)
+{
+  buf.Set("");
+  if (!src) return "";
+  while (*src) {
+    if (*src == '&') {
+      src++;
+      if (*src == '&') { buf.Append("&", 1); src++; }
+      // else: bare & — skip it, next char is accelerator (keep in output)
+    } else {
+      buf.Append(src, 1);
+      src++;
+    }
+  }
+  return buf.Get();
+}
+
+// ---------------------------------------------------------------------------
 // Measure and position menu items
 // ---------------------------------------------------------------------------
 
@@ -556,10 +578,11 @@ static void menu_measure(MenuWindow *mw)
 
   // Compute max text width
   int maxTextW = 0;
+  WDL_FastString stripBuf;
   for (int i = 0; i < n; i++) {
     SWELL_MenuItem *it = mw->menu->m_items.Get(i);
     if (!it || (it->m_flags & MF_SEPARATOR)) continue;
-    const char *txt = it->m_name.Get();
+    const char *txt = menu_strip_accel(it->m_name.Get(), stripBuf);
     if (!txt || !txt[0]) continue;
     SkRect bounds;
     mw->font.measureText(txt, strlen(txt), SkTextEncoding::kUTF8, &bounds);
@@ -680,23 +703,27 @@ static void menu_draw(MenuWindow *mw)
     }
 
     // Text
-    const char *txt = it->m_name.Get();
-    if (txt && txt[0]) {
-      SkPaint tp;
-      tp.setAntiAlias(true);
-      if (disabled)
-        tp.setColor(swell_to_sk(th._3dshadow));
-      else if (hovered)
-        tp.setColor(swell_to_sk(th.menu_hilight_text));
-      else
-        tp.setColor(swell_to_sk(th.menu_text));
+    const char *raw_txt = it->m_name.Get();
+    if (raw_txt && raw_txt[0]) {
+      WDL_FastString stripBuf2;
+      const char *txt = menu_strip_accel(raw_txt, stripBuf2);
+      if (txt && txt[0]) {
+        SkPaint tp;
+        tp.setAntiAlias(true);
+        if (disabled)
+          tp.setColor(swell_to_sk(th._3dshadow));
+        else if (hovered)
+          tp.setColor(swell_to_sk(th.menu_hilight_text));
+        else
+          tp.setColor(swell_to_sk(th.menu_text));
 
-      SkFontMetrics fm;
-      mw->font.getMetrics(&fm);
-      float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f - fm.fAscent;
+        SkFontMetrics fm;
+        mw->font.getMetrics(&fm);
+        float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f - fm.fAscent;
 
-      c->drawSimpleText(txt, strlen(txt), SkTextEncoding::kUTF8,
-                        (float)MENU_LPAD, ty, mw->font, tp);
+        c->drawSimpleText(txt, strlen(txt), SkTextEncoding::kUTF8,
+                          (float)MENU_LPAD, ty, mw->font, tp);
+      }
     }
 
     // Submenu arrow
@@ -777,18 +804,30 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
   if (sx < screen.left)          sx = screen.left;
   if (sy < screen.top)           sy = screen.top;
 
-  // Create SDL popup window
-  SDL_PropertiesID props = SDL_CreateProperties();
-  SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "");
-  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, sx);
-  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, sy);
-  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, mw.w);
-  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, mw.h);
-  SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN, true);
-  SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_ALWAYS_ON_TOP_BOOLEAN, true);
-  SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FOCUSABLE_BOOLEAN, false);
-  mw.sdlwin = SDL_CreateWindowWithProperties(props);
-  SDL_DestroyProperties(props);
+  // Create SDL popup menu window with correct parent relationship
+  SDL_Window *parent_sdlwin = NULL;
+  if (owner_hwnd && owner_hwnd->m_oswindow)
+    parent_sdlwin = (SDL_Window *)owner_hwnd->m_oswindow;
+
+  if (parent_sdlwin) {
+    int px, py;
+    SDL_GetWindowPosition(parent_sdlwin, &px, &py);
+    mw.sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
+        sx - px, sy - py, mw.w, mw.h,
+        SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS);
+  } else {
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "");
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, sx);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, sy);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, mw.w);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, mw.h);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN, true);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_ALWAYS_ON_TOP_BOOLEAN, true);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FOCUSABLE_BOOLEAN, false);
+    mw.sdlwin = SDL_CreateWindowWithProperties(props);
+    SDL_DestroyProperties(props);
+  }
 
   if (!mw.sdlwin) return 0;
 
@@ -997,10 +1036,13 @@ static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *
   int x = 4;
   int hit = -1;
   int n = menu->m_items.GetSize();
+  WDL_FastString stripMb;
   for (int i = 0; i < n; i++) {
     SWELL_MenuItem *it = menu->m_items.Get(i);
     if (!it) continue;
-    const char *txt = it->m_name.Get();
+    const char *raw = it->m_name.Get();
+    if (!raw || !raw[0]) continue;
+    const char *txt = menu_strip_accel(raw, stripMb);
     if (!txt || !txt[0]) continue;
 
     RECT msz = { 0, 0, 0, 0 };
