@@ -4,31 +4,60 @@
 
 | # | Module | Status | Notes |
 |---|--------|--------|-------|
-| 1 | `swell-internal.h` | done | All internal types: HWND__, HDC__, HGDIOBJ__, HMENU__, HTREEITEM__, control states, timer/PMQ, globals, internal fn decls. Skia types real, `NOMINMAX` guard. |
-| 2 | `swell-gdi-internalpool.h` | done | Pool API: SWELL_GDP_CTX_NEW/DELETE, GDP_OBJECT_NEW/DELETE, HGDIOBJ_VALID, HDC_VALID. Caps: 100 HDC, 200 HGDIOBJ. |
-| 3 | `swell-ini.cpp` | done | WritePrivateProfileString/Int/Struct/Section, GetPrivateProfileString/Int/Struct/Section. Thread-safe (WDL_Mutex), inter-process (flock), struct as hex+CRC32. |
-| 4 | `swell-gdi.cpp` | done | HDC lifecycle (CreateMemContext/BeginPaint/EndPaint/GetDC/ReleaseDC), GDI object create/delete (CreatePen/Font/Bitmap/SelectObject/DeleteObject/GetStockObject, SelectObject sentinel pattern per RENDERING.md §3), drawing/blit stubs (no-ops), text metrics (fallback vals), color conversion (native↔SkColor), clip stubs, pool impl. |
-| 5 | `swell-wnd.cpp` | done | HWND__ ctor/dtor, SendMessage, DefWindowProc, SwellDialogDefaultWindowProc, PostMessage queue (thread-safe, max 1024), timers (SetTimer/KillTimer/fireTimers), focus chain (SetFocus/GetFocus), DestroyWindow protocol (WM_DESTROY→NCDESTROY), ShowWindow/EnableWindow/IsWindow*, window hierarchy (GetParent/SetParent/GetWindow/IsChild/EnumWindows/EnumChildWindows/FindWindowEx/GetDlgItem), GetWindowLong/SetWindowLong, Prop list, coordinate conv (ClientToScreen/ScreenToClient/GetClientRect/GetWindowRect/SetWindowPos/WindowFromPoint), InvalidateRect/UpdateWindow, ScrollWindow, GetClassName/SWELL_SetClassName, SWELL_BroadcastMessage, custom control creator registration, SWELL_GetDefaultButtonID, helper functions (SWELL_DrawFocusRect/IsGroupBox/IsButton/IsStaticText), MulDiv/lstrcpyn, Sleep/GetTickCount/GetFileTime, SWELL_RunMessageLoop (flush→events→timers). |
-| 6 | `swell-backend-headless.cpp` | done | All swell_oswindow_* no-ops, SWELL_initargs stub, SWELL_RunEvents stub, SWELL_CreateXBridgeWindow/SWELL_GetOSWindow/SWELL_GetOSEvent stubs. |
-| 7 | `CMakeLists.txt` | done | C++17, links Skia (pkg-config), pthread, dl. Defines NOMINMAX. Builds libSwell.so. |
-| 8 | `swell-stubs.cpp` | done | ~237 stub functions covering all remaining SWELL_API_DEFINE declarations. No undefined symbols. |
+| 1 | `swell-internal.h` | done | All internal types: HWND__, HDC__, HGDIOBJ__, HMENU__, HTREEITEM__, control states, timer/PMQ, globals, internal fn decls. |
+| 2 | `swell-gdi-internalpool.h` | done | Pool API (merged into swell-gdi.cpp). Caps: 100 HDC, 200 HGDIOBJ. |
+| 3 | `swell-ini.cpp` | done | WritePrivateProfileString/Int/Struct/Section, GetPrivateProfileString/Int/Struct/Section. Thread-safe, flock, struct as hex+CRC32. |
+| 4 | `swell-gdi.cpp` | done | HDC lifecycle, GDI objects, Skia drawing/blit, LoadNamedImage (SkCodec), fonts (FreeType+SkFontScanner), text metrics, clip regions. |
+| 5 | `swell-wnd.cpp` | done | HWND__ lifecycle, SendMessage/DefWindowProc, PostMessage queue, timers, focus chain, window hierarchy, props, coordinates, message loop, WM_NCLBUTTONDOWN→menu bar click. |
+| 6 | `swell-backend-headless.cpp` | done | All swell_oswindow_* no-ops. |
+| 7 | `swell-backend-sdl3.cpp` | done | SDL3 OS backend: window mgmt, event translation, Skia screen update, keyboard/mouse, menu bar painting. |
+| 8 | `swell-appstub.cpp` | done | SWELLAPI_GetFunc export with sorted function-pointer lookup table. |
+| 9 | `swell-controls.cpp` | done | 10 built-in control WNDPROCs: button, edit, label, listview, treeview, combo, tab, trackbar, progress, SWELL_MakeControl dispatcher. |
+| 10 | `swell-dlg.cpp` | done | SWELL_DialogBox/SWELL_CreateDialog/EndDialog, SWELL_Make* factories, UI scaling, modal window helpers. |
+| 11 | `swell-menu.cpp` | done | HMENU lifecycle, item manipulation, TrackPopupMenu (SDL3 popup window), menu bar painting, menubar_hittest, menu generation from list. |
+| 12 | `swell-misc.cpp` | partial | Clipboard (SDL3), MessageBox (SDL3), file dialogs (zenity), ShellExecute (xdg-open), threads/events, monitors, cursors, GUID, rect utils, SWELL_ExtendedAPI. **Stubs remain:** drag-drop, ImageList_Add/Remove/ReplaceIcon, SWELL_ChooseColor/Font, SWELL_LoadCursorFromFile, GlobalSize, ListView_SetGridColor/SelColors. |
+| 13 | `swell-kb.cpp` | done | SWELL_KeyToASCII (letters, digits, numpad, US punctuation), SWELL_EnableRightClickEmulate (no-op on Linux). |
+| 14 | `swell-modstub.cpp` | done | SWELL_dllMain + DllMain alias for SWELL_PROVIDED_BY_APP mode. |
+| 15 | `swell-stubs.cpp` | done | ListView/TreeView/TabCtrl SendMessage helpers. macOS-only stubs under `#ifdef SWELL_TARGET_OSX`. |
 
-## Remaining (not started)
+## Remaining (known stubs / not yet implemented)
 
-| # | Module | Notes |
-|---|--------|-------|
-| 8 | `swell-controls.cpp` | 10 built-in control WNDPROCs (button, edit, label, listview, treeview, combo, tab, trackbar, progress, SWELL_MakeControl dispatcher) |
-| 9 | `swell-dlg.cpp` | Dialog creation (SWELL_DialogBox/SWELL_CreateDialog/EndDialog), SWELL_Make* control factories, dialog coordinate scaling, modal window helpers |
-| 10 | `swell-menu.cpp` | HMENU lifecycle, item manipulation, TrackPopupMenu, menu bar painting |
-| 11 | `swell-misc.cpp` | Clipboard, drag-drop, monitors, MessageBox, file dialogs, ShellExecute, threads, GUID, rect utils, cursors, ImageList, ListView/TreeView/Tab helpers, GL/Metal stubs |
-| 12 | `swell-kb.cpp` | SWELL_KeyToASCII, accelerator processing, right-click emulation |
-| 13 | `swell-modstub.cpp` | DllMain shim for SWELL_PROVIDED_BY_APP mode |
-| 14 | `swell-appstub.cpp` | Standalone app entry (SWELLAppMain dispatch) |
-| 15 | Rendering/windowing backend | GDK/SDL3 OS backend (swell-backend-gdk.cpp) — explicitly deferred |
+| Module | Functions | Notes |
+|--------|-----------|-------|
+| `swell-misc.cpp` | `DragQueryPoint`, `DragFinish`, `DragQueryFile`, `SWELL_InitiateDragDrop*`, `SWELL_FinishDragDrop` | Drag-drop entirely stubbed. Needs SDL3 DnD event handling. Complex. |
+| `swell-misc.cpp` | `ImageList_Add`, `ImageList_Remove`, `ImageList_ReplaceIcon` | HIMAGELIST__ struct is empty stub. Needs bitmap storage + impl. |
+| `swell-misc.cpp` | `SWELL_ChooseColor`, `SWELL_ChooseFont` | Could use zenity/other native pickers. |
+| `swell-misc.cpp` | `SWELL_LoadCursorFromFile` | Returns NULL. Could decode image → SDL_Cursor. |
+| `swell-misc.cpp` | `GlobalSize` | Always returns 0. Needs allocation size tracking. |
+| `swell-misc.cpp` | `SWELL_GetGestureInfo` | Stub (no gesture support on Linux desktop). |
+| `swell-misc.cpp` | GL/Metal: `SWELL_SetViewGL`, `SWELL_GetViewGL`, `SWELL_SetGLContextToView` | Stubs (OpenGL-in-window not yet plumbed). |
+| `swell-stubs.cpp` | `SWELL_GetListViewHeaderHeight` | Hardcoded 20px. Should measure font. |
+| `swell-stubs.cpp` | `SWELL_SetListViewFastClickMask`, `ListView_SetGridColor`, `ListView_SetSelColors` | No-ops. |
+
+### macOS-only (correctly omitted on Linux)
+SWELL_CB_*, SWELL_TB_*, SWELL_PostQuitMessage, SWELL_FlushWindow, SWELL_TerminateProcess, SWELL_CreateProcessIO, SWELL_ReadWriteProcessIO, etc. — all under `#ifdef SWELL_TARGET_OSX`.
 
 ## Build
 
 ```bash
-cd swell2 && cmake -B build && cmake --build build
-# → build/libSwell.so
+cd swell2 && cmake -DCMAKE_BUILD_TYPE=Debug -B build-debug && cmake --build build-debug
+# → build-debug/libSwell.so
 ```
+
+## Test with REAPER
+
+```bash
+# Kill existing (single-instance)
+ps aux | grep "REAPER/reaper" | grep -v grep | awk '{print $2}' | xargs -r kill -9
+
+# Run with timeout
+bwrap --ro-bind / / \
+  --bind "$PWD/build-debug/libSwell.so" /usr/lib/REAPER/libSwell.so \
+  --bind "$HOME/.config/REAPER" "$HOME/.config/REAPER" \
+  --bind "$HOME/.cache" "$HOME/.cache" \
+  --tmpfs /tmp --bind /tmp/.X11-unix /tmp/.X11-unix \
+  --dev /dev --proc /proc \
+  --setenv DISPLAY ":0" --setenv SDL_VIDEO_DRIVER x11 --setenv GDK_BACKEND x11 \
+  -- timeout --kill-after=2 5 /usr/lib/REAPER/reaper > /tmp/reaper.log 2>&1
+echo "EXIT: $?"
+# 137 = success (SIGKILL'd by timeout --kill-after)
