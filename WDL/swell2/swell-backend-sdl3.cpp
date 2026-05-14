@@ -761,10 +761,19 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         float cx = mx - nc_left;
         float cy = my - nc_top;
 
-        // NC area click (menu bar etc.)
-        if (down && btn == SDL_BUTTON_LEFT && (cy < 0 || cx < 0)) {
-          UINT ncmsg = (clicks >= 2) ? WM_NCLBUTTONDBLCLK : WM_NCLBUTTONDOWN;
-          SendMessage(e->hwnd, ncmsg, HTMENU, MAKELPARAM((int)mx, (int)my));
+        // NC area click (menu bar etc.) — use WM_NCHITTEST for proper HT code
+        if (down && (cy < 0 || cx < 0)) {
+          LRESULT ht = SendMessage(e->hwnd, WM_NCHITTEST, 0, MAKELPARAM((int)mx, (int)my));
+          if (ht == HTCLIENT) ht = HTNOWHERE; // clamp if client-area returned
+          UINT ncmsg = 0;
+          if (btn == SDL_BUTTON_LEFT) {
+            ncmsg = (clicks >= 2) ? WM_NCLBUTTONDBLCLK : WM_NCLBUTTONDOWN;
+          } else if (btn == SDL_BUTTON_RIGHT) {
+            ncmsg = (clicks >= 2) ? WM_NCRBUTTONDBLCLK : WM_NCRBUTTONDOWN;
+          } else if (btn == SDL_BUTTON_MIDDLE) {
+            ncmsg = (clicks >= 2) ? WM_NCMBUTTONDBLCLK : WM_NCMBUTTONDOWN;
+          }
+          if (ncmsg) SendMessage(e->hwnd, ncmsg, (WPARAM)ht, MAKELPARAM((int)mx, (int)my));
           break;
         }
 
@@ -830,6 +839,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       // SDL3 reports mouse coords in logical pixels; swell uses physical
       float mx = swell_log_to_phys((int)evt->motion.x);
       float my = swell_log_to_phys((int)evt->motion.y);
+      bool in_nc = false;
 
       HWND cap = GetCapture();
       HWND target = cap;
@@ -840,20 +850,30 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           get_nc_offsets(e->hwnd, &nc_left, &nc_top);
           float cx = mx - nc_left;
           float cy = my - nc_top;
-          target = e->hwnd;
-          HWND child = hittest_child(e->hwnd, cx, cy);
-          if (child) {
-            cx -= child->m_position.left;
-            cy -= child->m_position.top;
-            target = child;
+          if (cy < 0 || cx < 0) {
+            in_nc = true;
+            target = e->hwnd;
+          } else {
+            target = e->hwnd;
+            HWND child = hittest_child(e->hwnd, cx, cy);
+            if (child) {
+              cx -= child->m_position.left;
+              cy -= child->m_position.top;
+              target = child;
+            }
+            mx = cx;
+            my = cy;
           }
-          mx = cx;
-          my = cy;
         }
       }
       if (target) {
-        SendMessage(target, WM_MOUSEMOVE, 0, MAKELPARAM((int)mx, (int)my));
-        SendMessage(target, WM_SETCURSOR, (WPARAM)target, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+        // NC area mouse move
+        if (in_nc) {
+          SendMessage(target, WM_NCMOUSEMOVE, 0, MAKELPARAM((int)mx, (int)my));
+        } else {
+          SendMessage(target, WM_MOUSEMOVE, 0, MAKELPARAM((int)mx, (int)my));
+          SendMessage(target, WM_SETCURSOR, (WPARAM)target, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+        }
       }
       break;
     }

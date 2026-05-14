@@ -492,16 +492,16 @@ static sk_sp<SkTypeface> menu_get_typeface()
 }
 
 // ---------------------------------------------------------------------------
-// Menu layout constants
+// Menu layout constants (base, scaled at runtime by DPI)
 // ---------------------------------------------------------------------------
 
-static const int MENU_ITEM_H      = 26;
-static const int MENU_SEP_H       = 9;
-static const int MENU_LPAD        = 32;  // left of text (checkmark+icon area)
-static const int MENU_RPAD        = 20;  // right of text (arrow area)
-static const int MENU_VPAD        = 4;   // top/bottom padding of menu
-static const int MENU_MIN_W       = 140;
-static const int MENU_FONT_SIZE   = 13;
+static inline int menu_item_h()  { return SWELL_UI_SCALE(26); }
+static inline int menu_sep_h()   { return SWELL_UI_SCALE(9);  }
+static inline int menu_lpad()    { return SWELL_UI_SCALE(32); }
+static inline int menu_rpad()    { return SWELL_UI_SCALE(20); }
+static inline int menu_vpad()    { return SWELL_UI_SCALE(4);  }
+static inline int menu_min_w()   { return SWELL_UI_SCALE(140); }
+static inline int menu_font_sz() { return SWELL_UI_SCALE(13); }
 
 // Convert native SWELL RGB color to SkColor (premul alpha)
 static SkColor swell_to_sk(int c, uint8_t a = 255)
@@ -590,20 +590,20 @@ static void menu_measure(MenuWindow *mw)
     if (tw > maxTextW) maxTextW = tw;
   }
 
-  mw->w = MENU_LPAD + maxTextW + MENU_RPAD;
-  if (mw->w < MENU_MIN_W) mw->w = MENU_MIN_W;
+  mw->w = menu_lpad() + maxTextW + menu_rpad();
+  if (mw->w < menu_min_w()) mw->w = menu_min_w();
 
-  int y = MENU_VPAD;
+  int y = menu_vpad();
   for (int i = 0; i < n; i++) {
     mw->item_y[i] = y;
     SWELL_MenuItem *it = mw->menu->m_items.Get(i);
     if (it && (it->m_flags & MF_SEPARATOR))
-      y += MENU_SEP_H;
+      y += menu_sep_h();
     else
-      y += MENU_ITEM_H;
+      y += menu_item_h();
   }
   mw->item_y[n] = y;
-  mw->h = y + MENU_VPAD;
+  mw->h = y + menu_vpad();
 }
 
 // ---------------------------------------------------------------------------
@@ -661,8 +661,8 @@ static void menu_draw(MenuWindow *mw)
       sep.setColor(swell_to_sk(th._3dshadow, 160));
       sep.setStrokeWidth(1.0f);
       sep.setAntiAlias(false);
-      float sy = iy + MENU_SEP_H / 2.0f + 0.5f;
-      c->drawLine(MENU_LPAD * 0.5f, sy, (float)(mw->w - 4), sy, sep);
+      float sy = iy + menu_sep_h() / 2.0f + 0.5f;
+      c->drawLine(menu_lpad() * 0.5f, sy, (float)(mw->w - 4), sy, sep);
       continue;
     }
 
@@ -722,7 +722,7 @@ static void menu_draw(MenuWindow *mw)
         float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f;// - fm.fAscent;
 
         c->drawSimpleText(txt, strlen(txt), SkTextEncoding::kUTF8,
-                          (float)MENU_LPAD, ty, mw->font, tp);
+                          (float)menu_lpad(), ty, mw->font, tp);
       }
     }
 
@@ -792,7 +792,7 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
 
   // Build font
   mw.font.setTypeface(menu_get_typeface());
-  mw.font.setSize((float)MENU_FONT_SIZE);
+  mw.font.setSize((float)menu_font_sz());
   mw.font.setEdging(SkFont::Edging::kAntiAlias);
 
   menu_measure(&mw);

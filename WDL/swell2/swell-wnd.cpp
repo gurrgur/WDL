@@ -168,6 +168,13 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
 
     case WM_NCHITTEST:
+      if (!hwnd->m_parent && hwnd->m_menu) {
+        RECT r;
+        GetWindowContentViewRect(hwnd, &r);
+        const int mbh = g_swell_ctheme.menubar_height;
+        if (GET_Y_LPARAM(lParam) >= 0 && GET_Y_LPARAM(lParam) < mbh)
+          return HTMENU;
+      }
       return HTCLIENT;
 
     case WM_NCCALCSIZE:
