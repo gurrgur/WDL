@@ -996,7 +996,48 @@ HCURSOR SWELL_LoadCursor(const char *idx)
 
 HCURSOR SWELL_LoadCursorFromFile(const char *fn)
 {
+#ifdef SWELL_TARGET_SDL3
+  if (!fn || !fn[0]) return NULL;
+
+  // Load image via GDI loader (supports PNG, JPEG, BMP, WebP, GIF)
+  HICON icon = LoadNamedImage(fn, false);
+  if (!icon) return NULL;
+
+  HGDIOBJ__ *gdi = (HGDIOBJ__*)icon;
+  if (gdi->type != TYPE_BITMAP || !gdi->typedata) {
+    DeleteObject((HGDIOBJ)icon);
+    return NULL;
+  }
+
+  SkBitmap *bm = (SkBitmap*)gdi->typedata;
+  if (!bm->getPixels()) {
+    DeleteObject((HGDIOBJ)icon);
+    return NULL;
+  }
+
+  int w = bm->width();
+  int h = bm->height();
+  if (w <= 0 || h <= 0 || w > 128 || h > 128) {
+    DeleteObject((HGDIOBJ)icon);
+    return NULL;
+  }
+
+  // Create SDL surface from SkBitmap BGRA pixels
+  SDL_Surface *surf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_BGRA8888);
+  if (!surf) {
+    DeleteObject((HGDIOBJ)icon);
+    return NULL;
+  }
+
+  bm->readPixels(bm->info(), surf->pixels, surf->pitch, 0, 0);
+  SDL_Cursor *cur = SDL_CreateColorCursor(surf, 0, 0);
+  SDL_DestroySurface(surf);
+  DeleteObject((HGDIOBJ)icon);
+
+  return (HCURSOR)cur;
+#else
   (void)fn; return NULL;
+#endif
 }
 
 void SWELL_SetCursor(HCURSOR curs)
