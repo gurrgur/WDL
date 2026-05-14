@@ -220,10 +220,13 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       return 0;
 
-    case WM_RBUTTONUP:
+    case WM_RBUTTONUP: {
+      POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+      ClientToScreen(hwnd, &pt);
       SendMessage(hwnd, WM_CONTEXTMENU, (WPARAM)hwnd,
-                  MAKELPARAM(0xFFFF, 0xFFFF));
+                  MAKELPARAM(pt.x, pt.y));
       return 0;
+    }
 
     case WM_KEYDOWN:
     case WM_KEYUP:
@@ -1265,7 +1268,7 @@ void GetWindowContentViewRect(HWND hwnd, RECT *r)
   r->bottom = hwnd->m_position.bottom - hwnd->m_position.top;
 }
 
-void SetWindowPos(HWND hwnd, HWND unused, int x, int y, int cx, int cy, int flags)
+void SetWindowPos(HWND hwnd, HWND zorder, int x, int y, int cx, int cy, int flags)
 {
   if (!hwnd) return;
 
@@ -1286,6 +1289,29 @@ void SetWindowPos(HWND hwnd, HWND unused, int x, int y, int cx, int cy, int flag
       hwnd->m_position.right = hwnd->m_position.left + w;
       hwnd->m_position.bottom = hwnd->m_position.top + h;
       sized = true;
+    }
+  }
+
+  // Z-order reordering (matching original SWELL semantics):
+  // Children list is bottom-to-top. HWND_BOTTOM → index 0.
+  // HWND_TOP → end of list. Specific HWND → insert after it.
+  if (!(flags & SWP_NOZORDER) && hwnd->m_parent && zorder != hwnd) {
+    HWND par = (HWND)hwnd->m_parent;
+    int myIdx = par->m_children.Find(hwnd);
+    if (myIdx >= 0) {
+      par->m_children.Delete(myIdx, false);
+      if (zorder == HWND_BOTTOM) {
+        par->m_children.Insert(0, hwnd);
+      } else if (zorder == HWND_TOP) {
+        par->m_children.Add(hwnd);
+      } else {
+        int zIdx = par->m_children.Find(zorder);
+        if (zIdx >= 0) {
+          par->m_children.Insert(zIdx + 1, hwnd);
+        } else {
+          par->m_children.Add(hwnd);
+        }
+      }
     }
   }
 
