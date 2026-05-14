@@ -654,6 +654,16 @@ static void RecurseDestroyWindow(HWND hwnd)
     else g_swell_top_level_list_end = hwnd->m_prev;
   }
 
+  // Remove from owner's m_owned list.  Owned windows that are destroyed
+  // independently (not via the owner's destruction) must be cleaned out
+  // so code that iterates m_owned (e.g. WindowFromPoint) does not hit
+  // dangling pointers.
+  if (hwnd->m_owner) {
+    int oi = hwnd->m_owner->m_owned.Find(hwnd);
+    if (oi >= 0) hwnd->m_owner->m_owned.Delete(oi, false);
+    hwnd->m_owner = NULL;
+  }
+
   SWELL_MessageQueue_Clear(hwnd);
   KillTimer(hwnd, (UINT_PTR)-1);
 
