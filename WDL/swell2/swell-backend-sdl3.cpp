@@ -102,16 +102,13 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   if (w < 1) w = 400;
   if (h < 1) h = 300;
 
-  SDL_WindowFlags flags = 0;
+  SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
   if (hwnd->m_style & WS_THICKFRAME)
     flags |= SDL_WINDOW_RESIZABLE;
   if (!(hwnd->m_style & WS_CAPTION))
     flags |= SDL_WINDOW_BORDERLESS;
   if (!wantFocus)
     flags |= SDL_WINDOW_NOT_FOCUSABLE;
-  // Do NOT use SDL_WINDOW_HIGH_PIXEL_DENSITY — SWELL handles DPI scaling
-  // itself via SWELL_UI_SCALE on window dimensions and control layout.
-  // HIGH_PIXEL_DENSITY would double-scale: SWELL_UI_SCALE × SDL logical→physical.
   flags |= SDL_WINDOW_HIDDEN; // show after position is set
 
   SDL_Window *sdlwin = SDL_CreateWindow(

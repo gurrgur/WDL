@@ -1190,25 +1190,6 @@ int IsDlgButtonChecked(HWND hwnd, int idx)
   return (int)SendMessage(w, BM_GETCHECK, 0, 0);
 }
 
-// ===========================================================================
-// Coordinate conversion
-//
-// All coordinates are in physical device pixels. SWELL handles DPI scaling
-// via SWELL_UI_SCALE applied to dialog window dimensions and control layout.
-// SDL3 backend does NOT use SDL_WINDOW_HIGH_PIXEL_DENSITY — there is no
-// separate logical coordinate space.
-//
-// Three coordinate spaces (all in physical pixels):
-//   1. Screen coords   — absolute position on display.
-//                         Top-level m_position is in screen coords.
-//   2. Client coords    — relative to window client origin (0,0 = top-left
-//                          after NCCALCSIZE insets). Child m_position is
-//                          parent-relative (client coords within parent).
-//   3. Surface pixels   — backing store pixel grid. surface_offs maps
-//                          client→surface: surface_pixel = client + surface_offs.
-//                          Both sides are physical pixel offsets.
-// ===========================================================================
-
 void ClientToScreen(HWND hwnd, POINT *p)
 {
   if (!hwnd || !p) return;
