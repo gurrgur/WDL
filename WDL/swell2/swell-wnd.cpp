@@ -1492,8 +1492,8 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
       int myIdx = t->m_children.Find(hwnd);
       if (myIdx >= 0) {
         for (int i = myIdx + 1; i < t->m_children.GetSize(); i++) {
-          HWND nw = t->m_children.Get(i);
-          if (nw && nw->m_visible && !nw->m_invalidated) {
+           HWND nw = t->m_children.Get(i);
+           if (nw && nw->m_visible && !nw->m_invalidated && !nw->m_hashaddestroy) {
             RECT tmp;
             if (WinIntersectRect(&tmp, &hwnd->m_position, &nw->m_position))
               nw->m_invalidated = true;
