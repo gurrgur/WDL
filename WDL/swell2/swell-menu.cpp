@@ -972,25 +972,30 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
 // WM_NCPAINT / menu bar drawing (called from DefWindowProc in swell-wnd.cpp)
 // ============================================================================
 
-void swell_paint_menubar(HWND hwnd, HDC hdc)
+// Shared layout helper: iterates menu bar items measuring widths.
+// If hdc is non-NULL, draws each item (with highlight if hilight_idx matches).
+// If hit_x >= 0, finds which item contains that window-x coordinate.
+// Returns item index of hit (or -1), writes item rect (window coords) to rect_out if non-NULL.
+static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *rect_out)
 {
-  if (!hwnd || !hwnd->m_menu || !hdc) return;
+  if (!hwnd || !hwnd->m_menu) return -1;
   HMENU menu = hwnd->m_menu;
   const swell_colortheme &th = g_swell_ctheme;
-
-  RECT cr;
-  GetClientRect(hwnd, &cr);
   int barH = th.menubar_height;
-  // Menu bar occupies the top barH pixels above the client area (NC area)
-  // We draw it at y=0 relative to the window's full area.
 
-  RECT barR = { 0, 0, cr.right, barH };
-  HBRUSH br = CreateSolidBrush(th.menubar_bg);
-  FillRect(hdc, &barR, br);
-  DeleteObject(br);
+  // Need a scratch DC for text measurement when no paint DC is available
+  HDC mdc = hdc;
+  bool free_mdc = false;
+  if (!mdc) {
+    mdc = SWELL_CreateMemContext(NULL, 16, 16);
+    free_mdc = true;
+  }
+  if (!mdc) return -1;
 
-  // Draw each top-level menu item
+  HFONT oldf = (HFONT)SelectObject(mdc, SWELL_GetDefaultFont());
+
   int x = 4;
+  int hit = -1;
   int n = menu->m_items.GetSize();
   for (int i = 0; i < n; i++) {
     SWELL_MenuItem *it = menu->m_items.Get(i);
@@ -998,20 +1003,67 @@ void swell_paint_menubar(HWND hwnd, HDC hdc)
     const char *txt = it->m_name.Get();
     if (!txt || !txt[0]) continue;
 
-    // Measure text width via DT_CALCRECT
-    HFONT oldf = (HFONT)SelectObject(hdc, SWELL_GetDefaultFont());
     RECT msz = { 0, 0, 0, 0 };
-    SWELL_DrawText(hdc, txt, -1, &msz, DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
-    SelectObject(hdc, oldf);
-
+    SWELL_DrawText(mdc, txt, -1, &msz, DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
     int itemW = (msz.right - msz.left) + 12;
-    RECT itemR = { x, 1, x + itemW, barH - 1 };
+    RECT itemR = { x, 0, x + itemW, barH };
 
-    SetTextColor(hdc, th.menubar_text);
-    SetBkMode(hdc, TRANSPARENT);
-    SWELL_DrawText(hdc, txt, -1, &itemR,
-                   DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+    if (hit_x >= x && hit_x < x + itemW) {
+      hit = i;
+      if (rect_out) *rect_out = itemR;
+    }
+
+    if (hdc) {
+      bool hl = (i == hilight_idx);
+      HBRUSH bgbr = CreateSolidBrush(hl ? (COLORREF)th.menubar_hilight_bg
+                                        : (COLORREF)th.menubar_bg);
+      FillRect(hdc, &itemR, bgbr);
+      DeleteObject(bgbr);
+      SetTextColor(hdc, hl ? (COLORREF)th.menubar_hilight_text
+                           : (COLORREF)th.menubar_text);
+      SetBkMode(hdc, TRANSPARENT);
+      SWELL_DrawText(hdc, txt, -1, &itemR,
+                     DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+    }
 
     x += itemW + 2;
   }
+
+  SelectObject(mdc, oldf);
+  if (free_mdc) SWELL_DeleteGfxContext(mdc);
+  return hit;
+}
+
+void swell_paint_menubar(HWND hwnd, HDC hdc)
+{
+  if (!hwnd || !hwnd->m_menu || !hdc) return;
+  const swell_colortheme &th = g_swell_ctheme;
+  int barH = th.menubar_height;
+
+  RECT cr; GetClientRect(hwnd, &cr);
+  RECT barR = { 0, 0, cr.right, barH };
+  HBRUSH br = CreateSolidBrush(th.menubar_bg);
+  FillRect(hdc, &barR, br);
+  DeleteObject(br);
+
+  menubar_layout(hwnd, hdc, -1, -1, NULL);
+}
+
+// Returns top-level menu item index hit at window-x coordinate win_x, or -1.
+// item_screen_rect_out receives the item rect in screen coords if non-NULL.
+int swell_menubar_hittest(HWND hwnd, int win_x, RECT *item_screen_rect_out)
+{
+  if (!hwnd || !hwnd->m_menu) return -1;
+  RECT wr = { 0, 0, 0, 0 };
+  int hit = menubar_layout(hwnd, NULL, win_x, -1, &wr);
+  if (hit >= 0 && item_screen_rect_out) {
+    // convert window rect to screen by adding window's screen origin
+    int sx = hwnd->m_position.left;
+    int sy = hwnd->m_position.top;
+    item_screen_rect_out->left   = sx + wr.left;
+    item_screen_rect_out->top    = sy + wr.top;
+    item_screen_rect_out->right  = sx + wr.right;
+    item_screen_rect_out->bottom = sy + wr.bottom;
+  }
+  return hit;
 }

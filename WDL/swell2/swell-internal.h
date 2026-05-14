@@ -467,6 +467,9 @@ void swell_dlg_destroyspare();
 
 // swell-menu.cpp: paint menu bar into NC area of top-level window
 void swell_paint_menubar(HWND hwnd, HDC hdc);
+// swell-menu.cpp: hit-test menu bar; returns item index or -1.
+// item_screen_rect_out (if non-NULL) receives item rect in screen coords.
+int swell_menubar_hittest(HWND hwnd, int win_x, RECT *item_screen_rect_out);
 
 // swell-wnd.cpp: invoke registered custom control creators
 HWND swell_invoke_control_creators(HWND parent, const char *cname, int idx,

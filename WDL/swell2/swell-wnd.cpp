@@ -192,10 +192,23 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       return 0;
     case WM_NCMOUSEMOVE:
-    case WM_NCLBUTTONDOWN:
     case WM_NCLBUTTONUP:
     case WM_NCRBUTTONDOWN:
     case WM_NCRBUTTONUP:
+      return 0;
+
+    case WM_NCLBUTTONDOWN:
+      if (wParam == HTMENU && hwnd->m_menu) {
+        int win_x = (int)(short)LOWORD(lParam);
+        RECT item_sr = {};
+        int idx = swell_menubar_hittest(hwnd, win_x, &item_sr);
+        if (idx >= 0) {
+          HMENU sub = GetSubMenu(hwnd->m_menu, idx);
+          if (sub)
+            TrackPopupMenu(sub, TPM_LEFTALIGN | TPM_TOPALIGN,
+                           item_sr.left, item_sr.bottom, 0, hwnd, NULL);
+        }
+      }
       return 0;
 
     case WM_RBUTTONUP:

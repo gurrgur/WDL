@@ -263,31 +263,121 @@ int MessageBox(HWND hwndParent, const char *text, const char *caption, int type)
 }
 
 // ============================================================================
-// File dialogs (no real UI — return NULL/false)
+// File dialogs (zenity-based)
 // ============================================================================
+
+// Append a zenity --file-filter arg from a Win32 null-null extlist
+// ("Description\0*.ext\0...") into cmd buffer at offset *pos.
+static void append_zenity_filters(char *cmd, int cmdsz, int *pos,
+                                   const char *extlist)
+{
+  if (!extlist || !extlist[0]) return;
+  const char *p = extlist;
+  while (p && *p) {
+    const char *desc = p;
+    const char *pat  = p + strlen(p) + 1;
+    if (!*pat) break;
+    // format: --file-filter="desc | *.ext *.ext2"
+    int n = snprintf(cmd + *pos, cmdsz - *pos,
+                     " --file-filter=%s | %s", desc, pat);
+    if (n > 0) *pos += n;
+    p = pat + strlen(pat) + 1;
+  }
+}
+
+// Run zenity and collect output. Returns newly malloc'd string (strip trailing
+// newline) or NULL on cancel/error. Caller frees.
+static char *zenity_run(const char *cmd)
+{
+  FILE *f = popen(cmd, "r");
+  if (!f) return NULL;
+  char buf[4096] = {};
+  size_t tot = 0;
+  while (tot < sizeof(buf) - 1) {
+    size_t n = fread(buf + tot, 1, sizeof(buf) - 1 - tot, f);
+    if (n == 0) break;
+    tot += n;
+  }
+  int ret = pclose(f);
+  if (ret != 0 || tot == 0) return NULL;
+  // Strip trailing newline
+  while (tot > 0 && (buf[tot-1] == '\n' || buf[tot-1] == '\r')) buf[--tot] = 0;
+  return tot > 0 ? strdup(buf) : NULL;
+}
 
 char *BrowseForFiles(const char *text, const char *initialdir,
                      const char *initialfile, bool allowmul,
                      const char *extlist)
 {
-  (void)text; (void)initialdir; (void)initialfile; (void)allowmul; (void)extlist;
-  return NULL;
+  char cmd[4096];
+  int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection");
+  if (text && text[0])
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=%s", text);
+  if (initialfile && initialfile[0])
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s", initialfile);
+  else if (initialdir && initialdir[0])
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s/", initialdir);
+  if (allowmul)
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --multiple --separator=|");
+  append_zenity_filters(cmd, sizeof(cmd), &pos, extlist);
+  pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
+
+  char *raw = zenity_run(cmd);
+  if (!raw) return NULL;
+
+  if (!allowmul) return raw;
+
+  // Convert '|'-separated to '\0'-separated with double-null terminator
+  size_t len = strlen(raw);
+  char *out = (char *)malloc(len + 2);
+  if (!out) { free(raw); return NULL; }
+  memcpy(out, raw, len + 1);
+  free(raw);
+  // replace '|' with '\0'
+  for (size_t i = 0; i < len; i++)
+    if (out[i] == '|') out[i] = '\0';
+  out[len + 1] = '\0';
+  return out;
 }
 
 bool BrowseForSaveFile(const char *text, const char *initialdir,
                        const char *initialfile, const char *extlist,
                        char *fn, int fnsize)
 {
-  (void)text; (void)initialdir; (void)initialfile; (void)extlist;
-  (void)fn; (void)fnsize;
-  return false;
+  char cmd[4096];
+  int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection --save --confirm-overwrite");
+  if (text && text[0])
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=%s", text);
+  if (initialfile && initialfile[0])
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s", initialfile);
+  else if (initialdir && initialdir[0])
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s/", initialdir);
+  append_zenity_filters(cmd, sizeof(cmd), &pos, extlist);
+  pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
+
+  char *raw = zenity_run(cmd);
+  if (!raw) return false;
+  snprintf(fn, fnsize, "%s", raw);
+  free(raw);
+  return true;
 }
 
 bool BrowseForDirectory(const char *text, const char *initialdir,
                         char *fn, int fnsize)
 {
-  (void)text; (void)initialdir; (void)fn; (void)fnsize;
-  return false;
+  char cmd[4096];
+  int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection --directory");
+  if (text && text[0])
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=%s", text);
+  if (initialdir && initialdir[0])
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s/", initialdir);
+  pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
+
+  char *raw = zenity_run(cmd);
+  if (!raw) return false;
+  snprintf(fn, fnsize, "%s", raw);
+  free(raw);
+  return true;
 }
 
 void BrowseFile_SetTemplate(const char *dlgid, DLGPROC dlgProc,
