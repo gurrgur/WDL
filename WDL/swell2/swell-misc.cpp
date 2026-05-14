@@ -1023,7 +1023,7 @@ HCURSOR SWELL_LoadCursorFromFile(const char *fn)
   }
 
   // Create SDL surface from SkBitmap BGRA pixels
-  SDL_Surface *surf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_BGRA8888);
+  SDL_Surface *surf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_BGRA32);
   if (!surf) {
     DeleteObject((HGDIOBJ)icon);
     return NULL;

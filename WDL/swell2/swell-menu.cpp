@@ -736,7 +736,7 @@ static void menu_present(MenuWindow *mw)
 
   if (!mw->texture) {
     mw->texture = SDL_CreateTexture(mw->renderer,
-        SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_STREAMING, pw, ph);
+        SDL_PIXELFORMAT_BGRA32, SDL_TEXTUREACCESS_STREAMING, pw, ph);
     if (!mw->texture) return;
     SDL_SetTextureBlendMode(mw->texture, SDL_BLENDMODE_NONE);
   }
