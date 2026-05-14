@@ -382,6 +382,29 @@ extern HWND g_swell_top_level_list_end;
 extern int g_swell_ui_scale;              // DPI scaling: 256 = 1.0x
 #define SWELL_UI_SCALE(x) (((x)*g_swell_ui_scale)/256)
 void swell_scale_theme();                 // rescale theme sizes after g_swell_ui_scale changes
+void swell_scaling_init(bool no_auto_hidpi); // auto-detect DPI via hidden SDL test window
+
+// SDL3 uses logical pixels (CSS pixels) for window positions, sizes, and
+// mouse coordinates. swell keeps everything in physical device pixels.
+// g_swell_ui_scale is the DPI scale * 256 (256=1.0x, 512=2.0x).
+// Physical = Logical * g_swell_ui_scale / 256
+// Logical  = Physical * 256 / g_swell_ui_scale
+inline int swell_phys_to_log(int phys) { return (phys * 256) / g_swell_ui_scale; }
+inline int swell_log_to_phys(int log)   { return (log * g_swell_ui_scale) / 256; }
+
+inline void swell_phys_rect_to_log(const RECT *phys, RECT *log) {
+  log->left = swell_phys_to_log(phys->left);
+  log->top = swell_phys_to_log(phys->top);
+  log->right = swell_phys_to_log(phys->right);
+  log->bottom = swell_phys_to_log(phys->bottom);
+}
+
+inline void swell_log_rect_to_phys(const RECT *log, RECT *phys) {
+  phys->left = swell_log_to_phys(log->left);
+  phys->top = swell_log_to_phys(log->top);
+  phys->right = swell_log_to_phys(log->right);
+  phys->bottom = swell_log_to_phys(log->bottom);
+}
 
 extern const char *g_swell_deffont_face;
 

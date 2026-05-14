@@ -719,7 +719,7 @@ static void menu_draw(MenuWindow *mw)
 
         SkFontMetrics fm;
         mw->font.getMetrics(&fm);
-        float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f - fm.fAscent;
+        float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f;// - fm.fAscent;
 
         c->drawSimpleText(txt, strlen(txt), SkTextEncoding::kUTF8,
                           (float)MENU_LPAD, ty, mw->font, tp);
@@ -759,7 +759,8 @@ static void menu_present(MenuWindow *mw)
   SkPixmap pm;
   if (!mw->surface->peekPixels(&pm)) return;
 
-  int pw = mw->w, ph = mw->h;
+  int pw = mw->surface->width();
+  int ph = mw->surface->height();
 
   if (!mw->texture) {
     mw->texture = SDL_CreateTexture(mw->renderer,
@@ -796,13 +797,21 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
 
   menu_measure(&mw);
 
-  // Clamp to screen
+  // Clamp to screen (physical pixels)
   RECT screen;
   SWELL_GetViewPort(&screen, NULL, true);
   if (sx + mw.w > screen.right)  sx = screen.right - mw.w;
   if (sy + mw.h > screen.bottom) sy = screen.bottom - mw.h;
   if (sx < screen.left)          sx = screen.left;
   if (sy < screen.top)           sy = screen.top;
+
+  // Convert physical → logical for SDL3
+  int l_sx = swell_phys_to_log(sx);
+  int l_sy = swell_phys_to_log(sy);
+  int l_w  = swell_phys_to_log(mw.w);
+  int l_h  = swell_phys_to_log(mw.h);
+  if (l_w < 1) l_w = 1;
+  if (l_h < 1) l_h = 1;
 
   // Create SDL popup menu window with correct parent relationship
   SDL_Window *parent_sdlwin = NULL;
@@ -813,15 +822,15 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
     int px, py;
     SDL_GetWindowPosition(parent_sdlwin, &px, &py);
     mw.sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
-        sx - px, sy - py, mw.w, mw.h,
-        SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS);
+        l_sx - px, l_sy - py, l_w, l_h,
+        SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   } else {
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "");
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, sx);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, sy);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, mw.w);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, mw.h);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, l_sx);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, l_sy);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, l_w);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, l_h);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_ALWAYS_ON_TOP_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FOCUSABLE_BOOLEAN, false);
@@ -835,9 +844,13 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
   mw.renderer = SDL_CreateRenderer(mw.sdlwin, NULL);
   if (!mw.renderer) return 0;
 
-  // Skia surface
+  // Skia surface: use physical pixel dimensions for HiDPI
+  int pix_w = mw.w, pix_h = mw.h;
+  SDL_GetWindowSizeInPixels(mw.sdlwin, &pix_w, &pix_h);
+  if (pix_w < 1) pix_w = mw.w;
+  if (pix_h < 1) pix_h = mw.h;
   mw.surface = SkSurfaces::Raster(
-      SkImageInfo::Make(mw.w, mw.h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+      SkImageInfo::Make(pix_w, pix_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
   if (!mw.surface) return 0;
 
   // Initial render
@@ -910,7 +923,8 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
 
       case SDL_EVENT_MOUSE_MOTION: {
         if (evt.motion.windowID == mw_id) {
-          int newhov = menu_hittest(&mw, (int)evt.motion.y);
+          // SDL3 mouse y is logical; menu_hittest expects physical
+          int newhov = menu_hittest(&mw, swell_log_to_phys((int)evt.motion.y));
           if (newhov != mw.hovered) {
             submenu_open = -1;
             mw.hovered = newhov;
@@ -935,7 +949,8 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
 
       case SDL_EVENT_MOUSE_BUTTON_UP: {
         if (evt.button.windowID == mw_id) {
-          int idx = menu_hittest(&mw, (int)evt.button.y);
+          // SDL3 mouse y is logical; menu_hittest expects physical
+          int idx = menu_hittest(&mw, swell_log_to_phys((int)evt.button.y));
           if (idx >= 0) {
             SWELL_MenuItem *it = mw.menu->m_items.Get(idx);
             if (it && !(it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR))) {

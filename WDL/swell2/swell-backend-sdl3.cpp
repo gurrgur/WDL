@@ -96,11 +96,19 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 
   if (!wantOS || haveOS) return;
 
-  RECT r = hwnd->m_position;
-  int w = r.right - r.left;
-  int h = r.bottom - r.top;
-  if (w < 1) w = 400;
-  if (h < 1) h = 300;
+  RECT pr = hwnd->m_position;
+  int pw = pr.right - pr.left;
+  int ph = pr.bottom - pr.top;
+  if (pw < 1) pw = 400;
+  if (ph < 1) ph = 300;
+
+  // Convert physical → logical for SDL3
+  int lw = swell_phys_to_log(pw);
+  int lh = swell_phys_to_log(ph);
+  int lx = swell_phys_to_log(pr.left);
+  int ly = swell_phys_to_log(pr.top);
+  if (lw < 1) lw = 1;
+  if (lh < 1) lh = 1;
 
   SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
   if (hwnd->m_style & WS_THICKFRAME)
@@ -112,14 +120,14 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   flags |= SDL_WINDOW_HIDDEN; // show after position is set
 
   SDL_Window *sdlwin = SDL_CreateWindow(
-      hwnd->m_title.Get(), w, h, flags);
+      hwnd->m_title.Get(), lw, lh, flags);
 
   if (!sdlwin) {
     fprintf(stderr, "SWELL SDL3: SDL_CreateWindow failed: %s\n", SDL_GetError());
     return;
   }
 
-  SDL_SetWindowPosition(sdlwin, r.left, r.top);
+  SDL_SetWindowPosition(sdlwin, lx, ly);
 
   SDL_ShowWindow(sdlwin);
 
@@ -136,12 +144,12 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   SDL_StartTextInput(sdlwin);
 
   // create backing Skia surface (pixel dimensions for HiDPI)
-  int pw = 0, ph = 0;
-  SDL_GetWindowSizeInPixels(sdlwin, &pw, &ph);
-  if (pw < 1) pw = w;
-  if (ph < 1) ph = h;
+  int surf_w = 0, surf_h = 0;
+  SDL_GetWindowSizeInPixels(sdlwin, &surf_w, &surf_h);
+  if (surf_w < 1) surf_w = pw;
+  if (surf_h < 1) surf_h = ph;
   hwnd->m_backingstore = SkSurfaces::Raster(
-      SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+      SkImageInfo::Make(surf_w, surf_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
   if (hwnd->m_backingstore) {
     SkCanvas *c = hwnd->m_backingstore->getCanvas();
     if (c) c->clear(SK_ColorTRANSPARENT);
@@ -177,25 +185,32 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
   SDL_WindowEntry *e = find_entry_by_hwnd(hwnd);
   if (!e) return;
 
-  if (reposflag & 1)
-    SDL_SetWindowPosition(e->window, r->left, r->top);
+  if (reposflag & 1) {
+    int lx = swell_phys_to_log(r->left);
+    int ly = swell_phys_to_log(r->top);
+    SDL_SetWindowPosition(e->window, lx, ly);
+  }
   if (reposflag & 2) {
-    int w = r->right - r->left;
-    int h = r->bottom - r->top;
-    if (w < 1) w = 1;
-    if (h < 1) h = 1;
-    SDL_SetWindowSize(e->window, w, h);
+    int pw = r->right - r->left;
+    int ph = r->bottom - r->top;
+    if (pw < 1) pw = 1;
+    if (ph < 1) ph = 1;
+    int lw = swell_phys_to_log(pw);
+    int lh = swell_phys_to_log(ph);
+    if (lw < 1) lw = 1;
+    if (lh < 1) lh = 1;
+    SDL_SetWindowSize(e->window, lw, lh);
 
     // resize backing store to match new pixel dimensions, preserve old content
-    int pw = 0, ph = 0;
-    SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
-    if (pw > 0 && ph > 0) {
+    int surf_w = 0, surf_h = 0;
+    SDL_GetWindowSizeInPixels(e->window, &surf_w, &surf_h);
+    if (surf_w > 0 && surf_h > 0) {
       sk_sp<SkImage> oldImage;
       if (hwnd->m_backingstore)
         oldImage = hwnd->m_backingstore->makeImageSnapshot();
 
       hwnd->m_backingstore = SkSurfaces::Raster(
-          SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+          SkImageInfo::Make(surf_w, surf_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
 
       if (hwnd->m_backingstore) {
         SkCanvas *c = hwnd->m_backingstore->getCanvas();
@@ -536,8 +551,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_WINDOW_RESIZED: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
-        int nw = evt->window.data1;
-        int nh = evt->window.data2;
+        // SDL3 reports logical pixels; swell works in physical
+        int nw = swell_log_to_phys(evt->window.data1);
+        int nh = swell_log_to_phys(evt->window.data2);
         int ow = e->hwnd->m_position.right - e->hwnd->m_position.left;
         int oh = e->hwnd->m_position.bottom - e->hwnd->m_position.top;
 
@@ -576,10 +592,14 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_WINDOW_RESTORED: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
-        int nx = 0, ny = 0;
-        SDL_GetWindowPosition(e->window, &nx, &ny);
-        int nw = 0, nh = 0;
-        SDL_GetWindowSize(e->window, &nw, &nh);
+        int lnx = 0, lny = 0;
+        SDL_GetWindowPosition(e->window, &lnx, &lny);
+        int nx = swell_log_to_phys(lnx);
+        int ny = swell_log_to_phys(lny);
+        int lnw = 0, lnh = 0;
+        SDL_GetWindowSize(e->window, &lnw, &lnh);
+        int nw = swell_log_to_phys(lnw);
+        int nh = swell_log_to_phys(lnh);
         e->hwnd->m_position.left = nx;
         e->hwnd->m_position.top = ny;
         e->hwnd->m_position.right = nx + nw;
@@ -601,8 +621,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_WINDOW_MOVED: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
-        int nx = evt->window.data1;
-        int ny = evt->window.data2;
+        int nx = swell_log_to_phys(evt->window.data1);
+        int ny = swell_log_to_phys(evt->window.data2);
         int ox = e->hwnd->m_position.left;
         int oy = e->hwnd->m_position.top;
         int w = e->hwnd->m_position.right - e->hwnd->m_position.left;
@@ -719,8 +739,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: {
-      float mx = evt->button.x;
-      float my = evt->button.y;
+      // SDL3 reports mouse coords in logical pixels; swell uses physical
+      float mx = swell_log_to_phys((int)evt->button.x);
+      float my = swell_log_to_phys((int)evt->button.y);
       Uint8 btn = evt->button.button;
       Uint8 clicks = evt->button.clicks;
       bool down = evt->button.down;
@@ -806,8 +827,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     }
 
     case SDL_EVENT_MOUSE_MOTION: {
-      float mx = evt->motion.x;
-      float my = evt->motion.y;
+      // SDL3 reports mouse coords in logical pixels; swell uses physical
+      float mx = swell_log_to_phys((int)evt->motion.x);
+      float my = swell_log_to_phys((int)evt->motion.y);
 
       HWND cap = GetCapture();
       HWND target = cap;
@@ -839,13 +861,16 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_MOUSE_WHEEL: {
       float wx = evt->wheel.x;
       float wy = evt->wheel.y;
+      // SDL3 reports mouse coords in logical pixels; swell uses physical
+      int wmx = swell_log_to_phys((int)evt->wheel.mouse_x);
+      int wmy = swell_log_to_phys((int)evt->wheel.mouse_y);
       SDL_WindowEntry *e = find_entry_by_windowID(evt->wheel.windowID);
       HWND target = NULL;
       if (e && e->hwnd) {
         int nc_left = 0, nc_top = 0;
         get_nc_offsets(e->hwnd, &nc_left, &nc_top);
-        float cx = evt->wheel.mouse_x - nc_left;
-        float cy = evt->wheel.mouse_y - nc_top;
+        float cx = wmx - nc_left;
+        float cy = wmy - nc_top;
         target = e->hwnd;
         HWND child = hittest_child(e->hwnd, cx, cy);
         if (child) target = child;
@@ -856,13 +881,13 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       if (delta != 0) {
         SendMessage(target, WM_MOUSEWHEEL,
                     MAKEWPARAM(0, (WORD)delta),
-                    MAKELPARAM((int)evt->wheel.mouse_x, (int)evt->wheel.mouse_y));
+                    MAKELPARAM(wmx, wmy));
       }
       int hdelta = (int)(wx * 120.0f);
       if (hdelta != 0) {
         SendMessage(target, WM_MOUSEHWHEEL,
                     MAKEWPARAM(0, (WORD)hdelta),
-                    MAKELPARAM((int)evt->wheel.mouse_x, (int)evt->wheel.mouse_y));
+                    MAKELPARAM(wmx, wmy));
       }
       break;
     }
@@ -963,19 +988,21 @@ void SWELL_GetViewPort(RECT *r, const RECT *sourcerect, bool wantWork)
 
   SDL_DisplayID display = SDL_GetPrimaryDisplay();
   if (sourcerect) {
-    SDL_Rect sr = { sourcerect->left, sourcerect->top,
-                    sourcerect->right - sourcerect->left,
-                    sourcerect->bottom - sourcerect->top };
+    // sourcerect is physical; SDL_GetDisplayForRect expects logical
+    RECT lr;
+    swell_phys_rect_to_log(sourcerect, &lr);
+    SDL_Rect sr = { lr.left, lr.top, lr.right - lr.left, lr.bottom - lr.top };
     SDL_DisplayID d = SDL_GetDisplayForRect(&sr);
     if (d) display = d;
   }
   SDL_Rect dr = { 0, 0, 1024, 768 };
   if ((wantWork ? SDL_GetDisplayUsableBounds(display, &dr) :
                   SDL_GetDisplayBounds(display, &dr))) {
-    r->left = dr.x;
-    r->top = dr.y;
-    r->right = dr.x + dr.w;
-    r->bottom = dr.y + dr.h;
+    // SDL returns logical; swell uses physical
+    r->left = swell_log_to_phys(dr.x);
+    r->top = swell_log_to_phys(dr.y);
+    r->right = r->left + swell_log_to_phys(dr.w);
+    r->bottom = r->top + swell_log_to_phys(dr.h);
   }
 }
 
