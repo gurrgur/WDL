@@ -22,6 +22,7 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <signal.h>
 #include <time.h>
 
@@ -655,7 +656,27 @@ DWORD GetCurrentThreadId()
 
 BOOL SetThreadPriority(HANDLE evt, int prio)
 {
-  (void)evt; (void)prio; return TRUE;
+  if (!evt || (uintptr_t)evt < 4096u) return FALSE;
+  uint32_t magic = *(const uint32_t *)evt;
+  if (magic != SWELL_HANDLE_MAGIC_THREAD) return FALSE;
+
+  ThreadHandle *th = (ThreadHandle *)evt;
+
+  // Map Win32 THREAD_PRIORITY_* to Linux nice value (-20..+19)
+  // Win32 range: IDLE(-15) to TIME_CRITICAL(15)
+  // Linux range: nice -20 (highest) to +19 (lowest)
+  int nice_val;
+  if      (prio >= 15) nice_val = -20;
+  else if (prio >= 2)  nice_val = -10;
+  else if (prio >= 1)  nice_val = -5;
+  else if (prio >= 0)  nice_val =  0;
+  else if (prio >= -1) nice_val =  5;
+  else if (prio >= -2) nice_val = 10;
+  else                 nice_val = 19;
+
+  // pthread_t on glibc Linux is the kernel TID
+  setpriority(PRIO_PROCESS, (pid_t)(uintptr_t)th->tid, nice_val);
+  return TRUE;
 }
 
 BOOL CloseHandle(HANDLE hand)
