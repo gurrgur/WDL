@@ -132,17 +132,33 @@ DWORD GetModuleFileName(HINSTANCE hInst, char *fn, DWORD nSize)
   return 0;
 }
 
+extern "C" void *SWELLAPI_GetFunc(const char *);
+
+static void swell_call_dll_main(void *h)
+{
+  typedef int (*swell_dll_main_t)(void *, int, void *(*)(const char *));
+  swell_dll_main_t swell_init = (swell_dll_main_t)dlsym(h, "SWELL_dllMain");
+  if (swell_init)
+    swell_init(h, 1 /* DLL_PROCESS_ATTACH */, SWELLAPI_GetFunc);
+}
+
 HINSTANCE LoadLibrary(const char *fileName)
 {
   if (!fileName) return NULL;
-  return (HINSTANCE)dlopen(fileName, RTLD_NOW | RTLD_LOCAL);
+  void *h = dlopen(fileName, RTLD_NOW | RTLD_LOCAL);
+  if (!h) return NULL;
+  swell_call_dll_main(h);
+  return (HINSTANCE)h;
 }
 
 HINSTANCE LoadLibraryGlobals(const char *fileName, bool symGlob)
 {
   if (!fileName) return NULL;
   int flags = RTLD_NOW | (symGlob ? RTLD_GLOBAL : RTLD_LOCAL);
-  return (HINSTANCE)dlopen(fileName, flags);
+  void *h = dlopen(fileName, flags);
+  if (!h) return NULL;
+  swell_call_dll_main(h);
+  return (HINSTANCE)h;
 }
 
 void *GetProcAddress(HINSTANCE hInst, const char *procName)
@@ -424,6 +440,24 @@ int GetSystemMetrics(int idx)
 // Threading — pthreads backend
 // ============================================================================
 
+// Magic values stored as first field in heap-allocated handle structs.
+// CloseHandle checks these to safely distinguish swell-owned allocations
+// from plain integer values (fds, sockets) that REAPER passes as HANDLE.
+static const uint32_t SWELL_HANDLE_MAGIC_EVENT  = 0x53574556u; // 'SWEV'
+static const uint32_t SWELL_HANDLE_MAGIC_THREAD = 0x53575448u; // 'SWTH'
+
+// ---- Simple event using pipe ----
+struct EventHandle {
+  uint32_t magic; // must be first; = SWELL_HANDLE_MAGIC_EVENT
+  int rd, wr;
+  bool manual_reset;
+};
+
+struct ThreadHandle {
+  uint32_t magic; // = SWELL_HANDLE_MAGIC_THREAD
+  pthread_t tid;
+};
+
 struct ThreadRec {
   DWORD (*proc)(LPVOID);
   LPVOID parm;
@@ -442,17 +476,21 @@ static void *thread_thunk(void *arg)
 HANDLE CreateThread(void *TA, DWORD stackSize, DWORD (*ThreadProc)(LPVOID),
                     LPVOID parm, DWORD cf, DWORD *tidOut)
 {
-  (void)TA; (void)stackSize; (void)cf; (void)tidOut;
-  if (!ThreadProc) return NULL;
+  (void)TA; (void)stackSize; (void)cf;
   ThreadRec *tr = (ThreadRec *)malloc(sizeof(ThreadRec));
+  if (!tr) return NULL;
   tr->proc = ThreadProc;
   tr->parm = parm;
-  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  if (pthread_create(t, NULL, thread_thunk, tr) != 0) {
-    free(tr); free(t); return NULL;
+  ThreadHandle *th = (ThreadHandle *)malloc(sizeof(ThreadHandle));
+  if (!th) { free(tr); return NULL; }
+  th->magic = SWELL_HANDLE_MAGIC_THREAD;
+  if (pthread_create(&th->tid, NULL, thread_thunk, tr) != 0) {
+    free(tr);
+    free(th);
+    return NULL;
   }
-  pthread_detach(*t);
-  return (HANDLE)t;
+  if (tidOut) *tidOut = (DWORD)(uintptr_t)th->tid;
+  return (HANDLE)th;
 }
 
 DWORD GetCurrentThreadId()
@@ -467,18 +505,24 @@ BOOL SetThreadPriority(HANDLE evt, int prio)
 
 BOOL CloseHandle(HANDLE hand)
 {
-  if (!hand) return FALSE;
-  // Handles are either pthread_t* (from CreateThread, already detached)
-  // or eventfd descriptors wrapped in EventHandle. Check tag byte.
-  free(hand);
-  return TRUE;
+  if (!hand || (uintptr_t)hand < 4096u) return FALSE;
+  uint32_t magic = *(const uint32_t *)hand;
+  if (magic == SWELL_HANDLE_MAGIC_EVENT) {
+    EventHandle *ev = (EventHandle *)hand;
+    close(ev->rd);
+    close(ev->wr);
+    ev->magic = 0;
+    free(ev);
+    return TRUE;
+  }
+  if (magic == SWELL_HANDLE_MAGIC_THREAD) {
+    ((ThreadHandle *)hand)->magic = 0;
+    free(hand);
+    return TRUE;
+  }
+  // Unknown handle type (fd, socket, etc.) — do not free
+  return FALSE;
 }
-
-// ---- Simple event using pipe ----
-struct EventHandle {
-  int rd, wr;
-  bool manual_reset;
-};
 
 HANDLE CreateEvent(void *SA, BOOL manualReset, BOOL initialSig,
                    const char *ignored)
@@ -489,6 +533,7 @@ HANDLE CreateEvent(void *SA, BOOL manualReset, BOOL initialSig,
   fcntl(fd[0], F_SETFL, O_NONBLOCK);
   fcntl(fd[1], F_SETFL, O_NONBLOCK);
   EventHandle *ev = (EventHandle *)malloc(sizeof(EventHandle));
+  ev->magic = SWELL_HANDLE_MAGIC_EVENT;
   ev->rd = fd[0];
   ev->wr = fd[1];
   ev->manual_reset = manualReset != FALSE;
@@ -695,7 +740,8 @@ void SWELL_Register_Cursor_Resource(const char *idx, const char *name,
                                      int hotspot_x, int hotspot_y)
 {
   CursorEntry *e = (CursorEntry *)calloc(1, sizeof(CursorEntry));
-  e->id        = idx  ? strdup(idx)  : NULL;
+  // idx may be MAKEINTRESOURCE (integer cast to pointer) — guard before strdup
+  e->id        = (idx && (size_t)idx > 0xFFFF) ? strdup(idx) : (char *)idx;
   e->name      = name ? strdup(name) : NULL;
   e->hotspot_x = hotspot_x;
   e->hotspot_y = hotspot_y;
