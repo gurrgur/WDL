@@ -1361,12 +1361,41 @@ static HWND windowfrompoint_recurse(HWND parent, POINT p)
   return NULL;
 }
 
+// Hit-test owned windows of `owner` in screen coords. Owned windows float
+// above their owner and must be checked before the owner's own children.
+// Returns the deepest matching HWND, or NULL.
+static HWND windowfrompoint_check_owned(HWND owner, POINT p)
+{
+  for (int i = owner->m_owned.GetSize() - 1; i >= 0; i--) {
+    HWND ow = owner->m_owned.Get(i);
+    if (!ow || !ow->m_visible) continue;
+    RECT orr = ow->m_position;
+    if (p.x >= orr.left && p.x < orr.right &&
+        p.y >= orr.top  && p.y < orr.bottom) {
+      POINT op = { p.x - orr.left, p.y - orr.top };
+      int oww = orr.right - orr.left;
+      int owh = orr.bottom - orr.top;
+      NCCALCSIZE_PARAMS oncp = {{{0, 0, oww, owh}}};
+      SendMessage(ow, WM_NCCALCSIZE, FALSE, (LPARAM)&oncp);
+      op.x -= oncp.rgrc[0].left;
+      op.y -= oncp.rgrc[0].top;
+      HWND ch = windowfrompoint_recurse(ow, op);
+      return ch ? ch : ow;
+    }
+  }
+  return NULL;
+}
+
 HWND WindowFromPoint(POINT p)
 {
   HWND w = g_swell_top_level_list;
   while (w) {
     RECT r = w->m_position;
     if (p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom) {
+      // Check owned windows first — they float above the owner.
+      HWND oh = windowfrompoint_check_owned(w, p);
+      if (oh) return oh;
+
       // Convert screen point to top-level client coords
       POINT cp = { p.x - r.left, p.y - r.top };
       int ww = r.right - r.left;
