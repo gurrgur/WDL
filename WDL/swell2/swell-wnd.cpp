@@ -634,6 +634,11 @@ static void RecurseDestroyWindow(HWND hwnd)
 
   // remove from parent/global lists
   if (hwnd->m_parent) {
+    // If this was the parent's focused child, clear the reference
+    // so GetFocus() doesn't follow a dangling pointer later.
+    if (hwnd->m_parent->m_focused_child == hwnd)
+      hwnd->m_parent->m_focused_child = NULL;
+
     for (int i = 0; i < hwnd->m_parent->m_children.GetSize(); i++) {
       if (hwnd->m_parent->m_children.Get(i) == hwnd) {
         hwnd->m_parent->m_children.Delete(i, false);
@@ -651,6 +656,8 @@ static void RecurseDestroyWindow(HWND hwnd)
 
   SWELL_MessageQueue_Clear(hwnd);
   KillTimer(hwnd, (UINT_PTR)-1);
+
+  if (g_swell_focus == hwnd) g_swell_focus = NULL;
 
   hwnd->Release();
 }
