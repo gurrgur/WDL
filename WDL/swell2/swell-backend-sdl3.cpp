@@ -508,7 +508,17 @@ static HWND hittest_child(HWND parent, float x, float y)
     if (!ch || !ch->m_visible) continue;
     RECT cr = ch->m_position;
     if (x >= cr.left && x < cr.right && y >= cr.top && y < cr.bottom) {
-      HWND deeper = hittest_child(ch, x - cr.left, y - cr.top);
+      float cx = x - cr.left;
+      float cy = y - cr.top;
+      // Apply NCCALCSIZE (matching windowfrompoint_recurse) so the
+      // coordinate passed to the next recursion level is client-relative.
+      int cw = cr.right - cr.left;
+      int chh = cr.bottom - cr.top;
+      NCCALCSIZE_PARAMS ncp = {{{0, 0, cw, chh}}};
+      SendMessage(ch, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
+      cx -= ncp.rgrc[0].left;
+      cy -= ncp.rgrc[0].top;
+      HWND deeper = hittest_child(ch, cx, cy);
       return deeper ? deeper : ch;
     }
   }
