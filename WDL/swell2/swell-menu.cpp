@@ -364,7 +364,27 @@ int GetMenuItemID(HMENU hMenu, int pos)
 BOOL SetMenu(HWND hwnd, HMENU menu)
 {
   if (!hwnd) return FALSE;
+  HMENU oldmenu = hwnd->m_menu;
   hwnd->m_menu = menu;
+
+  // Preserve client area across menu add/remove on top-level windows by
+  // resizing the window by menubar_height. Without this, NCCALCSIZE shrinks
+  // the client area under existing controls and the menubar paints on top
+  // of them. Swap m_wndproc to DefWindowProc during the resize so the host
+  // does not see a phantom WM_SIZE for the synthesized growth.
+  if (!hwnd->m_parent && !!hwnd->m_menu != !!oldmenu)
+  {
+    WNDPROC oldwc = hwnd->m_wndproc;
+    hwnd->m_wndproc = DefWindowProc;
+    RECT r;
+    GetWindowRect(hwnd, &r);
+    if (oldmenu) r.bottom -= g_swell_theme.menubar_height;
+    else         r.bottom += g_swell_theme.menubar_height;
+    SetWindowPos(hwnd, NULL, 0, 0, r.right - r.left, r.bottom - r.top,
+                 SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE);
+    hwnd->m_wndproc = oldwc;
+  }
+
   InvalidateRect(hwnd, NULL, FALSE);
   return TRUE;
 }
