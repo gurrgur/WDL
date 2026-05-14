@@ -1187,12 +1187,56 @@ BOOL SWELL_GetGestureInfo(LPARAM lParam, GESTUREINFO *gi)
 bool SWELL_ChooseColor(HWND hwnd, COLORREF *color, int ncustom,
                        COLORREF *custom)
 {
-  (void)hwnd; (void)color; (void)ncustom; (void)custom; return false;
+  (void)hwnd; (void)ncustom; (void)custom;
+  if (!color) return false;
+
+  // Build zenity command: show color picker, pre-select current color
+  int r = GetRValue(*color), g = GetGValue(*color), b = GetBValue(*color);
+  char cmd[256];
+  snprintf(cmd, sizeof(cmd),
+           "zenity --color-selection --color='#%02X%02X%02X' 2>/dev/null",
+           r, g, b);
+  char *raw = zenity_run(cmd);
+  if (!raw) return false;
+
+  // Parse output: zenity outputs rgb(R,G,B) or #RRGGBB
+  int rr = 0, gg = 0, bb = 0;
+  if (sscanf(raw, "rgb(%d,%d,%d)", &rr, &gg, &bb) == 3 ||
+      sscanf(raw, "#%02x%02x%02x", &rr, &gg, &bb) == 3) {
+    *color = RGB(rr, gg, bb);
+    free(raw);
+    return true;
+  }
+  free(raw);
+  return false;
 }
 
 bool SWELL_ChooseFont(HWND hwnd, LOGFONT *lf)
 {
-  (void)hwnd; (void)lf; return false;
+  (void)hwnd;
+  if (!lf) return false;
+
+  // List available font families via fc-list, let user pick with zenity
+  char cmd[512];
+  snprintf(cmd, sizeof(cmd),
+           "fc-list : family | sort -u | zenity --list --column=Font "
+           "--title='Select Font' --width=400 --height=400 2>/dev/null");
+  char *raw = zenity_run(cmd);
+  if (!raw) return false;
+
+  // Fill LOGFONT with selected family + sensible defaults
+  memset(lf, 0, sizeof(*lf));
+  lf->lfHeight = -12; // 12pt
+  lf->lfWeight = FW_NORMAL; // 400
+  lf->lfCharSet = DEFAULT_CHARSET;
+  lf->lfOutPrecision = OUT_DEFAULT_PRECIS;
+  lf->lfClipPrecision = CLIP_DEFAULT_PRECIS;
+  lf->lfQuality = DEFAULT_QUALITY;
+  lf->lfPitchAndFamily = DEFAULT_PITCH;
+  strncpy(lf->lfFaceName, raw, sizeof(lf->lfFaceName) - 1);
+  lf->lfFaceName[sizeof(lf->lfFaceName) - 1] = '\0';
+  free(raw);
+  return true;
 }
 
 void SetOpaque(HWND h, bool isopaque)           { (void)h; (void)isopaque; }
