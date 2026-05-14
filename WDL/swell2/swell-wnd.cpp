@@ -172,7 +172,7 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         RECT r;
         GetWindowContentViewRect(hwnd, &r);
         const int mbh = g_swell_theme.menubar_height;
-        if (GET_Y_LPARAM(lParam) >= 0 && GET_Y_LPARAM(lParam) < mbh)
+        if (GET_Y_LPARAM(lParam) >= r.top && GET_Y_LPARAM(lParam) < r.top + mbh)
           return HTMENU;
       }
       return HTCLIENT;
@@ -1262,10 +1262,12 @@ bool GetWindowRect(HWND hwnd, RECT *r)
 void GetWindowContentViewRect(HWND hwnd, RECT *r)
 {
   if (!hwnd || !r) return;
-  r->left = 0;
-  r->top = 0;
-  r->right = hwnd->m_position.right - hwnd->m_position.left;
-  r->bottom = hwnd->m_position.bottom - hwnd->m_position.top;
+  if (hwnd->m_oswindow) {
+    // top-level window: return screen-absolute m_position (matching original)
+    *r = hwnd->m_position;
+    return;
+  }
+  GetWindowRect(hwnd, r);
 }
 
 void SetWindowPos(HWND hwnd, HWND zorder, int x, int y, int cx, int cy, int flags)
