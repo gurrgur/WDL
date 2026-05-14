@@ -585,7 +585,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 
           RECT ncr1 = {0, 0, nw, nh};
           SendMessage(e->hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr1);
-          SendMessage(e->hwnd, WM_SIZE, SIZE_RESTORED,
+          UINT szFlag1 = (SDL_GetWindowFlags(e->window) & SDL_WINDOW_MAXIMIZED)
+                         ? SIZE_MAXIMIZED : SIZE_RESTORED;
+          SendMessage(e->hwnd, WM_SIZE, szFlag1,
                       MAKELPARAM(ncr1.right - ncr1.left, ncr1.bottom - ncr1.top));
         }
       }
@@ -608,13 +610,31 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         e->hwnd->m_position.top = ny;
         e->hwnd->m_position.right = nx + nw;
         e->hwnd->m_position.bottom = ny + nh;
+
+        // Resize backing store to physical pixel dimensions (SDL may not fire
+        // SDL_EVENT_WINDOW_RESIZED for maximize/restore on all compositors).
+        int pw = 0, ph = 0;
+        SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
+        if (pw > 0 && ph > 0) {
+          sk_sp<SkImage> oldImage;
+          if (e->hwnd->m_backingstore)
+            oldImage = e->hwnd->m_backingstore->makeImageSnapshot();
+          e->hwnd->m_backingstore = SkSurfaces::Raster(
+              SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+          if (e->hwnd->m_backingstore) {
+            SkCanvas *c = e->hwnd->m_backingstore->getCanvas();
+            if (c) { c->clear(SK_ColorTRANSPARENT); if (oldImage) c->drawImage(oldImage, 0, 0); }
+          }
+        }
+        if (e->texture) { SDL_DestroyTexture(e->texture); e->texture = NULL; }
+
         UINT szFlag = (evt->type == SDL_EVENT_WINDOW_MAXIMIZED)
                       ? SIZE_MAXIMIZED : SIZE_RESTORED;
         RECT ncr2 = {0, 0, nw, nh};
         SendMessage(e->hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr2);
         SendMessage(e->hwnd, WM_SIZE, szFlag,
                     MAKELPARAM(ncr2.right - ncr2.left, ncr2.bottom - ncr2.top));
-        // trigger repaint
+
         sk_sp<SkSurface> bs = e->hwnd->m_backingstore;
         SkCanvas *canvas = bs ? bs->getCanvas() : nullptr;
         if (canvas) {
