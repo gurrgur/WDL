@@ -1278,8 +1278,15 @@ void SetWindowPos(HWND hwnd, HWND zorder, int x, int y, int cx, int cy, int flag
 
   if (!(flags & SWP_NOMOVE)) {
     if (hwnd->m_position.left != x || hwnd->m_position.top != y) {
-      hwnd->m_position.left = x;
-      hwnd->m_position.top = y;
+      // Preserve dimensions: update right/bottom to keep width/height constant.
+      // Without this, leaving right/bottom at old values corrupts the size when
+      // SWP_NOSIZE is also set.
+      int w = hwnd->m_position.right  - hwnd->m_position.left;
+      int h = hwnd->m_position.bottom - hwnd->m_position.top;
+      hwnd->m_position.left   = x;
+      hwnd->m_position.top    = y;
+      hwnd->m_position.right  = x + w;
+      hwnd->m_position.bottom = y + h;
       moved = true;
     }
   }
