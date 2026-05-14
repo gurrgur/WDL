@@ -700,8 +700,8 @@ static void menu_draw(MenuWindow *mw)
                                    (float)(mw->w - item_pad),
                                    (float)(iy + ih - 1));
       SkRRect rr;
-      rr.setRectXY(hr, (float)th.corner_radius / 2.0f,
-                       (float)th.corner_radius / 2.0f);
+      rr.setRectXY(hr, (float)th.corner_radius_large / 2.0f,
+                       (float)th.corner_radius_large / 2.0f);
       c->drawRRect(rr, hp);
     }
 
@@ -831,30 +831,19 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
   if (l_w < 1) l_w = 1;
   if (l_h < 1) l_h = 1;
 
-  // Create SDL popup menu window with correct parent relationship
-  SDL_Window *parent_sdlwin = NULL;
-  if (owner_hwnd && owner_hwnd->m_oswindow)
-    parent_sdlwin = (SDL_Window *)owner_hwnd->m_oswindow;
+  // Walk owner_hwnd up via m_owner / m_parent to find the SDL OS window.
+  // owner_hwnd may be a child HWND with no m_oswindow of its own.
+  HWND__ *osw = owner_hwnd;
+  while (osw && !osw->m_oswindow)
+    osw = osw->m_owner ? osw->m_owner : (HWND__*)osw->m_parent;
+  SDL_Window *parent_sdlwin = osw ? (SDL_Window *)osw->m_oswindow : NULL;
+  if (!parent_sdlwin) return 0;
 
-  if (parent_sdlwin) {
-    int px, py;
-    SDL_GetWindowPosition(parent_sdlwin, &px, &py);
-    mw.sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
-        l_sx - px, l_sy - py, l_w, l_h,
-        SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-  } else {
-    SDL_PropertiesID props = SDL_CreateProperties();
-    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "");
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, l_sx);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, l_sy);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, l_w);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, l_h);
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN, true);
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_ALWAYS_ON_TOP_BOOLEAN, true);
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FOCUSABLE_BOOLEAN, false);
-    mw.sdlwin = SDL_CreateWindowWithProperties(props);
-    SDL_DestroyProperties(props);
-  }
+  int px, py;
+  SDL_GetWindowPosition(parent_sdlwin, &px, &py);
+  mw.sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
+      l_sx - px, l_sy - py, l_w, l_h,
+      SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIGH_PIXEL_DENSITY);
 
   if (!mw.sdlwin) return 0;
 
@@ -977,7 +966,7 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
                   submenu_open = idx;
                   int item_sx = sx + mw.w;
                   int item_sy = sy + mw.item_y[idx];
-                  int r = run_menu_window(it->m_submenu, item_sx, item_sy,
+                  int r = run_menu_window(it->m_submenu, swell_phys_to_log(item_sx), swell_phys_to_log(item_sy),
                                           owner_hwnd, &mw,
                                           mw.item_y[idx]);
                   submenu_open = -1;
