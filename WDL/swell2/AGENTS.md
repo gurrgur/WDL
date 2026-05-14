@@ -24,6 +24,13 @@ is incomplete, but the new code must be independently written.
 
 ---
 
+## Workflow
+
+- **Commit after finishing a piece of work.** Don't accumulate unrelated changes in the working tree. Each logical unit of work gets its own commit with a descriptive message.
+- **When you notice docs are outdated, update them.** Specs in `docs/` are authoritative; if implementation reveals a gap or error in the spec, fix the spec in the same commit (or a preceding one). This file (`AGENTS.md`) tracks session findings — add to it as you discover things.
+
+---
+
 ## Directory Layout
 
 ```
