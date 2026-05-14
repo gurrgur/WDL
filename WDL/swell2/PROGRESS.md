@@ -15,7 +15,7 @@
 | 9 | `swell-controls.cpp` | done | 10 built-in control WNDPROCs: button, edit, label, listview, treeview, combo, tab, trackbar, progress, SWELL_MakeControl dispatcher. |
 | 10 | `swell-dlg.cpp` | done | SWELL_DialogBox/SWELL_CreateDialog/EndDialog, SWELL_Make* factories, UI scaling, modal window helpers. |
 | 11 | `swell-menu.cpp` | done | HMENU lifecycle, item manipulation, TrackPopupMenu (SDL3 popup window), menu bar painting, menubar_hittest, menu generation from list. |
-| 12 | `swell-misc.cpp` | partial | Clipboard (SDL3), MessageBox (SDL3), file dialogs (zenity), ShellExecute (xdg-open), threads/events, monitors, cursors, GUID, rect utils, SWELL_ExtendedAPI. **Stubs remain:** drag-drop, ImageList_Add/Remove/ReplaceIcon, SWELL_ChooseColor/Font, SWELL_LoadCursorFromFile, GlobalSize, ListView_SetGridColor/SelColors. |
+| 12 | `swell-misc.cpp` | partial | Clipboard (SDL3), MessageBox (SDL3), file dialogs (zenity), ShellExecute (xdg-open), threads/events (SetThreadPriority→nice, GlobalSize with prefix-header), monitors, cursors (system + from-file, SDL3), GUID, rect utils, SWELL_ExtendedAPI, ImageList (Add/Remove/ReplaceIcon with refcounting), SWELL_ChooseColor (zenity), SWELL_ChooseFont (fc-list+zenity). **Stubs remain:** drag-drop, ListView_SetGridColor/SelColors, SWELL_GetGestureInfo, GL/Metal. |
 | 13 | `swell-kb.cpp` | done | SWELL_KeyToASCII (letters, digits, numpad, US punctuation), SWELL_EnableRightClickEmulate (no-op on Linux). |
 | 14 | `swell-modstub.cpp` | done | SWELL_dllMain + DllMain alias for SWELL_PROVIDED_BY_APP mode. |
 | 15 | `swell-stubs.cpp` | done | ListView/TreeView/TabCtrl SendMessage helpers. macOS-only stubs under `#ifdef SWELL_TARGET_OSX`. |
@@ -25,10 +25,6 @@
 | Module | Functions | Notes |
 |--------|-----------|-------|
 | `swell-misc.cpp` | `DragQueryPoint`, `DragFinish`, `DragQueryFile`, `SWELL_InitiateDragDrop*`, `SWELL_FinishDragDrop` | Drag-drop entirely stubbed. Needs SDL3 DnD event handling. Complex. |
-| `swell-misc.cpp` | `ImageList_Add`, `ImageList_Remove`, `ImageList_ReplaceIcon` | HIMAGELIST__ struct is empty stub. Needs bitmap storage + impl. |
-| `swell-misc.cpp` | `SWELL_ChooseColor`, `SWELL_ChooseFont` | Could use zenity/other native pickers. |
-| `swell-misc.cpp` | `SWELL_LoadCursorFromFile` | Returns NULL. Could decode image → SDL_Cursor. |
-| `swell-misc.cpp` | `GlobalSize` | Always returns 0. Needs allocation size tracking. |
 | `swell-misc.cpp` | `SWELL_GetGestureInfo` | Stub (no gesture support on Linux desktop). |
 | `swell-misc.cpp` | GL/Metal: `SWELL_SetViewGL`, `SWELL_GetViewGL`, `SWELL_SetGLContextToView` | Stubs (OpenGL-in-window not yet plumbed). |
 | `swell-stubs.cpp` | `SWELL_GetListViewHeaderHeight` | Hardcoded 20px. Should measure font. |
