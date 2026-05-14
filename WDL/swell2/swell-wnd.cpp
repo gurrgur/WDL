@@ -1428,17 +1428,22 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
 
   hwnd->m_invalidated = true;
 
-  // WS_CLIPSIBLINGS: invalidate later siblings that intersect us
+  // WS_CLIPSIBLINGS: invalidate later siblings that intersect us.
+  // Children list is bottom-to-top; siblings at higher indices are
+  // above in z-order and must be repainted to cover our area.
   {
     HWND t = (HWND)hwnd->m_parent;
     if (t && (t->m_style & WS_CLIPSIBLINGS)) {
-      HWND nw = hwnd->m_next;
-      while (nw) {
-        RECT tmp;
-        if (nw->m_visible && !nw->m_invalidated &&
-            WinIntersectRect(&tmp, &hwnd->m_position, &nw->m_position))
-          nw->m_invalidated = true;
-        nw = nw->m_next;
+      int myIdx = t->m_children.Find(hwnd);
+      if (myIdx >= 0) {
+        for (int i = myIdx + 1; i < t->m_children.GetSize(); i++) {
+          HWND nw = t->m_children.Get(i);
+          if (nw && nw->m_visible && !nw->m_invalidated) {
+            RECT tmp;
+            if (WinIntersectRect(&tmp, &hwnd->m_position, &nw->m_position))
+              nw->m_invalidated = true;
+          }
+        }
       }
     }
   }
