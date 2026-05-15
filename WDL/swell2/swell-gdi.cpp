@@ -1231,11 +1231,166 @@ static sk_sp<SkTypeface> swell_get_typeface(const char *family, int weight, bool
   return tf;
 }
 
+static unsigned int swell_cp1252_to_unicode(unsigned char c)
+{
+  static const unsigned int cp1252_80_9f[32] = {
+    0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
+    0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178
+  };
+  if (c >= 0x80 && c <= 0x9f) return cp1252_80_9f[c - 0x80];
+  return c;
+}
+
+static void swell_append_utf8_codepoint(WDL_FastString &out, unsigned int cp)
+{
+  char tmp[4];
+  int len = 0;
+  if (cp <= 0x7f) {
+    tmp[len++] = (char)cp;
+  } else if (cp <= 0x7ff) {
+    tmp[len++] = (char)(0xc0 | (cp >> 6));
+    tmp[len++] = (char)(0x80 | (cp & 0x3f));
+  } else if (cp <= 0xffff) {
+    tmp[len++] = (char)(0xe0 | (cp >> 12));
+    tmp[len++] = (char)(0x80 | ((cp >> 6) & 0x3f));
+    tmp[len++] = (char)(0x80 | (cp & 0x3f));
+  } else {
+    tmp[len++] = (char)(0xf0 | (cp >> 18));
+    tmp[len++] = (char)(0x80 | ((cp >> 12) & 0x3f));
+    tmp[len++] = (char)(0x80 | ((cp >> 6) & 0x3f));
+    tmp[len++] = (char)(0x80 | (cp & 0x3f));
+  }
+  out.Append(tmp, len);
+}
+
+static int swell_valid_utf8_sequence_len(const unsigned char *s, int avail)
+{
+  if (avail <= 0) return 0;
+  unsigned char c = s[0];
+  if (c < 0x80) return 1;
+  if (c < 0xc2) return 0;
+  if (c < 0xe0) {
+    if (avail < 2 || (s[1] & 0xc0) != 0x80) return 0;
+    return 2;
+  }
+  if (c < 0xf0) {
+    if (avail < 3 || (s[1] & 0xc0) != 0x80 || (s[2] & 0xc0) != 0x80) return 0;
+    if (c == 0xe0 && s[1] < 0xa0) return 0;
+    if (c == 0xed && s[1] >= 0xa0) return 0; // surrogate range
+    return 3;
+  }
+  if (c < 0xf5) {
+    if (avail < 4 || (s[1] & 0xc0) != 0x80 || (s[2] & 0xc0) != 0x80 ||
+        (s[3] & 0xc0) != 0x80) return 0;
+    if (c == 0xf0 && s[1] < 0x90) return 0;
+    if (c == 0xf4 && s[1] >= 0x90) return 0;
+    return 4;
+  }
+  return 0;
+}
+
+static const char *swell_text_for_skia(const char *buf, int len,
+                                       WDL_FastString &tmp, int *out_len)
+{
+  bool needs_conversion = false;
+  for (int i = 0; i < len;) {
+    int n = swell_valid_utf8_sequence_len((const unsigned char *)buf + i, len - i);
+    if (n <= 0) {
+      needs_conversion = true;
+      break;
+    }
+    i += n;
+  }
+
+  if (!needs_conversion) {
+    *out_len = len;
+    return buf;
+  }
+
+  tmp.Set("");
+  for (int i = 0; i < len;) {
+    int n = swell_valid_utf8_sequence_len((const unsigned char *)buf + i, len - i);
+    if (n > 0) {
+      tmp.Append(buf + i, n);
+      i += n;
+    } else {
+      swell_append_utf8_codepoint(tmp, swell_cp1252_to_unicode((unsigned char)buf[i]));
+      i++;
+    }
+  }
+  *out_len = tmp.GetLength();
+  return tmp.Get();
+}
+
+// Helper: measure text width in pixels using SkFont
+static float swell_text_width(const SkFont &font, const char *buf, int len)
+{
+  if (len <= 0 || !buf) return 0.0f;
+  SkRect bounds;
+  font.measureText(buf, len, SkTextEncoding::kUTF8, &bounds);
+  return bounds.width();
+}
+
+// Helper: word-wrap a logical text segment into display lines that fit within maxWidth.
+// Lines are broken at word boundaries (spaces) when possible; falls back to
+// character-level breaks for very long words.
+static void swell_wordwrap_line(const SkFont &font, const char *txt, int tstart,
+                                int tend, float maxWidth,
+                                WDL_TypedBuf<int> &lineEnds_out)
+{
+  int pos = tstart;
+  while (pos < tend) {
+    float segW = swell_text_width(font, txt + pos, tend - pos);
+    if (segW <= maxWidth || maxWidth < 1.0f) {
+      lineEnds_out.Add(tend);
+      break;
+    }
+    // Find break point: walk forward measuring progressively longer substrings
+    int lastBreak = pos;  // last good break point (word boundary)
+    for (int test = pos + 1; test <= tend; test++) {
+      float w = swell_text_width(font, txt + pos, test - pos);
+      if (w > maxWidth) {
+        // Use last word-break point if found, otherwise force-break at test-1
+        if (lastBreak > pos) {
+          lineEnds_out.Add(lastBreak);
+          pos = lastBreak;
+          // Skip leading spaces on next line
+          while (pos < tend && txt[pos] == ' ') pos++;
+        } else {
+          int forceBrk = (test - 1 > pos) ? (test - 1) : (pos + 1);
+          lineEnds_out.Add(forceBrk);
+          pos = forceBrk;
+        }
+        break;
+      }
+      // Record word boundaries
+      if (txt[test - 1] == ' ') {
+        lastBreak = test;
+      }
+    }
+    // If we reached the end without breaking, add the rest
+    if (pos == tstart || (pos < tend && lineEnds_out.GetSize() == 0)) {
+      // Shouldn't normally get here; fallback
+      lineEnds_out.Add(tend);
+      break;
+    }
+    // Recompute pos from last added lineEnd
+    if (lineEnds_out.GetSize() > 0)
+      pos = lineEnds_out.Get()[lineEnds_out.GetSize() - 1];
+  }
+}
+
 int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 {
   if (!HDC_VALID(ctx) || !r) return 0;
 
   if (len == -1) len = (int)strlen(buf);
+  if (len <= 0 || !buf) return 0;
+
+  WDL_FastString utf8tmp;
+  buf = swell_text_for_skia(buf, len, utf8tmp, &len);
   if (len <= 0 || !buf) return 0;
 
   // Build SkFont from selected font or default
@@ -1263,38 +1418,134 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   float ascent  = -fm.fAscent;
   float descent = fm.fDescent;
   float lineht  = ascent + descent;
+  int rowH = (int)(lineht + 0.5f);
+  if (rowH < 1) rowH = (int)(fontSize + 0.5f);
 
-  // Measure text
-  SkRect bounds;
-  font.measureText(buf, len, SkTextEncoding::kUTF8, &bounds);
+  bool wordbreak = (align & DT_WORDBREAK) && !(align & DT_SINGLELINE);
+  if (!wordbreak) {
+    // ---- Single-line path (original behaviour) ----
 
-  int textW = (int)(bounds.width() + 0.5f);
-  int textH = (int)(lineht + 0.5f);
-  if (textH < 1) textH = (int)(fontSize + 0.5f);
+    // Measure text
+    SkRect bounds;
+    font.measureText(buf, len, SkTextEncoding::kUTF8, &bounds);
 
-  if (align & DT_CALCRECT) {
-    r->right = r->left + textW;
-    r->bottom = r->top + textH;
+    int textW = (int)(bounds.width() + 0.5f);
+    int textH = rowH;
+
+    if (align & DT_CALCRECT) {
+      r->right = r->left + textW;
+      r->bottom = r->top + textH;
+      return textH;
+    }
+
+    if (!ctx->canvas) return textH;
+
+    // Determine text position (Skia drawString y = baseline)
+    float x = (float)r->left;
+    float y = (float)r->top + ascent;
+
+    if (align & DT_CENTER)
+      x = (float)(r->left + (r->right - r->left - textW) / 2);
+    else if (align & DT_RIGHT)
+      x = (float)(r->right - textW);
+
+    if (align & DT_VCENTER)
+      y = (float)(r->top + (r->bottom - r->top - textH) / 2 + ascent);
+
+    bool opaque = (ctx->curbkmode == OPAQUE);
+
+    // Draw background if opaque
+    if (opaque) {
+      SkPaint bgPaint;
+      bgPaint.setStyle(SkPaint::kFill_Style);
+      bgPaint.setColor(ctx->curbkcol);
+      ctx->canvas->drawRect(
+        SkRect::MakeLTRB((float)r->left, (float)r->top,
+                          (float)r->right, (float)r->bottom), bgPaint);
+    }
+
+    // Draw text
+    SkPaint textPaint;
+    textPaint.setStyle(SkPaint::kFill_Style);
+    textPaint.setColor(ctx->cur_text_color_int);
+    textPaint.setAntiAlias(true);
+
+    ctx->canvas->drawSimpleText(buf, len, SkTextEncoding::kUTF8,
+                                x, y, font, textPaint);
+
+    if (opaque) {
+      swell_DirtyContext(ctx, r->left, r->top, r->right, r->bottom);
+    } else {
+      int dirtyTop = (int)(y - ascent);
+      int dirtyBot = (int)(y + descent);
+      swell_DirtyContext(ctx, (int)x, dirtyTop, (int)(x + textW), dirtyBot);
+    }
+
     return textH;
   }
 
-  if (!ctx->canvas) return textH;
+  // ---- Multiline word-break path ----
 
-  // Determine text position (Skia drawString y = baseline)
-  float x = (float)r->left;
-  float y = (float)r->top + ascent;
+  int availW = r->right - r->left;
 
-  if (align & DT_CENTER)
-    x = (float)(r->left + (r->right - r->left - textW) / 2);
-  else if (align & DT_RIGHT)
-    x = (float)(r->right - textW);
+  // Build display lines: split by \n, then word-wrap each logical line
+  WDL_TypedBuf<int> dlineStarts;
+  WDL_TypedBuf<int> dlineEnds;
+  {
+    int pos = 0;
+    while (pos < len) {
+      // Find next newline
+      int nl = pos;
+      while (nl < len && buf[nl] != '\n') nl++;
 
-  if (align & DT_VCENTER)
-    y = (float)(r->top + (r->bottom - r->top - textH) / 2 + ascent);
+      // Word-wrap this logical segment
+      WDL_TypedBuf<int> segEnds;
+      swell_wordwrap_line(font, buf, pos, nl, (float)availW, segEnds);
+      int segStart = pos;
+      for (int i = 0; i < segEnds.GetSize(); i++) {
+        dlineStarts.Add(segStart);
+        dlineEnds.Add(segEnds.Get()[i]);
+        segStart = segEnds.Get()[i];
+        while (segStart < nl && buf[segStart] == ' ') segStart++;
+        if (segStart > segEnds.Get()[i]) segStart = segEnds.Get()[i];
+      }
+
+      pos = nl + 1;  // skip the \n
+      if (nl >= len) break;
+    }
+  }
+
+  int numLines = dlineStarts.GetSize();
+  int totalH = numLines * rowH;
+
+  if (align & DT_CALCRECT) {
+    // Compute max line width for the output rect
+    int maxLineW = 0;
+    for (int i = 0; i < numLines; i++) {
+      int lStart = dlineStarts.Get()[i];
+      int lEnd   = dlineEnds.Get()[i];
+      if (lStart >= lEnd) continue;
+      int lw = (int)(swell_text_width(font, buf + lStart, lEnd - lStart) + 0.5f);
+      if (lw > maxLineW) maxLineW = lw;
+    }
+    r->right = r->left + maxLineW;
+    r->bottom = r->top + totalH;
+    return totalH;
+  }
+
+  if (!ctx->canvas) return totalH;
+
+  // Vertical positioning of the text block
+  float yOffset;
+  if (align & DT_BOTTOM)
+    yOffset = (float)(r->bottom - totalH);
+  else if (align & DT_VCENTER)
+    yOffset = (float)(r->top + (r->bottom - r->top - totalH) / 2);
+  else
+    yOffset = (float)r->top;  // DT_TOP (or no flag)
 
   bool opaque = (ctx->curbkmode == OPAQUE);
 
-  // Draw background if opaque
   if (opaque) {
     SkPaint bgPaint;
     bgPaint.setStyle(SkPaint::kFill_Style);
@@ -1304,25 +1555,38 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
                         (float)r->right, (float)r->bottom), bgPaint);
   }
 
-  // Draw text
   SkPaint textPaint;
   textPaint.setStyle(SkPaint::kFill_Style);
   textPaint.setColor(ctx->cur_text_color_int);
   textPaint.setAntiAlias(true);
 
-  ctx->canvas->drawString(buf, x, y, font, textPaint);
+  for (int i = 0; i < numLines; i++) {
+    int lStart = dlineStarts.Get()[i];
+    int lEnd   = dlineEnds.Get()[i];
+    if (lStart >= lEnd) continue;
 
-  // Dirty rect: cover text ascent→descent region (y-ascent to y+descent),
-  // or expand to full r when OPAQUE background was drawn.
-  if (opaque) {
-    swell_DirtyContext(ctx, r->left, r->top, r->right, r->bottom);
-  } else {
-    int dirtyTop = (int)(y - ascent);
-    int dirtyBot = (int)(y + descent);
-    swell_DirtyContext(ctx, (int)x, dirtyTop, (int)(x + textW), dirtyBot);
+    float lineW = swell_text_width(font, buf + lStart, lEnd - lStart);
+    float lx = (float)r->left;
+    if (align & DT_CENTER)
+      lx = (float)(r->left + (availW - lineW) / 2);
+    else if (align & DT_RIGHT)
+      lx = (float)(r->right - lineW);
+
+    float ly = yOffset + i * rowH + ascent;
+    ctx->canvas->drawSimpleText(buf + lStart, lEnd - lStart,
+                                SkTextEncoding::kUTF8, lx, ly, font, textPaint);
+
+    if (opaque) {
+      swell_DirtyContext(ctx, r->left, (int)(yOffset + i * rowH),
+                         r->right, (int)(yOffset + (i + 1) * rowH));
+    } else {
+      int dirtyTop = (int)(ly - ascent);
+      int dirtyBot = (int)(ly + descent);
+      swell_DirtyContext(ctx, (int)lx, dirtyTop, (int)(lx + lineW), dirtyBot);
+    }
   }
 
-  return textH;
+  return totalH;
 }
 
 BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)

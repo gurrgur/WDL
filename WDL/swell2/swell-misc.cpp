@@ -1125,6 +1125,7 @@ struct CursorEntry {
 
 static CursorEntry *g_cursor_list = NULL;
 static HCURSOR g_current_cursor = NULL;
+static int g_cursor_vis_cnt = 0;
 
 void SWELL_Register_Cursor_Resource(const char *idx, const char *name,
                                      int hotspot_x, int hotspot_y)
@@ -1244,8 +1245,9 @@ void SWELL_SetCursor(HCURSOR curs)
   g_current_cursor = curs;
 #ifdef SWELL_TARGET_SDL3
   if (!curs) {
-    SDL_ShowCursor();
     SDL_SetCursor(SDL_GetDefaultCursor());
+    if (g_cursor_vis_cnt >= 0) SDL_ShowCursor();
+    else SDL_HideCursor();
     return;
   }
   // Cursor might be a CursorEntry* or SDL_Cursor*; try both
@@ -1259,13 +1261,14 @@ void SWELL_SetCursor(HCURSOR curs)
   } else {
     SDL_SetCursor((SDL_Cursor *)curs);
   }
-  SDL_ShowCursor();
+  if (g_cursor_vis_cnt >= 0) SDL_ShowCursor();
+  else SDL_HideCursor();
 #endif
 }
 
 HCURSOR SWELL_GetCursor()             { return g_current_cursor; }
 HCURSOR SWELL_GetLastSetCursor()      { return g_current_cursor; }
-bool    SWELL_IsCursorVisible()       { return true; }
+bool    SWELL_IsCursorVisible()       { return g_cursor_vis_cnt >= 0; }
 BOOL    SWELL_SetCursorPos(int X, int Y)
 {
 #ifdef SWELL_TARGET_SDL3
@@ -1278,11 +1281,12 @@ BOOL    SWELL_SetCursorPos(int X, int Y)
 
 int SWELL_ShowCursor(BOOL bShow)
 {
+  g_cursor_vis_cnt += bShow ? 1 : -1;
 #ifdef SWELL_TARGET_SDL3
-  if (bShow) SDL_ShowCursor();
-  else       SDL_HideCursor();
+  if (g_cursor_vis_cnt == -1 && !bShow) SDL_HideCursor();
+  if (g_cursor_vis_cnt == 0 && bShow) SDL_ShowCursor();
 #endif
-  return bShow ? 1 : 0;
+  return g_cursor_vis_cnt;
 }
 
 // ============================================================================

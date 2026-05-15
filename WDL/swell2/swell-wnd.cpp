@@ -477,72 +477,83 @@ UINT_PTR SetTimer(HWND hwnd, UINT_PTR timerid, UINT rate, TIMERPROC tProc)
 {
   if (!hwnd && !tProc) return 0;
   if (hwnd && !timerid) return 0;
-  if (!hwnd || !rate) return 0;
   if (hwnd && hwnd->m_hashaddestroy) return 0;
+  if (rate < 1) rate = 1;
 
   WDL_MutexLock lock(&g_timer_mutex);
 
   // check for existing timer with same (hwnd, timerid)
-  TimerInfoRec *rec = g_timer_list;
-  while (rec) {
-    if (rec->hwnd == hwnd && rec->timerid == timerid) {
-      rec->interval = rate;
-      rec->tProc = tProc;
-      rec->lastFire = GetTickCount();
-      return timerid;
+  TimerInfoRec *rec = NULL;
+  if (hwnd || timerid) {
+    rec = g_timer_list;
+    while (rec) {
+      if (rec->hwnd == hwnd && rec->timerid == timerid) {
+        break;
+      }
+      rec = rec->_next;
     }
-    rec = rec->_next;
   }
 
-  // create new timer
-  TimerInfoRec *newrec = new TimerInfoRec();
-  newrec->hwnd = hwnd;
-  newrec->timerid = timerid;
-  newrec->interval = rate;
-  newrec->lastFire = GetTickCount();
-  newrec->tProc = tProc;
-  newrec->refcnt = 0;
-  newrec->_next = g_timer_list;
-  g_timer_list = newrec;
+  bool recAdd = false;
+  if (!rec) {
+    rec = new TimerInfoRec();
+    recAdd = true;
+  }
+
+  if (!hwnd) timerid = (UINT_PTR)rec;
+
+  rec->hwnd = hwnd;
+  rec->timerid = timerid;
+  rec->interval = rate;
+  rec->lastFire = GetTickCount();
+  rec->tProc = tProc;
+
+  if (recAdd) {
+    rec->_next = g_timer_list;
+    g_timer_list = rec;
+  }
 
   return timerid;
 }
 
 BOOL KillTimer(HWND hwnd, UINT_PTR timerid)
 {
-  if (timerid == (UINT_PTR)-1 && !hwnd) return FALSE;
+  if (!hwnd && !timerid) return FALSE;
 
   WDL_MutexLock lock(&g_timer_mutex);
+  BOOL rv = FALSE;
 
-  TimerInfoRec *prev = NULL;
-  TimerInfoRec *rec = g_timer_list;
-  while (rec) {
-    bool match = false;
-    if (timerid == (UINT_PTR)-1) {
-      match = (rec->hwnd == hwnd);
-    } else {
-      match = (rec->hwnd == hwnd && rec->timerid == timerid);
-    }
-
-    if (match) {
-      TimerInfoRec *next = rec->_next;
-      if (rec->refcnt > 0) {
-        rec->refcnt = -1; // marked for deletion after callback
-        prev = rec;
-        rec = next;
+  // Do not allow removing all global timers.
+  if (timerid != (UINT_PTR)-1 || hwnd) {
+    TimerInfoRec *prev = NULL;
+    TimerInfoRec *rec = g_timer_list;
+    while (rec) {
+      bool match = false;
+      if (timerid == (UINT_PTR)-1) {
+        match = (rec->hwnd == hwnd);
       } else {
+        match = (rec->hwnd == hwnd && rec->timerid == timerid);
+      }
+
+      if (match) {
+        TimerInfoRec *next = rec->_next;
         if (prev) prev->_next = next;
         else g_timer_list = next;
-        delete rec;
+
+        if (--rec->refcnt < 0) {
+          delete rec;
+        }
+        rv = TRUE;
+        if (timerid != (UINT_PTR)-1) break;
         rec = next;
+      } else {
+        prev = rec;
+        rec = rec->_next;
       }
-    } else {
-      prev = rec;
-      rec = rec->_next;
     }
   }
 
-  return TRUE;
+  return rv;
 }
 
 // Fire timers (called from SWELL_RunMessageLoop)
@@ -553,36 +564,29 @@ static void fireTimers()
 
   TimerInfoRec *rec = g_timer_list;
   while (rec) {
-    TimerInfoRec *next = rec->_next;
-    if (rec->refcnt >= 0 &&
-        ((int)(now - rec->lastFire) >= (int)rec->interval)) {
+    if ((int)(now - rec->lastFire) >= (int)rec->interval) {
       rec->lastFire = now;
       rec->refcnt++;
+      HWND hwnd = rec->hwnd;
+      UINT_PTR timerid = rec->timerid;
+      TIMERPROC tProc = rec->tProc;
       g_timer_mutex.Leave();
 
-      if (rec->tProc) {
-        rec->tProc(rec->hwnd, WM_TIMER, rec->timerid, now);
-      } else if (rec->hwnd && rec->hwnd->m_hashaddestroy < 2) {
-        SendMessage(rec->hwnd, WM_TIMER, rec->timerid, 0);
+      if (tProc) {
+        tProc(hwnd, WM_TIMER, timerid, now);
+      } else if (hwnd && hwnd->m_hashaddestroy < 2) {
+        SendMessage(hwnd, WM_TIMER, timerid, 0);
       }
 
       g_timer_mutex.Enter();
       rec->refcnt--;
       if (rec->refcnt < 0) {
-        TimerInfoRec *pr = NULL, *r = g_timer_list;
-        while (r) {
-          if (r == rec) {
-            if (pr) pr->_next = r->_next;
-            else g_timer_list = r->_next;
-            delete r;
-            break;
-          }
-          pr = r;
-          r = r->_next;
-        }
+        delete rec;
+        rec = g_timer_list;
+        continue;
       }
     }
-    rec = next;
+    rec = rec->_next;
   }
   g_timer_mutex.Leave();
 }
