@@ -2122,6 +2122,20 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       // Draw rows
       int n = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
+
+      // Clamp scroll to valid range
+      int vmax = n * rh - (cr.bottom - cr.top);
+      if (vmax < 0) vmax = 0;
+      if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+      if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+
+      int totalW = 0;
+      for (int c = 0; c < st->m_cols.GetSize(); c++)
+        totalW += st->m_cols.Get()[c].xwid;
+      int hmax = totalW - (cr.right - cr.left);
+      if (hmax < 0) hmax = 0;
+      if (st->m_scroll_x > hmax) st->m_scroll_x = hmax;
+      if (st->m_scroll_x < 0) st->m_scroll_x = 0;
       int top_row = st->m_scroll_y / rh;
       RECT client_vis = { cr.left, cr.top + hdr, cr.right, cr.bottom };
 
@@ -2210,10 +2224,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       drawVerticalScrollbar(hdc, cr, cr.bottom - cr.top, n * rh, st->m_scroll_y);
 
       // Horizontal scrollbar
-      if (st->m_cols.GetSize() > 0) {
-        int totalW = 0;
-        for (int c = 0; c < st->m_cols.GetSize(); c++)
-          totalW += st->m_cols.Get()[c].xwid;
+      if (totalW > 0) {
         drawHorizontalScrollbar(hdc, cr, cr.right - cr.left, totalW, st->m_scroll_x);
       }
 
@@ -2776,6 +2787,12 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       WDL_PtrList<HTREEITEM__> items;
       tv_flatten(st->m_root, items);
+
+      // Clamp scroll to valid range
+      int vmax = items.GetSize() * rh - (cr.bottom - cr.top);
+      if (vmax < 0) vmax = 0;
+      if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+      if (st->m_scroll_y < 0) st->m_scroll_y = 0;
 
       int indent = rh;
       int expw = (rh / 4) * 2 + 3;
