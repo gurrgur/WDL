@@ -793,20 +793,18 @@ struct EventHandle {
 struct ThreadHandle {
   uint32_t magic; // = SWELL_HANDLE_MAGIC_THREAD
   pthread_t tid;
-};
-
-struct ThreadRec {
+  volatile int done;
+  DWORD retv;
   DWORD (*proc)(LPVOID);
   LPVOID parm;
 };
 
 static void *thread_thunk(void *arg)
 {
-  ThreadRec *tr = (ThreadRec *)arg;
-  DWORD (*fn)(LPVOID) = tr->proc;
-  LPVOID p = tr->parm;
-  free(tr);
-  fn(p);
+  ThreadHandle *th = (ThreadHandle *)arg;
+  DWORD ret = th->proc(th->parm);
+  th->retv = ret;
+  th->done = 1;
   return NULL;
 }
 
@@ -814,15 +812,14 @@ HANDLE CreateThread(void *TA, DWORD stackSize, DWORD (*ThreadProc)(LPVOID),
                     LPVOID parm, DWORD cf, DWORD *tidOut)
 {
   (void)TA; (void)stackSize; (void)cf;
-  ThreadRec *tr = (ThreadRec *)malloc(sizeof(ThreadRec));
-  if (!tr) return NULL;
-  tr->proc = ThreadProc;
-  tr->parm = parm;
   ThreadHandle *th = (ThreadHandle *)malloc(sizeof(ThreadHandle));
-  if (!th) { free(tr); return NULL; }
+  if (!th) return NULL;
   th->magic = SWELL_HANDLE_MAGIC_THREAD;
-  if (pthread_create(&th->tid, NULL, thread_thunk, tr) != 0) {
-    free(tr);
+  th->done = 0;
+  th->retv = 0;
+  th->proc = ThreadProc;
+  th->parm = parm;
+  if (pthread_create(&th->tid, NULL, thread_thunk, th) != 0) {
     free(th);
     return NULL;
   }
@@ -911,6 +908,8 @@ BOOL SetEvent(HANDLE evt)
 {
   EventHandle *ev = (EventHandle *)evt;
   if (!ev) return FALSE;
+  if (ev->magic != SWELL_HANDLE_MAGIC_EVENT)
+    return FALSE;
   char b = 1;
   write(ev->wr, &b, 1);
   return TRUE;
@@ -927,34 +926,68 @@ BOOL ResetEvent(HANDLE evt)
 
 DWORD WaitForSingleObject(HANDLE hand, DWORD msTO)
 {
-  EventHandle *ev = (EventHandle *)hand;
-  if (!ev) return (DWORD)WAIT_FAILED;
+  if (!hand) return (DWORD)WAIT_FAILED;
 
-  struct timeval tv;
-  fd_set fds;
-  FD_ZERO(&fds);
-  FD_SET(ev->rd, &fds);
-
-  if (msTO == INFINITE) {
-    int r = select(ev->rd + 1, &fds, NULL, NULL, NULL);
-    if (r <= 0) return (DWORD)WAIT_FAILED;
-  } else {
-    tv.tv_sec  = msTO / 1000;
-    tv.tv_usec = (msTO % 1000) * 1000;
-    int r = select(ev->rd + 1, &fds, NULL, NULL, &tv);
-    if (r < 0)  return (DWORD)WAIT_FAILED;
-    if (r == 0) return (DWORD)WAIT_TIMEOUT;
+  // PID handle: value is a small integer (pid_t), not a heap pointer.
+  // Check this first to avoid dereferencing unmapped memory.
+  if ((uintptr_t)hand < 0x100000) {
+    DWORD pid = (DWORD)(uintptr_t)hand;
+    if (pid > 0) {
+      int status;
+      pid_t r = waitpid((pid_t)pid, &status, msTO == INFINITE ? 0 : WNOHANG);
+      if (r > 0) return WAIT_OBJECT_0;
+      if (r < 0) return (DWORD)WAIT_FAILED;
+      return WAIT_TIMEOUT;
+    }
+    return (DWORD)WAIT_FAILED;
   }
 
-  char b;
-  if (read(ev->rd, &b, 1) <= 0) return (DWORD)WAIT_FAILED;
-  if (ev->manual_reset) {
-    // drain all
-    char buf[256];
-    while (read(ev->rd, buf, sizeof(buf)) > 0) {}
-    // re-signal for other waiters? For manual-reset: keep drained until ResetEvent
+  uint32_t magic = *(const uint32_t *)hand;
+
+  if (magic == SWELL_HANDLE_MAGIC_EVENT) {
+    EventHandle *ev = (EventHandle *)hand;
+
+    struct timeval tv;
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(ev->rd, &fds);
+
+    if (msTO == INFINITE) {
+      int r = select(ev->rd + 1, &fds, NULL, NULL, NULL);
+      if (r <= 0) return (DWORD)WAIT_FAILED;
+    } else {
+      tv.tv_sec  = msTO / 1000;
+      tv.tv_usec = (msTO % 1000) * 1000;
+      int r = select(ev->rd + 1, &fds, NULL, NULL, &tv);
+      if (r < 0)  return (DWORD)WAIT_FAILED;
+      if (r == 0) return (DWORD)WAIT_TIMEOUT;
+    }
+
+    char b;
+    if (read(ev->rd, &b, 1) <= 0) return (DWORD)WAIT_FAILED;
+    if (ev->manual_reset) {
+      char buf[256];
+      while (read(ev->rd, buf, sizeof(buf)) > 0) {}
+    }
+    return WAIT_OBJECT_0;
   }
-  return WAIT_OBJECT_0;
+
+  if (magic == SWELL_HANDLE_MAGIC_THREAD) {
+    ThreadHandle *th = (ThreadHandle *)hand;
+
+    const DWORD start = GetTickCount();
+    for (;;) {
+      if (th->done)
+        return WAIT_OBJECT_0;
+      if (msTO != INFINITE && (GetTickCount() - start) >= msTO)
+        return WAIT_TIMEOUT;
+      if (msTO == 0)
+        return WAIT_TIMEOUT;
+      usleep(1000);
+    }
+  }
+
+  return (DWORD)WAIT_FAILED;
 }
 
 DWORD WaitForAnySocketObject(int numObjs, HANDLE *objs, DWORD msTO)
