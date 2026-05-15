@@ -1214,11 +1214,13 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
               HGDIOBJ ocp = SelectObject(hdc, cp);
               MoveToEx(hdc, cx, cy, NULL);
               LineTo(hdc, cx, cy + rowH);
-              SelectObject(hdc, ocp); DeleteObject(cp);
+            SelectObject(hdc, ocp); DeleteObject(cp);
+              }
             }
           }
+
+        drawVerticalScrollbar(hdc, cr, cr.bottom - cr.top, totalH, scrollY);
         }
-      }
       else
       {
         // Single-line path (unchanged logic)
