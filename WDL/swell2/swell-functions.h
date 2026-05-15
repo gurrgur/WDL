@@ -486,6 +486,8 @@ SWELL_API_DEFINE(HTREEITEM, TreeView_GetParent, (HWND hwnd, HTREEITEM item))
 SWELL_API_DEFINE(HTREEITEM, TreeView_GetChild, (HWND hwnd, HTREEITEM item))
 SWELL_API_DEFINE(HTREEITEM, TreeView_GetNextSibling, (HWND hwnd, HTREEITEM item))
 SWELL_API_DEFINE(HTREEITEM, TreeView_GetRoot, (HWND hwnd))
+SWELL_API_DEFINE(HTREEITEM, TreeView_GetNextItem, (HWND hwnd, HTREEITEM item, UINT flag))
+SWELL_API_DEFINE(int, TreeView_GetCount, (HWND hwnd))
 
 SWELL_API_DEFINE(void,TreeView_SetBkColor,(HWND hwnd, int color))
 SWELL_API_DEFINE(void,TreeView_SetTextColor,(HWND hwnd, int color))

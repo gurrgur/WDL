@@ -92,6 +92,8 @@
 #define SWELL_TVM_GETCHILD        (TVM_FIRST+63)
 #define SWELL_TVM_GETNEXTSIBLING  (TVM_FIRST+64)
 #define SWELL_TVM_GETROOT         (TVM_FIRST+65)
+#define SWELL_TVM_GETNEXTITEM     (TVM_FIRST+10)
+#define SWELL_TVM_GETCOUNT        (TVM_FIRST+5)
 
 #ifndef TCM_FIRST
 #define TCM_FIRST 0x1300
@@ -442,6 +444,16 @@ void TreeView_SetBkColor(HWND hwnd, int color)
 void TreeView_SetTextColor(HWND hwnd, int color)
 {
   SendMessage(hwnd, SWELL_TVM_SETTEXTCOLOR, 0, (LPARAM)color);
+}
+
+HTREEITEM TreeView_GetNextItem(HWND hwnd, HTREEITEM item, UINT flag)
+{
+  return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETNEXTITEM, (WPARAM)flag, (LPARAM)item);
+}
+
+int TreeView_GetCount(HWND hwnd)
+{
+  return (int)SendMessage(hwnd, SWELL_TVM_GETCOUNT, 0, 0);
 }
 
 // ============================================================================

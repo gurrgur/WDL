@@ -98,9 +98,11 @@
 #define TVM_GETITEM        (TVM_FIRST+12)
 #define TVM_SETITEM        (TVM_FIRST+13)
 #define TVM_HITTEST        (TVM_FIRST+17)
+#define TVM_GETNEXTITEM    (TVM_FIRST+10)
 #define TVM_ENSUREVISIBLE  (TVM_FIRST+20)
 #define TVM_SETBKCOLOR     (TVM_FIRST+29)
 #define TVM_SETTEXTCOLOR   (TVM_FIRST+30)
+#define TVM_GETCOUNT       (TVM_FIRST+5)
 // SWELL2-specific tree navigation (no wParam packing needed)
 #define TVM_DELETEALLITEMS (TVM_FIRST+60)
 #define TVM_GETSELECTION   (TVM_FIRST+61)
@@ -111,6 +113,20 @@
 
 #ifndef TVC_BYMOUSE
 #define TVC_BYMOUSE 0x0002
+#endif
+
+// TVGN constants for TreeView_GetNextItem / TVM_GETNEXTITEM
+#ifndef TVGN_ROOT
+#define TVGN_ROOT         0x0000
+#define TVGN_NEXT         0x0001
+#define TVGN_PREVIOUS     0x0002
+#define TVGN_PARENT       0x0003
+#define TVGN_CHILD        0x0004
+#define TVGN_FIRSTVISIBLE 0x0005
+#define TVGN_NEXTVISIBLE  0x0006
+#define TVGN_PREVVISIBLE  0x0007
+#define TVGN_DROPHILITE   0x0008
+#define TVGN_CARET        0x0009
 #endif
 
 // ---------------------------------------------------------------------------
@@ -633,6 +649,15 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
     }
 
+    case WM_MOUSEWHEEL:
+      if (st && (hwnd->m_style & ES_MULTILINE)) {
+        int delta = (short)HIWORD(wParam);
+        st->scroll_y -= delta / 40 * (st->max_height > 0 ? st->max_height : 16);
+        if (st->scroll_y < 0) st->scroll_y = 0;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
+
     case WM_KEYDOWN: {
       if (!st) return 0;
       const char *t = hwnd->m_title.Get();
@@ -687,6 +712,57 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         InvalidateRect(hwnd, NULL, FALSE);
         return 1;
       }
+      if (hwnd->m_style & ES_MULTILINE) {
+        // build line-offset arrays
+        WDL_TypedBuf<int> lineStarts, lineEnds;
+        lineStarts.Add(0);
+        for (int i = 0; i < len; i++) { if (t[i] == '\n') { lineEnds.Add(i); lineStarts.Add(i+1); } }
+        lineEnds.Add(len);
+        // find current logical line
+        int curLine = 0;
+        for (int li = 0; li < lineStarts.GetSize(); li++) {
+          if (st->cursor_pos >= lineStarts.Get()[li] && st->cursor_pos <= lineEnds.Get()[li]) { curLine = li; break; }
+        }
+        if (wParam == VK_UP) {
+          if (curLine > 0) {
+            int col = st->cursor_pos - lineStarts.Get()[curLine];
+            int prevLen = lineEnds.Get()[curLine-1] - lineStarts.Get()[curLine-1];
+            if (col > prevLen) col = prevLen;
+            st->cursor_pos = lineStarts.Get()[curLine-1] + col;
+            if (!shift) { st->sel1 = st->sel2 = -1; }
+            InvalidateRect(hwnd, NULL, FALSE);
+          }
+          return 1;
+        }
+        if (wParam == VK_DOWN) {
+          if (curLine + 1 < lineStarts.GetSize()) {
+            int col = st->cursor_pos - lineStarts.Get()[curLine];
+            int nextLen = lineEnds.Get()[curLine+1] - lineStarts.Get()[curLine+1];
+            if (col > nextLen) col = nextLen;
+            st->cursor_pos = lineStarts.Get()[curLine+1] + col;
+            if (!shift) { st->sel1 = st->sel2 = -1; }
+            InvalidateRect(hwnd, NULL, FALSE);
+          }
+          return 1;
+        }
+        if (wParam == VK_PRIOR || wParam == VK_NEXT) {
+          RECT cr; GetClientRect(hwnd, &cr);
+          int viewH = (cr.bottom - cr.top) - g_swell_theme.padding_edit_v * 2;
+          int rh = st->max_height > 0 ? st->max_height : 16;
+          int pagesz = viewH / rh;
+          if (pagesz < 1) pagesz = 1;
+          int targetLine = curLine + (wParam == VK_PRIOR ? -pagesz : pagesz);
+          if (targetLine < 0) targetLine = 0;
+          if (targetLine >= lineStarts.GetSize()) targetLine = lineStarts.GetSize() - 1;
+          int col = st->cursor_pos - lineStarts.Get()[curLine];
+          int targLen = lineEnds.Get()[targetLine] - lineStarts.Get()[targetLine];
+          if (col > targLen) col = targLen;
+          st->cursor_pos = lineStarts.Get()[targetLine] + col;
+          if (!shift) { st->sel1 = st->sel2 = -1; }
+          InvalidateRect(hwnd, NULL, FALSE);
+          return 1;
+        }
+      }
       // Ctrl+A: select all
       if (ctrl && (wParam == 'A' || wParam == 'a')) {
         SendMessage(hwnd, EM_SETSEL, 0, -1);
@@ -712,6 +788,8 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       RECT cr; GetClientRect(hwnd, &cr);
       bool enabled = IsWindowEnabled(hwnd);
       bool focused = (GetFocus() == hwnd);
+      bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
+      bool is_pass = (hwnd->m_style & ES_PASSWORD) != 0;
 
       // Backfill outer area in window bg so rounded corners blend cleanly.
       {
@@ -740,64 +818,206 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       SelectObject(hdc, f);
 
+      TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+      int rowH = tm.tmHeight + 2;
+
       const char *txt = hwnd->m_title.Get();
-      bool is_pass = (hwnd->m_style & ES_PASSWORD) != 0;
+      int tlen = (int)strlen(txt);
       WDL_FastString disp;
       if (is_pass) {
-        int n = (int)strlen(txt);
-        for (int i = 0; i < n; i++) disp.Append("*", 1);
+        for (int i = 0; i < tlen; i++) disp.Append("*", 1);
         txt = disp.Get();
+        tlen = (int)strlen(txt);
       }
 
       RECT tr = { cr.left + th.padding_edit_h, cr.top + th.padding_edit_v,
                   cr.right - th.padding_edit_h, cr.bottom - th.padding_edit_v };
 
-      if (!st || st->sel1 < 0 || st->sel1 == st->sel2)
+      if (multiline)
       {
-        SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
-                                  : (COLORREF)th.fg_text_disabled);
+        // Build line-offset arrays from newlines
+        WDL_TypedBuf<int> lineStarts;
+        WDL_TypedBuf<int> lineEnds;
+        {
+          lineStarts.Add(0);
+          for (int i = 0; i < tlen; i++) {
+            if (txt[i] == '\n') {
+              lineEnds.Add(i);
+              lineStarts.Add(i+1);
+            }
+          }
+          lineEnds.Add(tlen);
+        }
+
+        // Word-wrap: split logical lines into display lines if too wide
+        struct DispLine { int lineEnd_off; int lineIdx; };
+        WDL_TypedBuf<DispLine> dlines;
+        int scrWidth = tr.right - tr.left;
+        for (int li = 0; li < lineStarts.GetSize(); li++) {
+          int start_off = lineStarts.Get()[li];
+          int end_off = lineEnds.Get()[li];
+          int pos = start_off;
+          while (pos < end_off) {
+            int remain = end_off - pos;
+            RECT meas = { 0, 0, 0, 0 };
+            SWELL_DrawText(hdc, txt + pos, remain, &meas, DT_CALCRECT | DT_LEFT);
+            if (meas.right - meas.left <= scrWidth) {
+              DispLine dl = { end_off, li };
+              dlines.Add(dl);
+              break;
+            }
+            int wrap = pos;
+            for (int test = pos + 1; test <= end_off; test++) {
+              RECT mr = { 0, 0, 0, 0 };
+              SWELL_DrawText(hdc, txt + pos, test - pos, &mr, DT_CALCRECT | DT_LEFT);
+              if (mr.right - mr.left > scrWidth) { wrap = test - 1; break; }
+              wrap = test;
+            }
+            if (wrap <= pos) wrap = pos + 1;
+            DispLine dl = { wrap, li };
+            dlines.Add(dl);
+            pos = wrap;
+            if (pos < end_off && txt[pos] == ' ') pos++;
+          }
+        }
+
+        // Scroll
+        int totalH = (int)dlines.GetSize() * rowH;
+        int viewH = tr.bottom - tr.top;
+        if (st) {
+          if (st->scroll_y > totalH - viewH) st->scroll_y = totalH - viewH;
+          if (st->scroll_y < 0) st->scroll_y = 0;
+        }
+        int scrollY = st ? st->scroll_y : 0;
+
+        // Char-to-display-line map
+        WDL_TypedBuf<int> char2dline; char2dline.Resize(tlen + 1, false);
+        { int di = 0;
+          for (int ci = 0; ci <= tlen; ci++) {
+            while (di + 1 < dlines.GetSize() && ci >= dlines.Get()[di].lineEnd_off) di++;
+            char2dline.Get()[ci] = di;
+          }
+        }
+
+        int sel1 = -1, sel2 = -1;
+        if (st && st->sel1 >= 0 && st->sel1 != st->sel2) {
+          sel1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
+          sel2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
+          if (sel1 > tlen) sel1 = tlen;
+          if (sel2 > tlen) sel2 = tlen;
+        }
+
         SetBkMode(hdc, TRANSPARENT);
-        SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        SetTextColor(hdc, enabled ? (COLORREF)th.fg_text : (COLORREF)th.fg_text_disabled);
+        for (int di = 0; di < dlines.GetSize(); di++) {
+          DispLine &dl = dlines.Get()[di];
+          int l0 = lineStarts.Get()[dl.lineIdx];
+          int l1 = dl.lineEnd_off;
+          int ry = tr.top + di * rowH - scrollY;
+          if (ry + rowH < tr.top) continue;
+          if (ry >= tr.bottom) break;
+          RECT lr = { tr.left, ry, tr.right, ry + rowH };
+          if (l0 < l1)
+            SWELL_DrawText(hdc, txt + l0, l1 - l0, &lr, DT_LEFT | DT_TOP | DT_NOPREFIX);
+        }
+
+        // Selection highlight
+        if (sel2 > sel1 && sel1 >= 0) {
+          int dl0 = char2dline.Get()[sel1];
+          int dl1 = char2dline.Get()[sel2];
+          for (int di = dl0; di <= dl1 && di < dlines.GetSize(); di++) {
+            DispLine &dl = dlines.Get()[di];
+            int l0 = lineStarts.Get()[dl.lineIdx];
+            int selLineStart = (di == dl0) ? sel1 : l0;
+            int selLineEnd = (di == dl1) ? sel2 : dl.lineEnd_off;
+            if (selLineStart >= selLineEnd) continue;
+            int ry = tr.top + di * rowH - scrollY;
+            RECT lr = { tr.left, ry, tr.right, ry + rowH };
+            RECT preR = { 0, 0, 0, 0 };
+            SWELL_DrawText(hdc, txt + l0, selLineStart - l0, &preR, DT_CALCRECT | DT_LEFT);
+            RECT selR = lr;
+            selR.left += preR.right;
+            RECT selwR = { 0, 0, 0, 0 };
+            SWELL_DrawText(hdc, txt + selLineStart, selLineEnd - selLineStart, &selwR, DT_CALCRECT | DT_LEFT);
+            selR.right = selR.left + (selwR.right - selwR.left);
+            SetBkMode(hdc, OPAQUE);
+            SetBkColor(hdc, (COLORREF)th.accent);
+            SetTextColor(hdc, (COLORREF)th.fg_on_accent);
+            SWELL_DrawText(hdc, txt + selLineStart, selLineEnd - selLineStart, &selR, DT_LEFT | DT_TOP | DT_NOPREFIX);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, enabled ? (COLORREF)th.fg_text : (COLORREF)th.fg_text_disabled);
+          }
+        }
+
+        // Caret
+        if (st && st->cursor_state && focused) {
+          int cpos = st->cursor_pos;
+          if (cpos > tlen) cpos = tlen;
+          int cdline = char2dline.Get()[cpos];
+          if (cdline >= 0 && cdline < dlines.GetSize()) {
+            DispLine &dl = dlines.Get()[cdline];
+            int l0 = lineStarts.Get()[dl.lineIdx];
+            RECT preR = { 0, 0, 0, 0 };
+            SWELL_DrawText(hdc, txt + l0, cpos - l0, &preR, DT_CALCRECT | DT_LEFT);
+            int cx = tr.left + (preR.right - preR.left);
+            int cy = tr.top + cdline * rowH - scrollY;
+            if (cy >= tr.top && cy + rowH <= tr.bottom) {
+              HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
+              HGDIOBJ ocp = SelectObject(hdc, cp);
+              MoveToEx(hdc, cx, cy, NULL);
+              LineTo(hdc, cx, cy + rowH);
+              SelectObject(hdc, ocp); DeleteObject(cp);
+            }
+          }
+        }
       }
       else
       {
-        int s1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
-        int s2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
-        int tlen = (int)strlen(txt);
-        if (s1 > tlen) s1 = tlen;
-        if (s2 > tlen) s2 = tlen;
-
-        SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
-                                  : (COLORREF)th.fg_text_disabled);
-        SetBkMode(hdc, TRANSPARENT);
-        SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        if (s2 > s1)
+        // Single-line path (unchanged logic)
+        if (!st || st->sel1 < 0 || st->sel1 == st->sel2)
         {
-          RECT measR = { 0, 0, 0, 0 };
-          SWELL_DrawText(hdc, txt, s1, &measR, DT_CALCRECT | DT_LEFT | DT_SINGLELINE);
-          RECT selR = tr;
-          selR.left += measR.right;
-          SetBkMode(hdc, OPAQUE);
-          SetBkColor(hdc, (COLORREF)th.accent);
-          SetTextColor(hdc, (COLORREF)th.fg_on_accent);
-          SWELL_DrawText(hdc, txt + s1, s2 - s1, &selR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+          SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
+                                    : (COLORREF)th.fg_text_disabled);
+          SetBkMode(hdc, TRANSPARENT);
+          SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
-      }
+        else
+        {
+          int s1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
+          int s2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
+          if (s1 > tlen) s1 = tlen;
+          if (s2 > tlen) s2 = tlen;
 
-      // Caret
-      if (st && st->cursor_state && focused) {
-        TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
-        int cpos = st->cursor_pos;
-        int tlen = (int)strlen(txt);
-        if (cpos > tlen) cpos = tlen;
-        int cx = tr.left + (int)(cpos * (float)(tr.right - tr.left) / (tlen > 0 ? tlen : 1));
-        if (cx > tr.right - 1) cx = tr.right - 1;
-        HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
-        HGDIOBJ ocp = SelectObject(hdc, cp);
-        MoveToEx(hdc, cx, tr.top, NULL);
-        LineTo(hdc, cx, tr.bottom);
-        SelectObject(hdc, ocp); DeleteObject(cp);
+          SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
+                                    : (COLORREF)th.fg_text_disabled);
+          SetBkMode(hdc, TRANSPARENT);
+          SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+          if (s2 > s1)
+          {
+            RECT measR = { 0, 0, 0, 0 };
+            SWELL_DrawText(hdc, txt, s1, &measR, DT_CALCRECT | DT_LEFT | DT_SINGLELINE);
+            RECT selR = tr;
+            selR.left += measR.right;
+            SetBkMode(hdc, OPAQUE);
+            SetBkColor(hdc, (COLORREF)th.accent);
+            SetTextColor(hdc, (COLORREF)th.fg_on_accent);
+            SWELL_DrawText(hdc, txt + s1, s2 - s1, &selR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+          }
+        }
+
+        // Caret
+        if (st && st->cursor_state && focused) {
+          int cpos = st->cursor_pos;
+          if (cpos > tlen) cpos = tlen;
+          int cx = tr.left + (int)(cpos * (float)(tr.right - tr.left) / (tlen > 0 ? tlen : 1));
+          if (cx > tr.right - 1) cx = tr.right - 1;
+          HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
+          HGDIOBJ ocp = SelectObject(hdc, cp);
+          MoveToEx(hdc, cx, tr.top, NULL);
+          LineTo(hdc, cx, tr.bottom);
+          SelectObject(hdc, ocp); DeleteObject(cp);
+        }
       }
 
       EndPaint(hwnd, &ps);
@@ -1754,6 +1974,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HTREEITEM old = st->m_sel;
       st->m_sel = item;
       tv_send_selchange(hwnd, old, item);
+      if (item) SendMessage(hwnd, TVM_ENSUREVISIBLE, 0, (LPARAM)item);
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
     }
@@ -1830,7 +2051,108 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
     }
 
-    case TVM_ENSUREVISIBLE:
+    case TVM_GETNEXTITEM: {
+      if (!st || !lParam) return 0;
+      UINT flag = (UINT)wParam;
+      HTREEITEM item = (HTREEITEM)lParam;
+      switch (flag) {
+        case TVGN_ROOT:
+          return st->m_root->m_children.GetSize() > 0 ? (LRESULT)st->m_root->m_children.Get(0) : 0;
+        case TVGN_NEXT: {
+          if (!item) return 0;
+          int idx = -1;
+          HTREEITEM par = tv_find_parent(st->m_root, item, &idx);
+          if (par && idx >= 0 && idx + 1 < par->m_children.GetSize())
+            return (LRESULT)par->m_children.Get(idx+1);
+          return 0;
+        }
+        case TVGN_PREVIOUS: {
+          if (!item) return 0;
+          int idx = -1;
+          HTREEITEM par = tv_find_parent(st->m_root, item, &idx);
+          if (par && idx > 0)
+            return (LRESULT)par->m_children.Get(idx-1);
+          return 0;
+        }
+        case TVGN_PARENT: {
+          if (!item) return 0;
+          int dummy = -1;
+          HTREEITEM par = tv_find_parent(st->m_root, item, &dummy);
+          return (par == st->m_root) ? 0 : (LRESULT)par;
+        }
+        case TVGN_CHILD:
+          if (item) return item->m_children.GetSize() > 0 ? (LRESULT)item->m_children.Get(0) : 0;
+          return 0;
+        case TVGN_CARET:
+          return st ? (LRESULT)st->m_sel : 0;
+        case TVGN_NEXTVISIBLE: {
+          if (!item) return 0;
+          WDL_PtrList<HTREEITEM__> items;
+          tv_flatten(st->m_root, items);
+          for (int i = 0; i < items.GetSize(); i++) {
+            if (items.Get(i) == item && i + 1 < items.GetSize())
+              return (LRESULT)items.Get(i+1);
+          }
+          return 0;
+        }
+        case TVGN_PREVVISIBLE: {
+          if (!item) return 0;
+          WDL_PtrList<HTREEITEM__> items;
+          tv_flatten(st->m_root, items);
+          for (int i = 1; i < items.GetSize(); i++) {
+            if (items.Get(i) == item)
+              return (LRESULT)items.Get(i-1);
+          }
+          return 0;
+        }
+        case TVGN_FIRSTVISIBLE: {
+          WDL_PtrList<HTREEITEM__> items;
+          tv_flatten(st->m_root, items);
+          int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+          int topIdx = st->m_scroll_y / rh;
+          if (topIdx >= 0 && topIdx < items.GetSize())
+            return (LRESULT)items.Get(topIdx);
+          return 0;
+        }
+        default:
+          return 0;
+      }
+    }
+
+    case TVM_GETCOUNT: {
+      if (!st) return 0;
+      auto countAll = [](auto&& self, HTREEITEM n) -> int {
+        int c = n->m_children.GetSize();
+        for (int i = 0; i < n->m_children.GetSize(); i++)
+          c += self(self, n->m_children.Get(i));
+        return c;
+      };
+      return (LRESULT)countAll(countAll, st->m_root);
+    }
+
+    case TVM_ENSUREVISIBLE: {
+      if (!st || !lParam) return FALSE;
+      HTREEITEM item = (HTREEITEM)lParam;
+      WDL_PtrList<HTREEITEM__> items;
+      tv_flatten(st->m_root, items);
+      int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+      for (int i = 0; i < items.GetSize(); i++) {
+        if (items.Get(i) == item) {
+          int y = i * rh;
+          RECT cr; GetClientRect(hwnd, &cr);
+          int viewH = cr.bottom - cr.top;
+          if (y < st->m_scroll_y)
+            st->m_scroll_y = y;
+          else if (y + rh > st->m_scroll_y + viewH)
+            st->m_scroll_y = y + rh - viewH;
+          if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+          InvalidateRect(hwnd, NULL, FALSE);
+          return TRUE;
+        }
+      }
+      return FALSE;
+    }
+
     case TVM_SETINDENT:
       return TRUE;
 
@@ -1865,6 +2187,53 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case TVM_SETTEXTCOLOR:
       if (st) { st->m_color_text = (int)lParam; InvalidateRect(hwnd, NULL, FALSE); }
       return -1;
+
+    case WM_KEYDOWN: {
+      if (!st) return 0;
+      int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+      WDL_PtrList<HTREEITEM__> items;
+      tv_flatten(st->m_root, items);
+      int curIdx = -1;
+      for (int i = 0; i < items.GetSize(); i++)
+        if (items.Get(i) == st->m_sel) { curIdx = i; break; }
+
+      if (wParam == VK_UP && curIdx > 0) {
+        SendMessage(hwnd, TVM_SELECTITEM, 0, (LPARAM)items.Get(curIdx-1));
+        return 0;
+      }
+      if (wParam == VK_DOWN && curIdx + 1 < items.GetSize()) {
+        SendMessage(hwnd, TVM_SELECTITEM, 0, (LPARAM)items.Get(curIdx+1));
+        return 0;
+      }
+      if (wParam == VK_LEFT) {
+        HTREEITEM sel = st->m_sel;
+        if (sel) {
+          if (sel->m_state & TVIS_EXPANDED) {
+            sel->m_state &= ~TVIS_EXPANDED;
+            InvalidateRect(hwnd, NULL, FALSE);
+          } else {
+            int dummy = -1;
+            HTREEITEM par = tv_find_parent(st->m_root, sel, &dummy);
+            if (par && par != st->m_root)
+              SendMessage(hwnd, TVM_SELECTITEM, 0, (LPARAM)par);
+          }
+        }
+        return 0;
+      }
+      if (wParam == VK_RIGHT) {
+        HTREEITEM sel = st->m_sel;
+        if (sel) {
+          if (!(sel->m_state & TVIS_EXPANDED) && (sel->m_children.GetSize() > 0 || sel->m_haschildren)) {
+            sel->m_state |= TVIS_EXPANDED;
+            InvalidateRect(hwnd, NULL, FALSE);
+          } else if (sel->m_children.GetSize() > 0) {
+            SendMessage(hwnd, TVM_SELECTITEM, 0, (LPARAM)sel->m_children.Get(0));
+          }
+        }
+        return 0;
+      }
+      return 0;
+    }
 
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK: {
@@ -2262,7 +2631,7 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CREATE:
       st = new tabControlState();
       hwnd->m_private_data = (INT_PTR)st;
-      hwnd->m_wantfocus = false;
+      hwnd->m_wantfocus = true;
       return 0;
 
     case WM_NCDESTROY:
@@ -2326,12 +2695,30 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
     }
 
+    case WM_KEYDOWN: {
+      if (!st) return 0;
+      if (st->m_tabs.GetSize() <= 1) return 0;
+      if (wParam == VK_LEFT) {
+        int sel = st->m_curtab - 1;
+        if (sel < 0) sel = st->m_tabs.GetSize() - 1;
+        SendMessage(hwnd, TCM_SETCURSEL, sel, 0);
+        return 0;
+      }
+      if (wParam == VK_RIGHT) {
+        int sel = st->m_curtab + 1;
+        if (sel >= st->m_tabs.GetSize()) sel = 0;
+        SendMessage(hwnd, TCM_SETCURSEL, sel, 0);
+        return 0;
+      }
+      return 0;
+    }
+
     case WM_LBUTTONDOWN: {
       if (!st) return 0;
       int mx = GET_X_LPARAM(lParam);
-      int th = SWELL_UI_SCALE(20);
+      int tabH = g_swell_theme.tab_height;
       RECT cr; GetClientRect(hwnd, &cr);
-      if (GET_Y_LPARAM(lParam) > th) return 0;
+      if (GET_Y_LPARAM(lParam) > tabH) return 0;
       // hit test tabs
       HDC hdc = GetDC(hwnd);
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);

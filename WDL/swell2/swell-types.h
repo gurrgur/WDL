@@ -450,6 +450,17 @@ typedef struct HTREEITEM__ *HTREEITEM;
 #define TVI_LAST                ((HTREEITEM)0xFFFF0002)
 #define TVI_SORT                ((HTREEITEM)0xFFFF0003)
 
+#define TVGN_ROOT               0x0000
+#define TVGN_NEXT               0x0001
+#define TVGN_PREVIOUS           0x0002
+#define TVGN_PARENT             0x0003
+#define TVGN_CHILD              0x0004
+#define TVGN_FIRSTVISIBLE       0x0005
+#define TVGN_NEXTVISIBLE        0x0006
+#define TVGN_PREVVISIBLE        0x0007
+#define TVGN_DROPHILITE         0x0008
+#define TVGN_CARET              0x0009
+
 #define TVHT_NOWHERE            0x0001
 #define TVHT_ONITEMICON         0x0002
 #define TVHT_ONITEMLABEL        0x0004
