@@ -1355,7 +1355,8 @@ void SetWindowPos(HWND hwnd, HWND zorder, int x, int y, int cx, int cy, int flag
   }
 
   int reposflag = (moved ? 1 : 0) | (sized ? 2 : 0);
-  if (reposflag) {
+  // Do not resize the OS window while in fullscreen mode (matching original SWELL).
+  if (reposflag && !hwnd->m_oswindow_fullscreen) {
     swell_oswindow_resize(hwnd, reposflag, &hwnd->m_position);
   }
 
