@@ -11,6 +11,11 @@
 #include "../heapbuf.h"
 #include "../assocarray.h"
 
+// swell-functions.h defines Polygon(a,b,c) as SWELL_Polygon which clashes
+// with SkPath::Polygon. Undefine it here since all swell-internal.h consumers
+// transitively include Skia headers via SkFont.h → SkPath.h.
+#undef Polygon
+
 #include <core/SkCanvas.h>
 #include <core/SkSurface.h>
 #include <core/SkColor.h>
