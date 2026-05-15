@@ -338,9 +338,10 @@ public:
 class __SWELL_ComboBoxInternalState {
 public:
   int selidx;
+  bool dropdown_armed;
   WDL_PtrList_DeleteOnDestroy<__SWELL_ComboBoxInternalState_rec> items;
   __SWELL_editControlState editstate;
-  __SWELL_ComboBoxInternalState() : selidx(-1) {}
+  __SWELL_ComboBoxInternalState() : selidx(-1), dropdown_armed(false) {}
 };
 
 struct tabControlState {

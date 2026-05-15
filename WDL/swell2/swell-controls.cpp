@@ -2441,6 +2441,59 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 // 6. comboWindowProc
 // ===========================================================================
 
+static bool combo_show_dropdown(HWND hwnd, __SWELL_ComboBoxInternalState *st)
+{
+  if (!hwnd || !st || st->items.GetSize() <= 0) return false;
+
+  hwnd->Retain();
+  notify_parent(hwnd, CBN_DROPDOWN);
+  if (!hwnd->m_private_data) {
+    hwnd->Release();
+    return false;
+  }
+
+  HMENU menu = CreatePopupMenu();
+  if (!menu) {
+    notify_parent(hwnd, CBN_CLOSEUP);
+    hwnd->Release();
+    return false;
+  }
+
+  for (int i = 0; i < st->items.GetSize(); i++) {
+    __SWELL_ComboBoxInternalState_rec *rec = st->items.Get(i);
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_STATE | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.fState = (i == st->selidx) ? MFS_CHECKED : MFS_UNCHECKED;
+    mi.wID = (UINT)(100 + i);
+    mi.dwTypeData = rec ? rec->desc : (char *)"";
+    InsertMenuItem(menu, i, TRUE, &mi);
+  }
+
+  RECT wr;
+  GetWindowRect(hwnd, &wr);
+  int cmd = TrackPopupMenu(menu,
+                           TPM_NONOTIFY | TPM_RETURNCMD | TPM_LEFTALIGN |
+                               TPM_TOPALIGN,
+                           wr.left, wr.bottom, 0, hwnd, NULL);
+  DestroyMenu(menu);
+
+  const bool hwnd_alive = hwnd->m_private_data != 0;
+  if (hwnd_alive && cmd >= 100 && cmd < 100 + st->items.GetSize()) {
+    const int sel = cmd - 100;
+    st->selidx = sel;
+    __SWELL_ComboBoxInternalState_rec *rec = st->items.Get(sel);
+    hwnd->m_title.Set(rec && rec->desc ? rec->desc : "");
+    InvalidateRect(hwnd, NULL, FALSE);
+    notify_parent(hwnd, CBN_SELCHANGE);
+  }
+
+  if (hwnd->m_private_data) notify_parent(hwnd, CBN_CLOSEUP);
+  hwnd->Release();
+  return true;
+}
+
 LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   __SWELL_ComboBoxInternalState *st =
@@ -2612,8 +2665,33 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 1;
 
     case WM_LBUTTONDOWN:
+      if (!st) return 0;
       SetFocus(hwnd);
-      notify_parent(hwnd, CBN_DROPDOWN);
+      st->dropdown_armed = true;
+      SetCapture(hwnd);
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+
+    case WM_LBUTTONUP:
+      if (st) {
+        const bool armed = st->dropdown_armed;
+        st->dropdown_armed = false;
+        if (GetCapture() == hwnd) ReleaseCapture();
+        InvalidateRect(hwnd, NULL, FALSE);
+        if (armed) combo_show_dropdown(hwnd, st);
+      }
+      return 0;
+
+    case WM_CAPTURECHANGED:
+      if (st) st->dropdown_armed = false;
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+
+    case WM_KEYDOWN:
+      if (wParam == VK_DOWN || wParam == VK_SPACE) {
+        combo_show_dropdown(hwnd, st);
+        return 0;
+      }
       return 0;
 
     case WM_SETFOCUS:
@@ -2780,26 +2858,27 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_LBUTTONDOWN: {
       if (!st) return 0;
+      const swell_theme &thm = g_swell_theme;
       int mx = GET_X_LPARAM(lParam);
-      int tabH = g_swell_theme.tab_height;
+      int tabH = thm.tab_height;
       RECT cr; GetClientRect(hwnd, &cr);
       if (GET_Y_LPARAM(lParam) > tabH) return 0;
-      // hit test tabs
+      // hit test tabs: must match paint geometry exactly
       HDC hdc = GetDC(hwnd);
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       SelectObject(hdc, f);
       TEXTMETRIC tm2; GetTextMetrics(hdc, &tm2);
       int avgcw = tm2.tmAveCharWidth > 0 ? tm2.tmAveCharWidth : 8;
-      int x = cr.left;
+      int x = cr.left + thm.padding_button_h;
       for (int i = 0; i < st->m_tabs.GetSize(); i++) {
         const char *s = st->m_tabs.Get(i);
-        int tw = (int)strlen(s) * avgcw + 16;
+        int tw = (int)strlen(s) * avgcw + thm.padding_button_h * 2;
         if (mx >= x && mx < x + tw) {
           ReleaseDC(hwnd, hdc);
           SendMessage(hwnd, TCM_SETCURSEL, i, 0);
           return 0;
         }
-        x += tw + 2;
+        x += tw + 4;
       }
       ReleaseDC(hwnd, hdc);
       return 0;
@@ -2828,7 +2907,9 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       TEXTMETRIC tmtab; GetTextMetrics(hdc, &tmtab);
       int avgcwp = tmtab.tmAveCharWidth > 0 ? tmtab.tmAveCharWidth : 8;
+      const int r = thm.corner_radius;
       int x = cr.left + thm.padding_button_h;
+      RECT selR = { 0, 0, 0, 0 };
       for (int i = 0; i < st->m_tabs.GetSize(); i++) {
         const char *s = st->m_tabs.Get(i);
         int tw = (int)strlen(s) * avgcwp + thm.padding_button_h * 2;
@@ -2836,31 +2917,42 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         RECT tr = { x, cr.top + 2, x + tw, cr.top + tabH };
 
-        // Tab pill: rounded top corners only via RoundRect (full pill ok too).
-        const int r = thm.corner_radius;
-        HPEN tbp  = CreatePen(PS_SOLID, thm.border_width,
-                              sel ? (COLORREF)thm.border
-                                  : (COLORREF)thm.bg_window);
+        // Draw tab shape. Active tab: filled shape w/ top rounded corners,
+        // flat open bottom (no border line). Inactive: subtle rounded pill.
         HBRUSH tbbr = CreateSolidBrush(sel ? (COLORREF)thm.bg_tab_active
                                             : (COLORREF)thm.bg_tab);
-        HGDIOBJ otp = SelectObject(hdc, tbp);
         HGDIOBJ otb = SelectObject(hdc, tbbr);
+        HGDIOBJ nul = SelectObject(hdc, GetStockObject(NULL_PEN));
         RoundRect(hdc, tr.left, tr.top, tr.right, tr.bottom + r, r*2, r*2);
-        SelectObject(hdc, otp); DeleteObject(tbp);
+        if (sel) {
+          // Mask bottom rounded corners to create flat bottom edge
+          Rectangle(hdc, tr.left, tr.bottom, tr.right + 1, tr.bottom + r + 1);
+        }
+        SelectObject(hdc, nul);
         SelectObject(hdc, otb); DeleteObject(tbbr);
 
         SetTextColor(hdc, sel ? (COLORREF)thm.fg_text
                                : (COLORREF)thm.fg_text_dim);
         SWELL_DrawText(hdc, s, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
+        if (sel) selR = tr;
         x += tw + 4;
       }
 
-      // Bottom border under the tab strip
+      // Bottom border under the tab strip, skipping active tab so it
+      // visually connects to the content area below.
       HPEN bp = CreatePen(PS_SOLID, thm.border_width, (COLORREF)thm.border);
       HGDIOBJ obp = SelectObject(hdc, bp);
-      MoveToEx(hdc, cr.left, cr.top + tabH, NULL);
-      LineTo(hdc, cr.right, cr.top + tabH);
+      const int by = cr.top + tabH;
+      if (selR.left < selR.right) {
+        MoveToEx(hdc, cr.left, by, NULL);
+        LineTo(hdc, selR.left, by);
+        MoveToEx(hdc, selR.right, by, NULL);
+        LineTo(hdc, cr.right, by);
+      } else {
+        MoveToEx(hdc, cr.left, by, NULL);
+        LineTo(hdc, cr.right, by);
+      }
       SelectObject(hdc, obp); DeleteObject(bp);
 
       EndPaint(hwnd, &ps);
