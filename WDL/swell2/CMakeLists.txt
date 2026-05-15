@@ -55,3 +55,23 @@ target_link_libraries(Swell PRIVATE
 
 # needed to suppress min/max macros from swell-types.h
 target_compile_definitions(Swell PRIVATE NOMINMAX ${SWELL2_BACKEND_DEFINE})
+
+# ---- benchmark/profiling tools ----
+option(SWELL2_BUILD_BENCHMARKS "Build swell2 benchmark/profiling applications" ON)
+
+if(SWELL2_BUILD_BENCHMARKS)
+  add_executable(bench_swell_app
+    bench_swell_app/bench_swell_app.cpp
+  )
+
+  target_include_directories(bench_swell_app PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+  )
+
+  target_link_libraries(bench_swell_app PRIVATE
+    Swell
+  )
+
+  target_compile_definitions(bench_swell_app PRIVATE NOMINMAX ${SWELL2_BACKEND_DEFINE})
+endif()
