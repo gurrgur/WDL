@@ -1656,7 +1656,7 @@ static void swell_theme_populate_light(swell_theme &t)
 
   // Borders / focus
   t.border        = RGB(0xD4, 0xD4, 0xD4);
-  t.border_strong = RGB(0xA0, 0xA0, 0xA0);
+  t.border_strong = RGB(0xC0, 0xC0, 0xC0);
   t.focus_ring    = accent_base;
 
   // Tooltip
@@ -1725,7 +1725,7 @@ static void swell_theme_populate_dark(swell_theme &t)
 static void swell_theme_populate_metrics(swell_theme &t)
 {
   t.corner_radius           = 2;
-  t.corner_radius_large     = 4;
+  t.corner_radius_large     = 6;
   t.border_width            = 1;
   t.focus_ring_width        = 2;
   t.focus_ring_offset       = 2;
@@ -1749,8 +1749,8 @@ static void swell_theme_populate_metrics(swell_theme &t)
   t.checkbox_size           = 18;
   t.radio_size              = 18;
 
-  t.default_font_size       = 13;
-  t.small_font_size         = 11;
+  t.default_font_size       = 12;
+  t.small_font_size         = 10;
 }
 
 void swell_theme_init(int mode)

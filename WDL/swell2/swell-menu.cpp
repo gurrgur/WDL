@@ -499,7 +499,7 @@ static sk_sp<SkTypeface> menu_get_typeface()
                         SkFontStyle::kNormal_Width,
                         SkFontStyle::kUpright_Slant);
       // Try modern system fonts in order
-      const char *faces[] = { "Inter", "Noto Sans", "Segoe UI",
+      const char *faces[] = { "Adwaita Sans", "Noto Sans", "Segoe UI",
                                "DejaVu Sans", "Liberation Sans",
                                "FreeSans", "Arial", nullptr };
       for (int i = 0; faces[i]; i++) {
