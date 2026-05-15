@@ -888,11 +888,17 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           }
           lineEnds.Add(tlen);
 
-          // Word-wrap: split logical lines into display lines if too wide
-          for (int li = 0; li < lineStarts.GetSize(); li++) {
-            int start_off = lineStarts.Get()[li];
-            int end_off = lineEnds.Get()[li];
-            int pos = start_off;
+           // Word-wrap: split logical lines into display lines if too wide
+           for (int li = 0; li < lineStarts.GetSize(); li++) {
+             int start_off = lineStarts.Get()[li];
+             int end_off = lineEnds.Get()[li];
+             // Empty logical line (blank line from consecutive \n)
+             if (start_off == end_off) {
+               st->ml_dline_starts.Add(start_off);
+               st->ml_dline_ends.Add(start_off);
+               continue;
+             }
+             int pos = start_off;
             while (pos < end_off) {
               int remain = end_off - pos;
               RECT meas = { 0, 0, 0, 0 };

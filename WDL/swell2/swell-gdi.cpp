@@ -1389,9 +1389,16 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   if (len == -1) len = (int)strlen(buf);
   if (len <= 0 || !buf) return 0;
 
-  WDL_FastString utf8tmp;
-  buf = swell_text_for_skia(buf, len, utf8tmp, &len);
-  if (len <= 0 || !buf) return 0;
+  WDL_FastString utf8tmp, cleanbuf;
+  const char *src = swell_text_for_skia(buf, len, utf8tmp, &len);
+  if (len <= 0 || !src) return 0;
+
+  // Strip \r (CR) — no visible glyph, breaks line-splitting
+  for (int i = 0; i < len; i++)
+    if (src[i] != '\r') cleanbuf.Append(src + i, 1);
+  buf = cleanbuf.Get();
+  len = cleanbuf.GetLength();
+  if (len <= 0) return 0;
 
   // Build SkFont from selected font or default
   SkFont font;
@@ -1410,6 +1417,9 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
       }
       font.setEmbolden(fontWeight >= FW_BOLD);
     }
+  }
+  if (!font.getTypeface()) {
+    font.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
   }
   font.setSize(fontSize);
 
@@ -1494,20 +1504,28 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   {
     int pos = 0;
     while (pos < len) {
-      // Find next newline
+      // Find next newline; strip trailing \r (CRLF → LF)
       int nl = pos;
       while (nl < len && buf[nl] != '\n') nl++;
+      int lineEnd = nl;
+      if (lineEnd > pos && buf[lineEnd - 1] == '\r') lineEnd--;
 
       // Word-wrap this logical segment
       WDL_TypedBuf<int> segEnds;
-      swell_wordwrap_line(font, buf, pos, nl, (float)availW, segEnds);
-      int segStart = pos;
-      for (int i = 0; i < segEnds.GetSize(); i++) {
-        dlineStarts.Add(segStart);
-        dlineEnds.Add(segEnds.Get()[i]);
-        segStart = segEnds.Get()[i];
-        while (segStart < nl && buf[segStart] == ' ') segStart++;
-        if (segStart > segEnds.Get()[i]) segStart = segEnds.Get()[i];
+      swell_wordwrap_line(font, buf, pos, lineEnd, (float)availW, segEnds);
+      if (segEnds.GetSize() == 0) {
+        // Empty logical segment (blank line from consecutive \n)
+        dlineStarts.Add(pos);
+        dlineEnds.Add(pos);
+      } else {
+        int segStart = pos;
+        for (int i = 0; i < segEnds.GetSize(); i++) {
+          dlineStarts.Add(segStart);
+          dlineEnds.Add(segEnds.Get()[i]);
+          segStart = segEnds.Get()[i];
+          while (segStart < lineEnd && buf[segStart] == ' ') segStart++;
+          if (segStart > segEnds.Get()[i]) segStart = segEnds.Get()[i];
+        }
       }
 
       pos = nl + 1;  // skip the \n
@@ -1611,6 +1629,8 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
   SkFont font;
   if (faceName) font.setTypeface(swell_get_typeface(faceName, fontWeight, fontItalic));
+  if (!font.getTypeface())
+    font.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
   font.setEmbolden(fontWeight >= FW_BOLD);
   font.setSize(fontSize);
 

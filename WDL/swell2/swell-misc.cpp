@@ -220,7 +220,7 @@ static INT_PTR swellMessageBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
       SWELL_MakeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, hwnd, false, false);
 
-      RECT labsize = {0, 0, 300, 20};
+      RECT labsize = {0, 0, SWELL_UI_SCALE(500), SWELL_UI_SCALE(20)};
       HWND lab = SWELL_MakeLabel(-1, p->text ? p->text : "", IDC_MSGBOX_LABEL,
                                  0, 0, 10, 10, SS_CENTER | SS_NOPREFIX);
       HDC dc = NULL;
@@ -243,6 +243,9 @@ static INT_PTR swellMessageBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
       }
 
       const int bspace = SWELL_UI_SCALE(8);
+      const int btn_pad_w = g_swell_theme.padding_button_h * 2;
+      const int btn_pad_h = g_swell_theme.padding_button_v * 2;
+      const int btn_min_w = SWELL_UI_SCALE(60);
       int button_sizes[3];
       int button_height = 0, button_total_w = 0;
       for (int i = 0; i < p->nbuttons; i++) {
@@ -250,14 +253,20 @@ static INT_PTR swellMessageBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         if (dc)
           DrawText(dc, mbidtostr(p->buttons[i]), -1, &r,
                    DT_CALCRECT | DT_NOPREFIX | DT_SINGLELINE);
-        button_sizes[i] = r.right - r.left + sc10;
+        int bw = (r.right - r.left) + btn_pad_w;
+        if (bw < btn_min_w) bw = btn_min_w;
+        button_sizes[i] = bw;
         button_total_w += button_sizes[i] + (i ? bspace : 0);
-        const int bh = r.bottom - r.top + sc10;
+        const int bh = (r.bottom - r.top) + btn_pad_h;
         if (bh > button_height) button_height = bh;
       }
+      if (button_height < g_swell_theme.button_min_h)
+        button_height = g_swell_theme.button_min_h;
 
       if (dc && lab) ReleaseDC(lab, dc);
 
+      if (labsize.right < SWELL_UI_SCALE(280))
+        labsize.right = SWELL_UI_SCALE(280);
       if (labsize.right < button_total_w + sc8 * 2)
         labsize.right = button_total_w + sc8 * 2;
 
@@ -446,7 +455,7 @@ static void append_zenity_filters(char *cmd, int cmdsz, int *pos,
     if (!*pat) break;
     // format: --file-filter="desc | *.ext *.ext2"
     int n = snprintf(cmd + *pos, cmdsz - *pos,
-                     " --file-filter=%s | %s", desc, pat);
+                     " --file-filter=\"%s | %s\"", desc, pat);
     if (n > 0) *pos += n;
     p = pat + strlen(pat) + 1;
   }
@@ -479,11 +488,11 @@ char *BrowseForFiles(const char *text, const char *initialdir,
   char cmd[4096];
   int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection");
   if (text && text[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=%s", text);
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", text);
   if (initialfile && initialfile[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s", initialfile);
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", initialfile);
   else if (initialdir && initialdir[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s/", initialdir);
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", initialdir);
   if (allowmul)
     pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --multiple --separator=|");
   append_zenity_filters(cmd, sizeof(cmd), &pos, extlist);
@@ -514,11 +523,11 @@ bool BrowseForSaveFile(const char *text, const char *initialdir,
   char cmd[4096];
   int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection --save --confirm-overwrite");
   if (text && text[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=%s", text);
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", text);
   if (initialfile && initialfile[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s", initialfile);
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", initialfile);
   else if (initialdir && initialdir[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s/", initialdir);
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", initialdir);
   append_zenity_filters(cmd, sizeof(cmd), &pos, extlist);
   pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
 
@@ -535,9 +544,9 @@ bool BrowseForDirectory(const char *text, const char *initialdir,
   char cmd[4096];
   int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection --directory");
   if (text && text[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=%s", text);
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", text);
   if (initialdir && initialdir[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=%s/", initialdir);
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", initialdir);
   pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
 
   char *raw = zenity_run(cmd);
