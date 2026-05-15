@@ -271,7 +271,7 @@ static INT_PTR swellMessageBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
       if (labsize.right < button_total_w + sc8 * 2)
         labsize.right = button_total_w + sc8 * 2;
 
-      int xpos = labsize.right / 2 - button_total_w / 2;
+      int xpos = (labsize.right + sc8 * 2) / 2 - button_total_w / 2;
       for (int i = 0; i < p->nbuttons; i++) {
         const int bid = p->buttons[i];
         SWELL_MakeButton(bid == p->default_id, mbidtostr(bid), bid,
