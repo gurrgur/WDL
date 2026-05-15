@@ -26,6 +26,7 @@ struct SDL_WindowEntry {
 };
 
 static SDL_WindowEntry *g_sdl_windows = NULL;
+static SDL_Surface *s_program_icon_surface = NULL;
 
 static SDL_WindowEntry *find_entry_by_window(SDL_Window *w)
 {
@@ -141,6 +142,9 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 
   add_entry(sdlwin, hwnd, rend);
   hwnd->m_oswindow = sdlwin;
+
+  if (s_program_icon_surface)
+    SDL_SetWindowIcon(sdlwin, s_program_icon_surface);
 
   SDL_StartTextInput(sdlwin);
 
@@ -976,6 +980,40 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 }
 
 // ---------------------------------------------------------------------------
+// swell_load_program_icon: load <exe_dir>/Resources/main.png as window icon
+// ---------------------------------------------------------------------------
+
+static void swell_load_program_icon()
+{
+  if (s_program_icon_surface) return;
+
+  char buf[1024];
+  GetModuleFileName(NULL, buf, sizeof(buf));
+  if (!buf[0]) return;
+
+  char *slash = strrchr(buf, '/');
+  if (slash) *slash = '\0';
+
+  char path[1024];
+  snprintf(path, sizeof(path), "%s/Resources/main.png", buf);
+  HICON img = LoadNamedImage(path, true);
+  if (!img) {
+    snprintf(path, sizeof(path), "%s/Resources/main.ico", buf);
+    img = LoadNamedImage(path, true);
+  }
+
+  BITMAP bm;
+  memset(&bm, 0, sizeof(bm));
+  if (img && GetObject(img, sizeof(bm), &bm) &&
+      bm.bmBits && bm.bmWidth > 0 && bm.bmHeight > 0)
+  {
+    s_program_icon_surface = SDL_CreateSurfaceFrom(
+        bm.bmWidth, bm.bmHeight, SDL_PIXELFORMAT_BGRA32,
+        bm.bmBits, bm.bmWidthBytes);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SWELL_RunEvents: poll SDL3 events and dispatch
 // ---------------------------------------------------------------------------
 
@@ -1000,6 +1038,7 @@ void SWELL_initargs(int *argc, char ***argv)
   if (!SDL_WasInit(SDL_INIT_VIDEO) && !SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "SWELL SDL3: SDL_Init failed: %s\n", SDL_GetError());
   }
+  swell_load_program_icon();
 
   swell_scaling_init(false);
   // Initialize the theme. SWELL_THEME=dark forces dark mode (preview only;
