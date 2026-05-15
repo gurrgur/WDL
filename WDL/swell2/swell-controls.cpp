@@ -520,6 +520,97 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 // 2. editWindowProc
 // ===========================================================================
 
+static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState *st)
+{
+  const char *txt_orig = hwnd->m_title.Get();
+  int tlen_orig = (int)strlen(txt_orig);
+  bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
+
+  RECT cr; GetClientRect(hwnd, &cr);
+  const swell_theme &th = g_swell_theme;
+  RECT tr = { cr.left + th.padding_edit_h, cr.top + th.padding_edit_v,
+              cr.right - th.padding_edit_h, cr.bottom - th.padding_edit_v };
+
+  HDC hdc = GetDC(hwnd);
+  HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
+  if (f) SelectObject(hdc, f);
+
+  int result = 0;
+
+  if (!multiline) {
+    if (mx > tr.left && tlen_orig > 0) {
+      int lo = 0, hi = tlen_orig;
+      while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        RECT mr = { 0, 0, 0, 0 };
+        SWELL_DrawText(hdc, txt_orig, mid, &mr, DT_CALCRECT | DT_LEFT | DT_SINGLELINE);
+        if (tr.left + (mr.right - mr.left) <= mx)
+          lo = mid;
+        else
+          hi = mid - 1;
+      }
+      result = lo;
+    }
+  } else {
+    WDL_FastString stripped;
+    for (int i = 0; i < tlen_orig; i++) {
+      if (txt_orig[i] == '\r') {
+        if (i+1 < tlen_orig && txt_orig[i+1] == '\n') { stripped.Append("\n"); i++; }
+        else stripped.Append("\n");
+      } else {
+        char cbuf[2] = { txt_orig[i], 0 };
+        stripped.Append(cbuf);
+      }
+    }
+    const char *txt = stripped.Get();
+    int tlen = (int)stripped.GetLength();
+
+    TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+    int rowH = tm.tmHeight + 2;
+    int scrollY = st->scroll_y;
+
+    if (st->ml_dline_starts.GetSize() > 0 && tlen > 0) {
+      int ndlines = st->ml_dline_starts.GetSize();
+      int di = (my + scrollY - tr.top) / rowH;
+      if (di < 0) di = 0;
+      if (di >= ndlines) di = ndlines - 1;
+
+      int d0 = st->ml_dline_starts.Get()[di];
+      int d1 = st->ml_dline_ends.Get()[di];
+      int seglen = d1 - d0;
+
+      if (mx <= tr.left) {
+        result = d0;
+      } else if (seglen > 0) {
+        int lo = 0, hi = seglen;
+        while (lo < hi) {
+          int mid = (lo + hi + 1) / 2;
+          RECT mr = { 0, 0, 0, 0 };
+          SWELL_DrawText(hdc, txt + d0, mid, &mr, DT_CALCRECT | DT_LEFT);
+          if (tr.left + (mr.right - mr.left) <= mx)
+            lo = mid;
+          else
+            hi = mid - 1;
+        }
+        result = d0 + lo;
+      } else {
+        result = d0;
+      }
+    }
+
+    // convert stripped index to original text index
+    int oi = 0, si = 0;
+    while (oi < tlen_orig && si < result) {
+      if (txt_orig[oi] == '\r') { oi++; }
+      else { oi++; si++; }
+    }
+    result = oi;
+  }
+
+  ReleaseDC(hwnd, hdc);
+  return result;
+}
+
 LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   __SWELL_editControlState *st =
@@ -789,9 +880,39 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
     }
 
-    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDOWN: {
       SetFocus(hwnd);
-      if (st) { st->sel1 = st->sel2 = -1; }
+      if (st) {
+        int mx = (short)LOWORD(lParam);
+        int my = (short)HIWORD(lParam);
+        int pos = edit_pos_from_xy(hwnd, mx, my, st);
+        st->cursor_pos = pos;
+        st->m_mouse_sel_active = true;
+        st->m_mouse_sel_anchor = pos;
+        st->sel1 = st->sel2 = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      SetCapture(hwnd);
+      return 0;
+    }
+
+    case WM_MOUSEMOVE:
+      if (st && st->m_mouse_sel_active) {
+        int mx = (short)LOWORD(lParam);
+        int my = (short)HIWORD(lParam);
+        int pos = edit_pos_from_xy(hwnd, mx, my, st);
+        st->cursor_pos = pos;
+        st->sel1 = st->m_mouse_sel_anchor;
+        st->sel2 = pos;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
+
+    case WM_LBUTTONUP:
+      if (st) {
+        st->m_mouse_sel_active = false;
+        ReleaseCapture();
+      }
       return 0;
 
     case WM_ERASEBKGND:
@@ -3002,14 +3123,9 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int tw = (int)strlen(s) * avgcwp + thm.padding_button_h * 2;
         bool sel = (i == st->m_curtab);
 
-        // Inactive tabs sit a few px lower so the active tab feels raised.
-        const int topInset = sel ? 2 : 5;
-        RECT tr = { x, cr.top + topInset, x + tw, by };
+        // All tabs same size; selected tab has no bottom border.
+        RECT tr = { x, cr.top + 5, x + tw, by };
 
-        // Top corners rounded with theme corner_radius, bottom flat.
-        // Active tab extends 1px below baseline so its border overlaps the
-        // strip's bottom border, masking it under the tab.
-        const int shapeBottom = sel ? by + bw : by;
         HBRUSH fillBr = CreateSolidBrush(sel ? (COLORREF)thm.bg_tab_active
                                               : (COLORREF)thm.bg_tab);
         HPEN borderPen = CreatePen(PS_SOLID, bw,
@@ -3017,10 +3133,19 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                                        : (COLORREF)thm.border);
         HGDIOBJ ob = SelectObject(hdc, fillBr);
         HGDIOBJ op = SelectObject(hdc, borderPen);
-        SWELL_DrawRoundRectEx(hdc, tr.left, tr.top, tr.right, shapeBottom,
+        SWELL_DrawRoundRectEx(hdc, tr.left, tr.top, tr.right, by,
                               r, r, 0, 0);
         SelectObject(hdc, op); DeleteObject(borderPen);
         SelectObject(hdc, ob); DeleteObject(fillBr);
+
+        // Erase bottom border on selected tab so it visually connects
+        // to the content area.
+        if (sel) {
+          HBRUSH eraser = CreateSolidBrush((COLORREF)thm.bg_tab_active);
+          RECT eb = { tr.left, by - bw, tr.right, by + bw };
+          FillRect(hdc, &eb, eraser);
+          DeleteObject(eraser);
+        }
 
         SetTextColor(hdc, sel ? (COLORREF)thm.fg_text
                                : (COLORREF)thm.fg_text_dim);

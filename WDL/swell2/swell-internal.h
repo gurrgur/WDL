@@ -227,6 +227,8 @@ struct __SWELL_editControlState {
   int cache_linelen_strlen;
   WDL_TypedBuf<int> cache_linelen_bytes;
   bool m_disable_contextmenu;
+  bool m_mouse_sel_active;
+  int m_mouse_sel_anchor;
 
   // multiline display-line cache
   WDL_FastString ml_cached_text;
@@ -238,6 +240,7 @@ struct __SWELL_editControlState {
     cursor_state(0), cursor_timer(0), scroll_x(0), scroll_y(0),
     max_height(0), max_width(0), cache_linelen_w(0),
     cache_linelen_strlen(0), m_disable_contextmenu(false),
+    m_mouse_sel_active(false), m_mouse_sel_anchor(0),
     ml_cached_w(-1) {}
 };
 
