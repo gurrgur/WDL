@@ -962,6 +962,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
       int rowH = tm.tmHeight + 2;
+      SkFont skfont = swell_make_skfont_from_hdc(hdc);
 
       const char *txt = hwnd->m_title.Get();
       int tlen = (int)strlen(txt);
@@ -1028,20 +1029,21 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
              int pos = start_off;
             while (pos < end_off) {
               int remain = end_off - pos;
-              RECT meas = { 0, 0, 0, 0 };
-              SWELL_DrawText(hdc, txt + pos, remain, &meas, DT_CALCRECT | DT_LEFT);
-              if (meas.right - meas.left <= scrWidth) {
-                st->ml_dline_starts.Add(pos);
-                st->ml_dline_ends.Add(end_off);
-                break;
+              SkRect bounds;
+              skfont.measureText(txt + pos, remain, SkTextEncoding::kUTF8, &bounds);
+              int textW = (int)(bounds.width() + 0.5f);
+              if (textW <= scrWidth) {
+               st->ml_dline_starts.Add(pos);
+               st->ml_dline_ends.Add(end_off);
+               break;
               }
               // binary search for wrap point
               int lo = pos + 1, hi = end_off;
               while (lo < hi) {
                 int mid = (lo + hi + 1) / 2;
-                RECT mr = { 0, 0, 0, 0 };
-                SWELL_DrawText(hdc, txt + pos, mid - pos, &mr, DT_CALCRECT | DT_LEFT);
-                if (mr.right - mr.left <= scrWidth) lo = mid;
+                skfont.measureText(txt + pos, mid - pos, SkTextEncoding::kUTF8, &bounds);
+                textW = (int)(bounds.width() + 0.5f);
+                if (textW <= scrWidth) lo = mid;
                 else hi = mid - 1;
               }
               int wrap = lo;
@@ -1315,6 +1317,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       st = new listViewState();
       hwnd->m_private_data = (INT_PTR)st;
       st->m_is_listbox = (lParam != 0);
+      if (hwnd->m_style & LVS_OWNERDATA) st->m_owner_data_size = 0;
       hwnd->m_wantfocus = true;
       return 0;
     }
@@ -1704,6 +1707,33 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return TRUE;
     }
 
+    case LVM_GETSUBITEMRECT: {
+      if (!st || !lParam) return FALSE;
+      RECT *r = (RECT *)lParam;
+      int row = (int)wParam;
+      int code = r->left;    // pre-stored by ListView_GetSubItemRect stub
+      int subitem = r->top;  // pre-stored by stub
+      if (row < 0) return FALSE;
+      int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+      int hdr = (st->m_cols.GetSize() > 0 && !(hwnd->m_style & LVS_NOCOLUMNHEADER)) ? (rh + 2) : 0;
+      r->top = hdr + row * rh - st->m_scroll_y;
+      r->bottom = r->top + rh;
+      r->left = 0;
+      int xpos = -st->m_scroll_x;
+      if (subitem >= 0) {
+        for (int x = 0; x < st->m_cols.GetSize(); x++) {
+          int xwid = st->m_cols.Get()[x].xwid;
+          if (st->m_cols.Get()[x].col_index == subitem) {
+            r->left = xpos;
+            r->right = xpos + xwid;
+            break;
+          }
+          xpos += xwid;
+        }
+      }
+      return TRUE;
+    }
+
     case LVM_HITTEST: {
       if (!st || !lParam) return -1;
       LVHITTESTINFO *hti = (LVHITTESTINFO *)lParam;
@@ -1719,6 +1749,24 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       hti->iItem = -1; hti->flags = LVHT_NOWHERE;
       return -1;
+    }
+
+    case LVM_SUBITEMHITTEST: {
+      int row = (int)SendMessage(hwnd, LVM_HITTEST, 0, lParam);
+      if (row < 0 || !st || !lParam) return -1;
+      LVHITTESTINFO *hti = (LVHITTESTINFO *)lParam;
+      int xpos = -st->m_scroll_x;
+      int idx = 0;
+      for (int x = 0; x < st->m_cols.GetSize(); x++) {
+        int xwid = st->m_cols.Get()[x].xwid;
+        if (hti->pt.x >= xpos && hti->pt.x < xpos + xwid) {
+          idx = st->m_cols.Get()[x].col_index;
+          break;
+        }
+        xpos += xwid;
+      }
+      hti->iSubItem = idx;
+      return row;
     }
 
     case LVM_SETBKCOLOR:
