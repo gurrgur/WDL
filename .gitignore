@@ -4,3 +4,4 @@ WDL/swell/*.so
 WDL/swell/*.o
 WDL/swell-experimental/*.so
 WDL/swell-experimental/*.o
+build/
