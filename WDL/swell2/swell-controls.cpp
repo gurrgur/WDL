@@ -850,7 +850,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         // Word-wrap: split logical lines into display lines if too wide
-        struct DispLine { int lineEnd_off; int lineIdx; };
+        struct DispLine { int start_off; int end_off; };
         WDL_TypedBuf<DispLine> dlines;
         int scrWidth = tr.right - tr.left;
         for (int li = 0; li < lineStarts.GetSize(); li++) {
@@ -862,19 +862,22 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             RECT meas = { 0, 0, 0, 0 };
             SWELL_DrawText(hdc, txt + pos, remain, &meas, DT_CALCRECT | DT_LEFT);
             if (meas.right - meas.left <= scrWidth) {
-              DispLine dl = { end_off, li };
+              DispLine dl = { pos, end_off };
               dlines.Add(dl);
               break;
             }
-            int wrap = pos;
-            for (int test = pos + 1; test <= end_off; test++) {
+            // binary search for wrap point
+            int lo = pos + 1, hi = end_off;
+            while (lo < hi) {
+              int mid = (lo + hi + 1) / 2;
               RECT mr = { 0, 0, 0, 0 };
-              SWELL_DrawText(hdc, txt + pos, test - pos, &mr, DT_CALCRECT | DT_LEFT);
-              if (mr.right - mr.left > scrWidth) { wrap = test - 1; break; }
-              wrap = test;
+              SWELL_DrawText(hdc, txt + pos, mid - pos, &mr, DT_CALCRECT | DT_LEFT);
+              if (mr.right - mr.left <= scrWidth) lo = mid;
+              else hi = mid - 1;
             }
+            int wrap = lo;
             if (wrap <= pos) wrap = pos + 1;
-            DispLine dl = { wrap, li };
+            DispLine dl = { pos, wrap };
             dlines.Add(dl);
             pos = wrap;
             if (pos < end_off && txt[pos] == ' ') pos++;
@@ -894,7 +897,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         WDL_TypedBuf<int> char2dline; char2dline.Resize(tlen + 1, false);
         { int di = 0;
           for (int ci = 0; ci <= tlen; ci++) {
-            while (di + 1 < dlines.GetSize() && ci >= dlines.Get()[di].lineEnd_off) di++;
+            while (di + 1 < dlines.GetSize() && ci >= dlines.Get()[di].end_off) di++;
             char2dline.Get()[ci] = di;
           }
         }
@@ -911,14 +914,13 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         SetTextColor(hdc, enabled ? (COLORREF)th.fg_text : (COLORREF)th.fg_text_disabled);
         for (int di = 0; di < dlines.GetSize(); di++) {
           DispLine &dl = dlines.Get()[di];
-          int l0 = lineStarts.Get()[dl.lineIdx];
-          int l1 = dl.lineEnd_off;
           int ry = tr.top + di * rowH - scrollY;
           if (ry + rowH < tr.top) continue;
           if (ry >= tr.bottom) break;
-          RECT lr = { tr.left, ry, tr.right, ry + rowH };
-          if (l0 < l1)
-            SWELL_DrawText(hdc, txt + l0, l1 - l0, &lr, DT_LEFT | DT_TOP | DT_NOPREFIX);
+          if (dl.start_off < dl.end_off) {
+            RECT lr = { tr.left, ry, tr.right, ry + rowH };
+            SWELL_DrawText(hdc, txt + dl.start_off, dl.end_off - dl.start_off, &lr, DT_LEFT | DT_TOP | DT_NOPREFIX);
+          }
         }
 
         // Selection highlight
@@ -927,14 +929,13 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           int dl1 = char2dline.Get()[sel2];
           for (int di = dl0; di <= dl1 && di < dlines.GetSize(); di++) {
             DispLine &dl = dlines.Get()[di];
-            int l0 = lineStarts.Get()[dl.lineIdx];
-            int selLineStart = (di == dl0) ? sel1 : l0;
-            int selLineEnd = (di == dl1) ? sel2 : dl.lineEnd_off;
+            int selLineStart = (di == dl0) ? sel1 : dl.start_off;
+            int selLineEnd = (di == dl1) ? sel2 : dl.end_off;
             if (selLineStart >= selLineEnd) continue;
             int ry = tr.top + di * rowH - scrollY;
-            RECT lr = { tr.left, ry, tr.right, ry + rowH };
             RECT preR = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt + l0, selLineStart - l0, &preR, DT_CALCRECT | DT_LEFT);
+            SWELL_DrawText(hdc, txt + dl.start_off, selLineStart - dl.start_off, &preR, DT_CALCRECT | DT_LEFT);
+            RECT lr = { tr.left, ry, tr.right, ry + rowH };
             RECT selR = lr;
             selR.left += preR.right;
             RECT selwR = { 0, 0, 0, 0 };
@@ -956,9 +957,8 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           int cdline = char2dline.Get()[cpos];
           if (cdline >= 0 && cdline < dlines.GetSize()) {
             DispLine &dl = dlines.Get()[cdline];
-            int l0 = lineStarts.Get()[dl.lineIdx];
             RECT preR = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt + l0, cpos - l0, &preR, DT_CALCRECT | DT_LEFT);
+            SWELL_DrawText(hdc, txt + dl.start_off, cpos - dl.start_off, &preR, DT_CALCRECT | DT_LEFT);
             int cx = tr.left + (preR.right - preR.left);
             int cy = tr.top + cdline * rowH - scrollY;
             if (cy >= tr.top && cy + rowH <= tr.bottom) {
@@ -1087,11 +1087,27 @@ LRESULT labelWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       SetBkMode(hdc, TRANSPARENT);
 
-      DWORD align_flag = DT_VCENTER | DT_SINGLELINE | DT_WORDBREAK;
       DWORD style = hwnd->m_style;
-      if (style & SS_RIGHT)       align_flag = DT_RIGHT | DT_VCENTER | DT_SINGLELINE;
-      else if (style & SS_CENTER) align_flag = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
-      else                        align_flag = DT_LEFT | DT_VCENTER | DT_SINGLELINE;
+      bool nowrap = (style & SS_LEFTNOWORDWRAP) != 0;
+
+      DWORD align_flag;
+      if (nowrap) {
+        // Single-line: current behaviour — vcenter, no word-break
+        if (style & SS_RIGHT)
+          align_flag = DT_RIGHT | DT_VCENTER | DT_SINGLELINE;
+        else if (style & SS_CENTER)
+          align_flag = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
+        else
+          align_flag = DT_LEFT | DT_VCENTER | DT_SINGLELINE;
+      } else {
+        // Multiline: word-break, top-aligned text block
+        if (style & SS_RIGHT)
+          align_flag = DT_RIGHT | DT_TOP | DT_WORDBREAK;
+        else if (style & SS_CENTER)
+          align_flag = DT_CENTER | DT_TOP | DT_WORDBREAK;
+        else
+          align_flag = DT_LEFT | DT_TOP | DT_WORDBREAK;
+      }
 
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       SelectObject(hdc, f);
