@@ -111,6 +111,9 @@
 #define TVM_GETNEXTSIBLING (TVM_FIRST+64)
 #define TVM_GETROOT        (TVM_FIRST+65)
 
+#ifndef TVC_UNKNOWN
+#define TVC_UNKNOWN 0x0000
+#endif
 #ifndef TVC_BYMOUSE
 #define TVC_BYMOUSE 0x0002
 #endif
@@ -1920,7 +1923,17 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 // 5. treeViewWindowProc
 // ===========================================================================
 
-static void tv_send_selchange(HWND hwnd, HTREEITEM olditem, HTREEITEM newitem)
+static bool tv_contains_item(HTREEITEM root, HTREEITEM target)
+{
+  if (!root || !target) return false;
+  if (root == target) return true;
+  for (int i = 0; i < root->m_children.GetSize(); i++) {
+    if (tv_contains_item(root->m_children.Get(i), target)) return true;
+  }
+  return false;
+}
+
+static void tv_send_selchange(HWND hwnd, HTREEITEM olditem, HTREEITEM newitem, UINT action)
 {
   HWND par = GetParent(hwnd);
   if (!par) return;
@@ -1928,7 +1941,7 @@ static void tv_send_selchange(HWND hwnd, HTREEITEM olditem, HTREEITEM newitem)
   nm.hdr.hwndFrom = hwnd;
   nm.hdr.idFrom   = hwnd->m_id;
   nm.hdr.code     = TVN_SELCHANGED;
-  nm.action       = TVC_BYMOUSE;
+  nm.action       = action;
   if (olditem) { nm.itemOld.hItem = olditem; nm.itemOld.mask = TVIF_HANDLE | TVIF_PARAM; nm.itemOld.lParam = olditem->m_param; }
   if (newitem) { nm.itemNew.hItem = newitem; nm.itemNew.mask = TVIF_HANDLE | TVIF_PARAM; nm.itemNew.lParam = newitem->m_param; }
   SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
@@ -2021,7 +2034,22 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case TVM_EXPAND: {
       if (!st || !lParam) return FALSE;
       HTREEITEM item = (HTREEITEM)lParam;
+      if (!tv_contains_item(st->m_root, item)) return FALSE;
       UINT flag = (UINT)wParam;
+      if (flag == TVE_EXPAND && (item->m_state & TVIS_EXPANDED)) return TRUE;
+      if (flag == TVE_COLLAPSE && !(item->m_state & TVIS_EXPANDED)) return TRUE;
+      HWND par = GetParent(hwnd);
+      if (par) {
+        NMTREEVIEW nm = {};
+        nm.hdr.hwndFrom = hwnd;
+        nm.hdr.idFrom = hwnd->m_id;
+        nm.hdr.code = TVN_ITEMEXPANDING;
+        nm.action = flag;
+        nm.itemNew.hItem = item;
+        nm.itemNew.mask = TVIF_HANDLE | TVIF_PARAM;
+        nm.itemNew.lParam = item->m_param;
+        if (SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm)) return TRUE;
+      }
       if (flag == TVE_EXPAND)        item->m_state |=  TVIS_EXPANDED;
       else if (flag == TVE_COLLAPSE) item->m_state &= ~TVIS_EXPANDED;
       else if (flag == TVE_TOGGLE)
@@ -2036,9 +2064,11 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case TVM_SELECTITEM: {
       if (!st) return FALSE;
       HTREEITEM item = (HTREEITEM)lParam;
+      if (item && !tv_contains_item(st->m_root, item)) return FALSE;
+      if (st->m_sel == item) return TRUE;
       HTREEITEM old = st->m_sel;
       st->m_sel = item;
-      tv_send_selchange(hwnd, old, item);
+      tv_send_selchange(hwnd, old, item, TVC_UNKNOWN);
       if (item) SendMessage(hwnd, TVM_ENSUREVISIBLE, 0, (LPARAM)item);
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
@@ -2057,7 +2087,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int idx = -1;
       HTREEITEM par = tv_find_parent(st->m_root, item, &idx);
       if (par && idx >= 0) {
-        if (st->m_sel == item) st->m_sel = NULL;
+        if (st->m_sel && tv_contains_item(item, st->m_sel)) st->m_sel = par == st->m_root ? NULL : par;
         par->m_children.Delete(idx, true);
         InvalidateRect(hwnd, NULL, FALSE);
         return TRUE;
@@ -2077,11 +2107,11 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st || !lParam) return FALSE;
       LPTVITEM item = (LPTVITEM)lParam;
       HTREEITEM h = item->hItem;
-      if (!h) return FALSE;
+      if (!h || !tv_contains_item(st->m_root, h)) return FALSE;
       if (item->mask & TVIF_TEXT && item->pszText && item->cchTextMax > 0)
         lstrcpyn(item->pszText, h->m_value.Get(), item->cchTextMax);
       if (item->mask & TVIF_PARAM) item->lParam = h->m_param;
-      if (item->mask & TVIF_STATE) item->state = h->m_state;
+      if (item->mask & TVIF_STATE) item->state = h->m_state | (h == st->m_sel ? TVIS_SELECTED : 0);
       if (item->mask & TVIF_CHILDREN) item->cChildren = h->m_children.GetSize() > 0 || h->m_haschildren ? 1 : 0;
       return TRUE;
     }
@@ -2090,10 +2120,17 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st || !lParam) return FALSE;
       LPTVITEM item = (LPTVITEM)lParam;
       HTREEITEM h = item->hItem;
-      if (!h) return FALSE;
+      if (!h || !tv_contains_item(st->m_root, h)) return FALSE;
       if (item->mask & TVIF_TEXT && item->pszText) h->m_value.Set(item->pszText);
       if (item->mask & TVIF_PARAM) h->m_param = item->lParam;
-      if (item->mask & TVIF_STATE) h->m_state = (h->m_state & ~item->stateMask) | (item->state & item->stateMask);
+      if (item->mask & TVIF_STATE) {
+        h->m_state = (h->m_state & ~item->stateMask) | (item->state & item->stateMask & ~TVIS_SELECTED);
+        if ((item->stateMask & item->state & TVIS_SELECTED) && st->m_sel != h) {
+          HTREEITEM old = st->m_sel;
+          st->m_sel = h;
+          tv_send_selchange(hwnd, old, h, TVC_UNKNOWN);
+        }
+      }
       if (item->mask & TVIF_CHILDREN) h->m_haschildren = item->cChildren > 0;
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
@@ -2124,7 +2161,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case TVGN_ROOT:
           return st->m_root->m_children.GetSize() > 0 ? (LRESULT)st->m_root->m_children.Get(0) : 0;
         case TVGN_NEXT: {
-          if (!item) return 0;
+          if (!item) return st->m_root->m_children.GetSize() > 0 ? (LRESULT)st->m_root->m_children.Get(0) : 0;
           int idx = -1;
           HTREEITEM par = tv_find_parent(st->m_root, item, &idx);
           if (par && idx >= 0 && idx + 1 < par->m_children.GetSize())
@@ -2140,14 +2177,15 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           return 0;
         }
         case TVGN_PARENT: {
-          if (!item) return 0;
+          if (!item) return st->m_root->m_children.GetSize() > 0 ? (LRESULT)st->m_root->m_children.Get(0) : 0;
           int dummy = -1;
           HTREEITEM par = tv_find_parent(st->m_root, item, &dummy);
           return (par == st->m_root) ? 0 : (LRESULT)par;
         }
         case TVGN_CHILD:
-          if (item) return item->m_children.GetSize() > 0 ? (LRESULT)item->m_children.Get(0) : 0;
-          return 0;
+          if (!item || item == TVI_ROOT)
+            return st->m_root->m_children.GetSize() > 0 ? (LRESULT)st->m_root->m_children.Get(0) : 0;
+          return item->m_children.GetSize() > 0 ? (LRESULT)item->m_children.Get(0) : 0;
         case TVGN_CARET:
           return st ? (LRESULT)st->m_sel : 0;
         case TVGN_NEXTVISIBLE: {
@@ -2224,19 +2262,23 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case TVM_GETPARENT: {
       if (!st) return 0;
       HTREEITEM item = (HTREEITEM)lParam;
+      if (!item) return st->m_root->m_children.GetSize() > 0 ? (LRESULT)st->m_root->m_children.Get(0) : 0;
       int dummy = -1;
       HTREEITEM par = tv_find_parent(st->m_root, item, &dummy);
       return (par == st->m_root) ? 0 : (LRESULT)par;
     }
 
     case TVM_GETCHILD:
-      if (!lParam) return 0;
       { HTREEITEM item = (HTREEITEM)lParam;
+        if (!st) return 0;
+        if (!item || item == TVI_ROOT)
+          return st->m_root->m_children.GetSize() > 0 ? (LRESULT)st->m_root->m_children.Get(0) : 0;
         return item->m_children.GetSize() > 0 ? (LRESULT)item->m_children.Get(0) : 0; }
 
     case TVM_GETNEXTSIBLING: {
-      if (!st || !lParam) return 0;
+      if (!st) return 0;
       HTREEITEM item = (HTREEITEM)lParam;
+      if (!item) return st->m_root->m_children.GetSize() > 0 ? (LRESULT)st->m_root->m_children.Get(0) : 0;
       int idx = -1;
       HTREEITEM par = tv_find_parent(st->m_root, item, &idx);
       if (!par || idx < 0) return 0;
@@ -2321,13 +2363,14 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           break;
         }
         if (mx < indent && (item->m_children.GetSize() > 0 || item->m_haschildren)) {
-          item->m_state ^= TVIS_EXPANDED;
-          InvalidateRect(hwnd, NULL, FALSE);
+          SendMessage(hwnd, TVM_EXPAND, TVE_TOGGLE, (LPARAM)item);
         } else {
           HTREEITEM old = st->m_sel;
-          st->m_sel = item;
-          tv_send_selchange(hwnd, old, item);
-          InvalidateRect(hwnd, NULL, FALSE);
+          if (old != item) {
+            st->m_sel = item;
+            tv_send_selchange(hwnd, old, item, TVC_BYMOUSE);
+            InvalidateRect(hwnd, NULL, FALSE);
+          }
         }
       }
       return 0;

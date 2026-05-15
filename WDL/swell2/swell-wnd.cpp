@@ -1506,7 +1506,7 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
   // above in z-order and must be repainted to cover our area.
   {
     HWND t = (HWND)hwnd->m_parent;
-    if (t && (t->m_style & WS_CLIPSIBLINGS)) {
+    if (t && ((t->m_style | hwnd->m_style) & WS_CLIPSIBLINGS)) {
       int myIdx = t->m_children.Find(hwnd);
       if (myIdx >= 0) {
         for (int i = myIdx + 1; i < t->m_children.GetSize(); i++) {
