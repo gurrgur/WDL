@@ -1342,21 +1342,21 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int pos = (int)wParam;
       const LVCOLUMN *lvc = (const LVCOLUMN *)lParam;
       SWELL_ListView_Col col;
-      col.col_index = pos;
       if (lvc->mask & LVCF_TEXT && lvc->pszText)
         col.name = strdup(lvc->pszText);
       if (lvc->mask & LVCF_WIDTH) col.xwid = lvc->cx;
       if (lvc->mask & LVCF_FMT)  col.fmt  = lvc->fmt;
       int n = st->m_cols.GetSize();
       if (pos < 0 || pos > n) pos = n;
+      // shift existing col_index values >= pos
+      for (int x = 0; x < n; x++)
+        if (st->m_cols.Get()[x].col_index >= pos)
+          st->m_cols.Get()[x].col_index++;
       col.col_index = pos;
-      // insert at pos
       st->m_cols.Resize(n+1, false);
       for (int i = n; i > pos; i--) st->m_cols.Get()[i] = st->m_cols.Get()[i-1];
       st->m_cols.Get()[pos] = col;
       col.name = NULL; // ownership transferred
-      // fix indices
-      for (int i = 0; i < st->m_cols.GetSize(); i++) st->m_cols.Get()[i].col_index = i;
       InvalidateRect(hwnd, NULL, FALSE);
       return pos;
     }
@@ -1365,49 +1365,72 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st) return FALSE;
       int pos = (int)wParam;
       if (pos < 0 || pos >= st->m_cols.GetSize()) return FALSE;
+      int oldidx = st->m_cols.Get()[pos].col_index;
       free(st->m_cols.Get()[pos].name);
       int n = st->m_cols.GetSize();
       for (int i = pos; i < n-1; i++) st->m_cols.Get()[i] = st->m_cols.Get()[i+1];
       st->m_cols.Resize(n-1, false);
-      for (int i = 0; i < st->m_cols.GetSize(); i++) st->m_cols.Get()[i].col_index = i;
+      // decrement col_index for entries > deleted logical index
+      for (int i = 0; i < st->m_cols.GetSize(); i++)
+        if (st->m_cols.Get()[i].col_index > oldidx)
+          st->m_cols.Get()[i].col_index--;
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
     }
 
     case LVM_SETCOLUMN: {
       if (!st || !lParam) return FALSE;
-      int pos = (int)wParam;
-      if (pos < 0 || pos >= st->m_cols.GetSize()) return FALSE;
+      int idx = (int)wParam; // logical column index
       const LVCOLUMN *lvc = (const LVCOLUMN *)lParam;
-      SWELL_ListView_Col &c = st->m_cols.Get()[pos];
-      if (lvc->mask & LVCF_TEXT && lvc->pszText) { free(c.name); c.name = strdup(lvc->pszText); }
-      if (lvc->mask & LVCF_WIDTH) c.xwid = lvc->cx;
-      if (lvc->mask & LVCF_FMT)  c.fmt  = lvc->fmt;
-      InvalidateRect(hwnd, NULL, FALSE);
-      return TRUE;
+      for (int i = 0; i < st->m_cols.GetSize(); i++) {
+        if (st->m_cols.Get()[i].col_index == idx) {
+          SWELL_ListView_Col &c = st->m_cols.Get()[i];
+          if (lvc->mask & LVCF_TEXT && lvc->pszText) { free(c.name); c.name = strdup(lvc->pszText); }
+          if (lvc->mask & LVCF_WIDTH) c.xwid = lvc->cx;
+          if (lvc->mask & LVCF_FMT)  c.fmt  = lvc->fmt;
+          InvalidateRect(hwnd, NULL, FALSE);
+          return TRUE;
+        }
+      }
+      return FALSE;
     }
 
     case LVM_GETCOLUMN: {
       if (!st || !lParam) return FALSE;
-      int pos = (int)wParam;
-      if (pos < 0 || pos >= st->m_cols.GetSize()) return FALSE;
+      int idx = (int)wParam; // logical column index
       LVCOLUMN *lvc = (LVCOLUMN *)lParam;
-      const SWELL_ListView_Col &c = st->m_cols.Get()[pos];
+      // find column by logical col_index
+      const SWELL_ListView_Col *c = NULL;
+      for (int i = 0; i < st->m_cols.GetSize(); i++) {
+        if (st->m_cols.Get()[i].col_index == idx) { c = st->m_cols.Get() + i; break; }
+      }
+      if (!c) return FALSE;
       if (lvc->mask & LVCF_TEXT && lvc->pszText && lvc->cchTextMax > 0)
-        lstrcpyn(lvc->pszText, c.name ? c.name : "", lvc->cchTextMax);
-      if (lvc->mask & LVCF_WIDTH) lvc->cx  = c.xwid;
-      if (lvc->mask & LVCF_FMT)  lvc->fmt = c.fmt;
+        lstrcpyn(lvc->pszText, c->name ? c->name : "", lvc->cchTextMax);
+      if (lvc->mask & LVCF_WIDTH) lvc->cx  = c->xwid;
+      if (lvc->mask & LVCF_FMT)  lvc->fmt = c->fmt;
       return TRUE;
     }
 
     case LVM_GETCOLUMNWIDTH:
       if (!st) return 0;
-      { int p = (int)wParam; return (p>=0 && p<st->m_cols.GetSize()) ? st->m_cols.Get()[p].xwid : 0; }
+      { int idx = (int)wParam; // logical column index
+        for (int i = 0; i < st->m_cols.GetSize(); i++)
+          if (st->m_cols.Get()[i].col_index == idx)
+            return st->m_cols.Get()[i].xwid;
+        return 0;
+      }
 
     case LVM_SETCOLUMNWIDTH:
-      if (st && wParam >= 0 && (int)wParam < st->m_cols.GetSize()) {
-        st->m_cols.Get()[(int)wParam].xwid = (int)lParam;
-        InvalidateRect(hwnd, NULL, FALSE);
+      if (st) {
+        int idx = (int)wParam; // logical column index
+        for (int i = 0; i < st->m_cols.GetSize(); i++) {
+          if (st->m_cols.Get()[i].col_index == idx) {
+            st->m_cols.Get()[i].xwid = (int)lParam;
+            InvalidateRect(hwnd, NULL, FALSE);
+            break;
+          }
+        }
       }
       return TRUE;
 
@@ -1704,9 +1727,42 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (st) { st->m_color_text = (int)lParam; InvalidateRect(hwnd, NULL, FALSE); }
       return TRUE;
 
-    case LVM_SETCOLUMNORDERARRAY:
-    case LVM_GETCOLUMNORDERARRAY:
+    case LVM_SETCOLUMNORDERARRAY: {
+      if (!st || !lParam) return FALSE;
+      int cnt = (int)wParam;
+      int *arr = (int *)lParam;
+      if (!arr) return FALSE;
+      // Reorder m_cols physical order to match arr (logical indices)
+      // O(N^2) but column count is small
+      WDL_TypedBuf<SWELL_ListView_Col> tmp;
+      for (int x = 0; x < cnt; x++) {
+        // find column by logical col_index
+        int found = -1;
+        for (int i = 0; i < st->m_cols.GetSize(); i++) {
+          if (st->m_cols.Get()[i].col_index == arr[x]) { found = i; break; }
+        }
+        if (found < 0) continue;
+        tmp.Add(st->m_cols.Get()[found]);
+        st->m_cols.Delete(found);
+      }
+      // add remaining columns (if any, beyond cnt) preserving order
+      for (int i = 0; i < st->m_cols.GetSize(); i++)
+        tmp.Add(st->m_cols.Get()[i]);
+      st->m_cols.Resize(0, false);
+      for (int x = 0; x < tmp.GetSize(); x++)
+        st->m_cols.Add(tmp.Get() + x, 1);
+      InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
+    }
+
+    case LVM_GETCOLUMNORDERARRAY: {
+      if (!st || !lParam) return FALSE;
+      int cnt = (int)wParam;
+      int *arr = (int *)lParam;
+      for (int x = 0; x < cnt; x++)
+        arr[x] = x < st->m_cols.GetSize() ? st->m_cols.Get()[x].col_index : x;
+      return TRUE;
+    }
 
     case LVM_GETHEADER:
       return (LRESULT)hwnd; // return self as header
@@ -1985,20 +2041,18 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           di.item.pszText = buf;
           di.item.cchTextMax = sizeof(buf);
           HWND par = GetParent(hwnd);
-          if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
 
           int ncols = st->m_cols.GetSize();
           if (ncols == 0) {
+            if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
             RECT tr = { cr.left+2, ry, cr.right-2, ry+rh };
             SWELL_DrawText(hdc, buf, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
           } else {
             int cx = cr.left - st->m_scroll_x;
             for (int c = 0; c < ncols; c++) {
-              if (c > 0) {
-                di.item.iSubItem = c;
-                di.item.pszText = buf; buf[0] = 0;
-                if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
-              }
+              di.item.iSubItem = st->m_cols.Get()[c].col_index;
+              di.item.pszText = buf; buf[0] = 0;
+              if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
               RECT tr = { cx+2, ry, cx + st->m_cols.Get()[c].xwid - 2, ry+rh };
               SWELL_DrawText(hdc, buf, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
               cx += st->m_cols.Get()[c].xwid;
@@ -2054,7 +2108,7 @@ static bool tv_contains_item(HTREEITEM root, HTREEITEM target)
   return false;
 }
 
-static void tv_send_selchange(HWND hwnd, HTREEITEM olditem, HTREEITEM newitem, UINT action)
+static void tv_send_selchange(HWND hwnd, HTREEITEM newitem)
 {
   HWND par = GetParent(hwnd);
   if (!par) return;
@@ -2065,9 +2119,8 @@ static void tv_send_selchange(HWND hwnd, HTREEITEM olditem, HTREEITEM newitem, U
     nm.hdr.hwndFrom = hwnd;
     nm.hdr.idFrom   = hwnd->m_id;
     nm.hdr.code     = TVN_SELCHANGED;
-    nm.action       = action;
-    if (olditem) { nm.itemOld.hItem = olditem; nm.itemOld.mask = TVIF_HANDLE | TVIF_PARAM; nm.itemOld.lParam = olditem->m_param; }
-    if (newitem) { nm.itemNew.hItem = newitem; nm.itemNew.mask = TVIF_HANDLE | TVIF_PARAM; nm.itemNew.lParam = newitem->m_param; }
+    nm.itemNew.hItem = newitem;
+    nm.itemNew.lParam = newitem ? newitem->m_param : 0;
     SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
     __rent--;
   }
@@ -2222,9 +2275,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HTREEITEM item = (HTREEITEM)lParam;
       if (item && !tv_contains_item(st->m_root, item)) return FALSE;
       if (st->m_sel == item) return TRUE;
-      HTREEITEM old = st->m_sel;
       st->m_sel = item;
-      tv_send_selchange(hwnd, old, item, TVC_UNKNOWN);
+      tv_send_selchange(hwnd, item);
       if (item) SendMessage(hwnd, TVM_ENSUREVISIBLE, 0, (LPARAM)item);
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
@@ -2282,9 +2334,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (item->mask & TVIF_STATE) {
         h->m_state = (h->m_state & ~item->stateMask) | (item->state & item->stateMask & ~TVIS_SELECTED);
         if ((item->stateMask & item->state & TVIS_SELECTED) && st->m_sel != h) {
-          HTREEITEM old = st->m_sel;
           st->m_sel = h;
-          tv_send_selchange(hwnd, old, h, TVC_UNKNOWN);
+          tv_send_selchange(hwnd, h);
         }
       }
       if (item->mask & TVIF_CHILDREN) h->m_haschildren = item->cChildren > 0;
@@ -2528,7 +2579,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           HTREEITEM old = st->m_sel;
           if (old != item) {
             st->m_sel = item;
-            tv_send_selchange(hwnd, old, item, TVC_BYMOUSE);
+            tv_send_selchange(hwnd, item);
             InvalidateRect(hwnd, NULL, FALSE);
           }
         }
