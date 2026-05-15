@@ -181,75 +181,241 @@ void *SWELL_GetBundle(HINSTANCE hInst)
 }
 
 // ============================================================================
-// Message Box — SDL3 native dialog
+// Message Box — swell-based modal dialog
 // ============================================================================
+
+static const char *mbidtostr(int idx)
+{
+  switch (idx) {
+    case IDOK:     return "OK";
+    case IDCANCEL: return "Cancel";
+    case IDYES:    return "Yes";
+    case IDNO:     return "No";
+    case IDRETRY:  return "Retry";
+    case IDABORT:  return "Abort";
+    case IDIGNORE: return "Ignore";
+  }
+  return "";
+}
+
+struct MessageBoxParams {
+  const char *text;
+  const char *caption;
+  int type;
+  int default_id;
+  int buttons[3];
+  int nbuttons;
+};
+
+enum { IDC_MSGBOX_LABEL = 0x100 };
+
+static INT_PTR swellMessageBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  switch (msg) {
+    case WM_CREATE: {
+      MessageBoxParams *p = (MessageBoxParams *)lParam;
+      if (!p) break;
+
+      if (p->caption) SetWindowText(hwnd, p->caption);
+
+      SWELL_MakeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, hwnd, false, false);
+
+      RECT labsize = {0, 0, 300, 20};
+      HWND lab = SWELL_MakeLabel(-1, p->text ? p->text : "", IDC_MSGBOX_LABEL,
+                                 0, 0, 10, 10, SS_CENTER | SS_NOPREFIX);
+      HDC dc = NULL;
+      if (lab) {
+        dc = GetDC(lab);
+        if (dc && p->text)
+          DrawText(dc, p->text, -1, &labsize, DT_CALCRECT | DT_NOPREFIX);
+      }
+
+      const int sc10 = SWELL_UI_SCALE(10);
+      const int sc8  = SWELL_UI_SCALE(8);
+      labsize.top += sc10;
+      labsize.bottom += sc10 + sc8;
+
+      {
+        RECT vp;
+        SWELL_GetViewPort(&vp, NULL, true);
+        const int maxh = (vp.bottom - vp.top) * 7 / 8;
+        if (labsize.bottom > maxh) labsize.bottom = maxh;
+      }
+
+      const int bspace = SWELL_UI_SCALE(8);
+      int button_sizes[3];
+      int button_height = 0, button_total_w = 0;
+      for (int i = 0; i < p->nbuttons; i++) {
+        RECT r = {0, 0, 35, 12};
+        if (dc)
+          DrawText(dc, mbidtostr(p->buttons[i]), -1, &r,
+                   DT_CALCRECT | DT_NOPREFIX | DT_SINGLELINE);
+        button_sizes[i] = r.right - r.left + sc10;
+        button_total_w += button_sizes[i] + (i ? bspace : 0);
+        const int bh = r.bottom - r.top + sc10;
+        if (bh > button_height) button_height = bh;
+      }
+
+      if (dc && lab) ReleaseDC(lab, dc);
+
+      if (labsize.right < button_total_w + sc8 * 2)
+        labsize.right = button_total_w + sc8 * 2;
+
+      int xpos = labsize.right / 2 - button_total_w / 2;
+      for (int i = 0; i < p->nbuttons; i++) {
+        const int bid = p->buttons[i];
+        SWELL_MakeButton(bid == p->default_id, mbidtostr(bid), bid,
+                         xpos, labsize.bottom,
+                         button_sizes[i], button_height, 0);
+        xpos += button_sizes[i] + bspace;
+      }
+
+      SWELL_MakeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, NULL, false, false);
+
+      SetWindowPos(hwnd, NULL, 0, 0,
+                   labsize.right + sc8 * 2,
+                   labsize.bottom + button_height + sc8,
+                   SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE);
+
+      if (lab)
+        SetWindowPos(lab, NULL, sc8, 0, labsize.right, labsize.bottom,
+                     SWP_NOACTIVATE | SWP_NOZORDER);
+
+      SetFocus(GetDlgItem(hwnd, p->default_id));
+      break;
+    }
+
+    case WM_COMMAND:
+      if (LOWORD(wParam) && HIWORD(wParam) == BN_CLICKED)
+        EndDialog(hwnd, LOWORD(wParam));
+      break;
+
+    case WM_CLOSE:
+      if (GetDlgItem(hwnd, IDCANCEL))
+        EndDialog(hwnd, IDCANCEL);
+      else if (GetDlgItem(hwnd, IDNO))
+        EndDialog(hwnd, IDNO);
+      else
+        EndDialog(hwnd, IDOK);
+      break;
+  }
+  return 0;
+}
 
 int MessageBox(HWND hwndParent, const char *text, const char *caption, int type)
 {
 #ifdef SWELL_TARGET_SDL3
   int btntype = type & 0xF;
 
-  SDL_MessageBoxButtonData btns[3];
-  int nbtn = 0;
-  int default_id = IDOK;
+  MessageBoxParams p;
+  p.text = text;
+  p.caption = caption;
+  p.type = type;
 
   switch (btntype) {
     case MB_OKCANCEL:
-      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDOK,     "OK"     };
-      btns[1] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDCANCEL, "Cancel" };
-      nbtn = 2; default_id = IDOK;
+      p.buttons[0] = IDOK; p.buttons[1] = IDCANCEL;
+      p.nbuttons = 2; p.default_id = IDOK;
       break;
     case MB_YESNO:
-      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDYES, "Yes" };
-      btns[1] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDNO,  "No"  };
-      nbtn = 2; default_id = IDYES;
+      p.buttons[0] = IDYES; p.buttons[1] = IDNO;
+      p.nbuttons = 2; p.default_id = IDYES;
       break;
     case MB_YESNOCANCEL:
-      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDYES,    "Yes"    };
-      btns[1] = { 0,                                       IDNO,     "No"     };
-      btns[2] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDCANCEL, "Cancel" };
-      nbtn = 3; default_id = IDYES;
+      p.buttons[0] = IDYES; p.buttons[1] = IDNO; p.buttons[2] = IDCANCEL;
+      p.nbuttons = 3; p.default_id = IDYES;
       break;
     case MB_RETRYCANCEL:
-      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDRETRY,  "Retry"  };
-      btns[1] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDCANCEL, "Cancel" };
-      nbtn = 2; default_id = IDRETRY;
+      p.buttons[0] = IDRETRY; p.buttons[1] = IDCANCEL;
+      p.nbuttons = 2; p.default_id = IDRETRY;
       break;
     case MB_ABORTRETRYIGNORE:
-      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, IDABORT,  "Abort"  };
-      btns[1] = { 0,                                       IDRETRY,  "Retry"  };
-      btns[2] = { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, IDIGNORE, "Ignore" };
-      nbtn = 3; default_id = IDABORT;
+      p.buttons[0] = IDABORT; p.buttons[1] = IDRETRY; p.buttons[2] = IDIGNORE;
+      p.nbuttons = 3; p.default_id = IDABORT;
       break;
     default: // MB_OK
-      btns[0] = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT | SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT,
-                  IDOK, "OK" };
-      nbtn = 1; default_id = IDOK;
+      p.buttons[0] = IDOK;
+      p.nbuttons = 1; p.default_id = IDOK;
       break;
   }
 
-  SDL_MessageBoxFlags flags = SDL_MESSAGEBOX_INFORMATION;
-  if (type & MB_ICONERROR)       flags = SDL_MESSAGEBOX_ERROR;
-  else if (type & MB_ICONWARNING) flags = SDL_MESSAGEBOX_WARNING;
+  if ((type & MB_DEFBUTTON3) && p.nbuttons >= 3)
+    p.default_id = p.buttons[2];
+  else if ((type & MB_DEFBUTTON2) && p.nbuttons >= 2)
+    p.default_id = p.buttons[1];
 
-  SDL_Window *sdlpar = NULL;
+  HWND owner = NULL;
   if (hwndParent) {
     HWND top = hwndParent;
     while (top->m_parent) top = (HWND)top->m_parent;
-    sdlpar = (SDL_Window*)top->m_oswindow;
+    owner = top;
   }
 
-  SDL_MessageBoxData mbd = {};
-  mbd.flags       = flags;
-  mbd.window      = sdlpar;
-  mbd.title       = caption ? caption : "";
-  mbd.message     = text ? text : "";
-  mbd.numbuttons  = nbtn;
-  mbd.buttons     = btns;
+  int sx = GetSystemMetrics(SM_CXSCREEN);
+  int sy = GetSystemMetrics(SM_CYSCREEN);
+  int dlg_w = SWELL_UI_SCALE(400);
+  int dlg_h = SWELL_UI_SCALE(250);
+  int dlg_x = (sx - dlg_w) / 2;
+  int dlg_y = (sy - dlg_h) / 2;
+  if (dlg_x < 10) dlg_x = 10;
+  if (dlg_y < 10) dlg_y = 10;
 
-  int clicked = default_id;
-  SDL_ShowMessageBox(&mbd, &clicked);
-  return clicked;
+  RECT r = { dlg_x, dlg_y, dlg_x + dlg_w, dlg_y + dlg_h };
+
+  DWORD style = WS_CAPTION | WS_SYSMENU;
+  HWND hwndDlg = new HWND__(NULL, 0, &r,
+                             caption ? caption : "",
+                             false, SwellDialogDefaultWindowProc);
+  hwndDlg->m_style = style;
+  hwndDlg->m_dlgproc = swellMessageBoxProc;
+
+  if (owner) {
+    hwndDlg->m_owner = owner;
+    owner->m_owned.Add(hwndDlg);
+  }
+
+  swellMessageBoxProc(hwndDlg, WM_CREATE, 0, (LPARAM)&p);
+  if (hwndDlg->m_hashaddestroy >= 2)
+    return p.default_id;
+
+  hwndDlg->Retain();
+
+  RECT wr;
+  GetWindowRect(hwndDlg, &wr);
+  dlg_x = (sx - (wr.right - wr.left)) / 2;
+  dlg_y = (sy - (wr.bottom - wr.top)) / 2;
+  if (dlg_x < 10) dlg_x = 10;
+  if (dlg_y < 10) dlg_y = 10;
+  SetWindowPos(hwndDlg, NULL, dlg_x, dlg_y, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+  ShowWindow(hwndDlg, SW_SHOW);
+
+  void *ctx = SWELL_ModalWindowStart(hwndDlg);
+
+  WDL_PtrList<HWND__> disabled_list;
+  for (HWND w = g_swell_top_level_list; w; w = w->m_next) {
+    if (w != hwndDlg && w->m_enabled && !w->m_parent) {
+      EnableWindow(w, FALSE);
+      disabled_list.Add(w);
+    }
+  }
+
+  int ret = p.default_id;
+  while (SWELL_ModalWindowRun(ctx, &ret))
+    usleep(10000);
+
+  for (int i = 0; i < disabled_list.GetSize(); i++) {
+    HWND w = disabled_list.Get(i);
+    if (w && w->m_hashaddestroy < 2)
+      EnableWindow(w, TRUE);
+  }
+
+  SWELL_ModalWindowEnd(ctx);
+  hwndDlg->Release();
+
+  return ret;
+
 #else
   (void)hwndParent;
   fprintf(stderr, "[MessageBox] %s: %s\n",
