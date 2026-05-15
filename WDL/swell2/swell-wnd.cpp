@@ -119,7 +119,9 @@ LRESULT SendMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
   }
 
   WNDPROC proc = hwnd->m_wndproc;
-  if (!proc) return 0;
+  if (!proc) {
+    return 0;
+  }
 
   hwnd->Retain();
   LRESULT ret = proc(hwnd, msg, wParam, lParam);
@@ -675,7 +677,9 @@ static void RecurseDestroyWindow(HWND hwnd)
 void DestroyWindow(HWND hwnd)
 {
   if (!hwnd) return;
-  if (hwnd->m_hashaddestroy) return;
+  if (hwnd->m_hashaddestroy) {
+    return;
+  }
 
   SendMessage(hwnd, WM_DESTROY, 0, 0);
 
@@ -1272,7 +1276,16 @@ void GetClientRect(HWND hwnd, RECT *r)
 bool GetWindowRect(HWND hwnd, RECT *r)
 {
   if (!hwnd || !r) return false;
-  *r = hwnd->m_position;
+  if (hwnd->m_oswindow) {
+    // Top-level window: m_position is screen-absolute.
+    *r = hwnd->m_position;
+    return true;
+  }
+  // Child window: convert parent-relative m_position to screen coordinates.
+  r->left = r->top = 0;
+  ClientToScreen(hwnd, (LPPOINT)r);
+  r->right = r->left + hwnd->m_position.right - hwnd->m_position.left;
+  r->bottom = r->top + hwnd->m_position.bottom - hwnd->m_position.top;
   return true;
 }
 
