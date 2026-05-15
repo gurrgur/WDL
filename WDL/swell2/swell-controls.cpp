@@ -2825,6 +2825,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
       }
 
+      drawVerticalScrollbar(hdc, cr, cr.bottom - cr.top, items.GetSize() * rh, st->m_scroll_y);
+
       EndPaint(hwnd, &ps);
       return 0;
     }
