@@ -28,6 +28,12 @@ static inline int scy(int y) { return (int)(y * g_dlg_yscale + g_dlg_ytrans + 0.
 static inline int scw(int w) { return (int)(w * g_dlg_xscale + 0.5f); }
 static inline int sch(int h) { return (int)(h * g_dlg_yscale + 0.5f); }
 
+static inline void clamp_combo_closed_height(RECT *r)
+{
+  const int maxh = SWELL_UI_SCALE(20);
+  if (r && r->bottom > r->top + maxh) r->bottom = r->top + maxh;
+}
+
 void SWELL_MakeSetCurParms(float xscale, float yscale, float xtrans, float ytrans,
                            HWND parent, bool doauto, bool dosizetofit)
 {
@@ -203,6 +209,7 @@ HWND SWELL_MakeCombo(int idx, int x, int y, int w, int h, int flags)
   else       style |= CBS_DROPDOWNLIST;
 
   RECT r = { scx(x), scy(y), scx(x)+scw(w), scy(y)+sch(h) };
+  clamp_combo_closed_height(&r);
   HWND hwnd = new HWND__(g_dlg_parent, idx, &r, "", true, comboWindowProc);
   hwnd->m_style     = style;
   hwnd->m_classname = "ComboBox";
@@ -275,6 +282,7 @@ HWND SWELL_MakeControl(const char *cname, int idx, const char *classname,
   } else if (!strcasecmp(classname, "ComboBox")) {
     proc = comboWindowProc;
     klass = "ComboBox";
+    clamp_combo_closed_height(&r);
   } else if (!strcasecmp(classname, "ListBox")) {
     proc = listViewWindowProc;
     klass = "ListBox";
