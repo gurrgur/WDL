@@ -228,10 +228,17 @@ struct __SWELL_editControlState {
   WDL_TypedBuf<int> cache_linelen_bytes;
   bool m_disable_contextmenu;
 
+  // multiline display-line cache
+  WDL_FastString ml_cached_text;
+  WDL_TypedBuf<int> ml_dline_starts;
+  WDL_TypedBuf<int> ml_dline_ends;
+  int ml_cached_w;
+
   __SWELL_editControlState() : cursor_pos(0), sel1(-1), sel2(-1),
     cursor_state(0), cursor_timer(0), scroll_x(0), scroll_y(0),
     max_height(0), max_width(0), cache_linelen_w(0),
-    cache_linelen_strlen(0), m_disable_contextmenu(false) {}
+    cache_linelen_strlen(0), m_disable_contextmenu(false),
+    ml_cached_w(-1) {}
 };
 
 class SWELL_ListView_Row {

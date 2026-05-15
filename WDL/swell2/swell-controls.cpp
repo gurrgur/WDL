@@ -536,7 +536,22 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_SETTEXT: {
       const char *s = (const char *)lParam;
-      hwnd->m_title.Set(s ? s : "");
+      if (s && (hwnd->m_style & ES_MULTILINE)) {
+        // strip \r, normalize \r\n to \n
+        WDL_FastString clean;
+        for (const char *p = s; *p; p++) {
+          if (*p == '\r') {
+            if (*(p+1) == '\n') continue; // skip \r before \n
+            clean.Append("\n", 1);
+          } else {
+            char cb[2] = { *p, 0 };
+            clean.Append(cb);
+          }
+        }
+        hwnd->m_title.Set(clean.Get());
+      } else {
+        hwnd->m_title.Set(s ? s : "");
+      }
       if (st) { st->cursor_pos = 0; st->sel1 = -1; st->sel2 = -1; }
       InvalidateRect(hwnd, NULL, FALSE);
       notify_parent(hwnd, EN_CHANGE);
@@ -835,57 +850,82 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       if (multiline)
       {
-        // Build line-offset arrays from newlines
-        WDL_TypedBuf<int> lineStarts;
-        WDL_TypedBuf<int> lineEnds;
+        // Build stripped text (remove \r, treat \r\n or \n as line break)
+        WDL_FastString stripped;
         {
+          const char *s = txt;
+          int n = tlen;
+          for (int i = 0; i < n; i++) {
+            if (s[i] == '\r') {
+              if (i+1 < n && s[i+1] == '\n') { stripped.Append("\n"); i++; }
+              else { stripped.Append("\n"); }
+            } else {
+              char cbuf[2] = { s[i], 0 };
+              stripped.Append(cbuf);
+            }
+          }
+          txt = stripped.Get();
+          tlen = (int)stripped.GetLength();
+        }
+
+        int scrWidth = tr.right - tr.left;
+
+        // Recompute cached display lines if text or width changed
+        if (!st || st->ml_cached_text.GetLength() != tlen ||
+            strcmp(st->ml_cached_text.Get(), txt) != 0 ||
+            st->ml_cached_w != scrWidth)
+        {
+          st->ml_cached_text.Set(txt);
+          st->ml_cached_w = scrWidth;
+          st->ml_dline_starts.Resize(0, false);
+          st->ml_dline_ends.Resize(0, false);
+
+          // Build line-offset arrays from newlines
+          WDL_TypedBuf<int> lineStarts, lineEnds;
           lineStarts.Add(0);
           for (int i = 0; i < tlen; i++) {
-            if (txt[i] == '\n') {
-              lineEnds.Add(i);
-              lineStarts.Add(i+1);
-            }
+            if (txt[i] == '\n') { lineEnds.Add(i); lineStarts.Add(i+1); }
           }
           lineEnds.Add(tlen);
-        }
 
-        // Word-wrap: split logical lines into display lines if too wide
-        struct DispLine { int start_off; int end_off; };
-        WDL_TypedBuf<DispLine> dlines;
-        int scrWidth = tr.right - tr.left;
-        for (int li = 0; li < lineStarts.GetSize(); li++) {
-          int start_off = lineStarts.Get()[li];
-          int end_off = lineEnds.Get()[li];
-          int pos = start_off;
-          while (pos < end_off) {
-            int remain = end_off - pos;
-            RECT meas = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt + pos, remain, &meas, DT_CALCRECT | DT_LEFT);
-            if (meas.right - meas.left <= scrWidth) {
-              DispLine dl = { pos, end_off };
-              dlines.Add(dl);
-              break;
+          // Word-wrap: split logical lines into display lines if too wide
+          for (int li = 0; li < lineStarts.GetSize(); li++) {
+            int start_off = lineStarts.Get()[li];
+            int end_off = lineEnds.Get()[li];
+            int pos = start_off;
+            while (pos < end_off) {
+              int remain = end_off - pos;
+              RECT meas = { 0, 0, 0, 0 };
+              SWELL_DrawText(hdc, txt + pos, remain, &meas, DT_CALCRECT | DT_LEFT);
+              if (meas.right - meas.left <= scrWidth) {
+                st->ml_dline_starts.Add(pos);
+                st->ml_dline_ends.Add(end_off);
+                break;
+              }
+              // binary search for wrap point
+              int lo = pos + 1, hi = end_off;
+              while (lo < hi) {
+                int mid = (lo + hi + 1) / 2;
+                RECT mr = { 0, 0, 0, 0 };
+                SWELL_DrawText(hdc, txt + pos, mid - pos, &mr, DT_CALCRECT | DT_LEFT);
+                if (mr.right - mr.left <= scrWidth) lo = mid;
+                else hi = mid - 1;
+              }
+              int wrap = lo;
+              if (wrap <= pos) wrap = pos + 1;
+              st->ml_dline_starts.Add(pos);
+              st->ml_dline_ends.Add(wrap);
+              pos = wrap;
+              if (pos < end_off && txt[pos] == ' ') pos++;
             }
-            // binary search for wrap point
-            int lo = pos + 1, hi = end_off;
-            while (lo < hi) {
-              int mid = (lo + hi + 1) / 2;
-              RECT mr = { 0, 0, 0, 0 };
-              SWELL_DrawText(hdc, txt + pos, mid - pos, &mr, DT_CALCRECT | DT_LEFT);
-              if (mr.right - mr.left <= scrWidth) lo = mid;
-              else hi = mid - 1;
-            }
-            int wrap = lo;
-            if (wrap <= pos) wrap = pos + 1;
-            DispLine dl = { pos, wrap };
-            dlines.Add(dl);
-            pos = wrap;
-            if (pos < end_off && txt[pos] == ' ') pos++;
           }
         }
 
+        int ndlines = st ? st->ml_dline_starts.GetSize() : 0;
+        if (ndlines == 0) ndlines = 1; // at least one empty line
+
         // Scroll
-        int totalH = (int)dlines.GetSize() * rowH;
+        int totalH = ndlines * rowH;
         int viewH = tr.bottom - tr.top;
         if (st) {
           if (st->scroll_y > totalH - viewH) st->scroll_y = totalH - viewH;
@@ -895,9 +935,10 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         // Char-to-display-line map
         WDL_TypedBuf<int> char2dline; char2dline.Resize(tlen + 1, false);
-        { int di = 0;
+        if (st && ndlines > 0) {
+          int di = 0;
           for (int ci = 0; ci <= tlen; ci++) {
-            while (di + 1 < dlines.GetSize() && ci >= dlines.Get()[di].end_off) di++;
+            while (di + 1 < ndlines && ci >= st->ml_dline_ends.Get()[di]) di++;
             char2dline.Get()[ci] = di;
           }
         }
@@ -912,29 +953,31 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, enabled ? (COLORREF)th.fg_text : (COLORREF)th.fg_text_disabled);
-        for (int di = 0; di < dlines.GetSize(); di++) {
-          DispLine &dl = dlines.Get()[di];
+        for (int di = 0; di < ndlines; di++) {
+          int d0 = st->ml_dline_starts.Get()[di];
+          int d1 = st->ml_dline_ends.Get()[di];
           int ry = tr.top + di * rowH - scrollY;
           if (ry + rowH < tr.top) continue;
           if (ry >= tr.bottom) break;
-          if (dl.start_off < dl.end_off) {
+          if (d0 < d1) {
             RECT lr = { tr.left, ry, tr.right, ry + rowH };
-            SWELL_DrawText(hdc, txt + dl.start_off, dl.end_off - dl.start_off, &lr, DT_LEFT | DT_TOP | DT_NOPREFIX);
+            SWELL_DrawText(hdc, txt + d0, d1 - d0, &lr, DT_LEFT | DT_TOP | DT_NOPREFIX);
           }
         }
 
         // Selection highlight
-        if (sel2 > sel1 && sel1 >= 0) {
+        if (sel2 > sel1 && sel1 >= 0 && ndlines > 0) {
           int dl0 = char2dline.Get()[sel1];
           int dl1 = char2dline.Get()[sel2];
-          for (int di = dl0; di <= dl1 && di < dlines.GetSize(); di++) {
-            DispLine &dl = dlines.Get()[di];
-            int selLineStart = (di == dl0) ? sel1 : dl.start_off;
-            int selLineEnd = (di == dl1) ? sel2 : dl.end_off;
+          for (int di = dl0; di <= dl1 && di < ndlines; di++) {
+            int d0 = st->ml_dline_starts.Get()[di];
+            int d1 = st->ml_dline_ends.Get()[di];
+            int selLineStart = (di == dl0) ? sel1 : d0;
+            int selLineEnd = (di == dl1) ? sel2 : d1;
             if (selLineStart >= selLineEnd) continue;
             int ry = tr.top + di * rowH - scrollY;
             RECT preR = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt + dl.start_off, selLineStart - dl.start_off, &preR, DT_CALCRECT | DT_LEFT);
+            SWELL_DrawText(hdc, txt + d0, selLineStart - d0, &preR, DT_CALCRECT | DT_LEFT);
             RECT lr = { tr.left, ry, tr.right, ry + rowH };
             RECT selR = lr;
             selR.left += preR.right;
@@ -951,14 +994,14 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         // Caret
-        if (st && st->cursor_state && focused) {
+        if (st && st->cursor_state && focused && ndlines > 0) {
           int cpos = st->cursor_pos;
           if (cpos > tlen) cpos = tlen;
           int cdline = char2dline.Get()[cpos];
-          if (cdline >= 0 && cdline < dlines.GetSize()) {
-            DispLine &dl = dlines.Get()[cdline];
+          if (cdline >= 0 && cdline < ndlines) {
+            int d0 = st->ml_dline_starts.Get()[cdline];
             RECT preR = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt + dl.start_off, cpos - dl.start_off, &preR, DT_CALCRECT | DT_LEFT);
+            SWELL_DrawText(hdc, txt + d0, cpos - d0, &preR, DT_CALCRECT | DT_LEFT);
             int cx = tr.left + (preR.right - preR.left);
             int cy = tr.top + cdline * rowH - scrollY;
             if (cy >= tr.top && cy + rowH <= tr.bottom) {
