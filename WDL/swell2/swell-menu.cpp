@@ -565,8 +565,10 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
                            MenuWindow *parent_mw, int parent_item_y);
 
 // ---------------------------------------------------------------------------
-// Strip Win32 & accelerator prefix for display.
-// "&File" -> "File", "Save && Exit" -> "Save & Exit"
+// Strip Win32 & accelerator prefix for display, stopping at \t shortcut sep.
+// "&File\tCtrl+O" -> "File", "Save && Exit" -> "Save & Exit"
+// Returns label text before \t (or full string if no \t). Any text after \t
+// is the shortcut — use menu_get_shortcut() to retrieve it.
 // Not thread-safe; only call from main thread (as all menu code is).
 // ---------------------------------------------------------------------------
 static const char *menu_strip_accel(const char *src, WDL_FastString &buf)
@@ -574,6 +576,7 @@ static const char *menu_strip_accel(const char *src, WDL_FastString &buf)
   buf.Set("");
   if (!src) return "";
   while (*src) {
+    if (*src == '\t') break;
     if (*src == '&') {
       src++;
       if (*src == '&') { buf.Append("&", 1); src++; }
@@ -584,6 +587,15 @@ static const char *menu_strip_accel(const char *src, WDL_FastString &buf)
     }
   }
   return buf.Get();
+}
+
+// Return the shortcut text after \t in a menu label, or nullptr if none.
+// "&File\tCtrl+O" -> "Ctrl+O"
+static const char *menu_get_shortcut(const char *src)
+{
+  if (!src) return nullptr;
+  const char *p = strstr(src, "\t");
+  return p ? p + 1 : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -598,21 +610,38 @@ static void menu_measure(MenuWindow *mw)
   free(mw->item_y);
   mw->item_y = (int *)malloc(sizeof(int) * (n + 1));
 
-  // Compute max text width
-  int maxTextW = 0;
+  // Compute max label and shortcut widths
+  int maxLabelW = 0, maxShortcutW = 0;
   WDL_FastString stripBuf;
   for (int i = 0; i < n; i++) {
     SWELL_MenuItem *it = mw->menu->m_items.Get(i);
     if (!it || (it->m_flags & MF_SEPARATOR)) continue;
-    const char *txt = menu_strip_accel(it->m_name.Get(), stripBuf);
-    if (!txt || !txt[0]) continue;
-    SkRect bounds;
-    mw->font.measureText(txt, strlen(txt), SkTextEncoding::kUTF8, &bounds);
-    int tw = (int)(bounds.width() + 0.5f);
-    if (tw > maxTextW) maxTextW = tw;
+    const char *raw = it->m_name.Get();
+    if (!raw || !raw[0]) continue;
+
+    const char *label = menu_strip_accel(raw, stripBuf);
+    if (label && label[0]) {
+      SkRect bounds;
+      mw->font.measureText(label, strlen(label), SkTextEncoding::kUTF8, &bounds);
+      int tw = (int)(bounds.width() + 0.5f);
+      if (tw > maxLabelW) maxLabelW = tw;
+    }
+
+    const char *shortcut = menu_get_shortcut(raw);
+    if (shortcut && shortcut[0]) {
+      SkRect bounds;
+      mw->font.measureText(shortcut, strlen(shortcut), SkTextEncoding::kUTF8, &bounds);
+      int tw = (int)(bounds.width() + 0.5f);
+      if (tw > maxShortcutW) maxShortcutW = tw;
+    }
   }
 
-  mw->w = menu_lpad() + maxTextW + menu_rpad();
+  if (maxShortcutW > 0) {
+    const int gap = g_swell_theme.padding_menu_item_h;
+    mw->w = menu_lpad() + maxLabelW + gap + maxShortcutW + gap;
+  } else {
+    mw->w = menu_lpad() + maxLabelW + menu_rpad();
+  }
   if (mw->w < menu_min_w()) mw->w = menu_min_w();
 
   int y = menu_vpad();
@@ -764,6 +793,28 @@ static void menu_draw(MenuWindow *mw)
 
         c->drawSimpleText(txt, strlen(txt), SkTextEncoding::kUTF8,
                           (float)menu_lpad(), ty, mw->font, tp);
+      }
+
+      // Shortcut text (right-aligned, skip if submenu to avoid arrow overlap)
+      if (!is_popup) {
+        const char *shortcut = menu_get_shortcut(raw_txt);
+        if (shortcut && shortcut[0]) {
+          SkRect sb;
+          mw->font.measureText(shortcut, strlen(shortcut), SkTextEncoding::kUTF8, &sb);
+          float sw = sb.width();
+          float sx = (float)(mw->w - g_swell_theme.padding_menu_item_h - sw);
+
+          SkPaint sp;
+          sp.setAntiAlias(true);
+          sp.setColor(textCol);
+
+          SkFontMetrics fm;
+          mw->font.getMetrics(&fm);
+          float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f;
+
+          c->drawSimpleText(shortcut, strlen(shortcut), SkTextEncoding::kUTF8,
+                            sx, ty, mw->font, sp);
+        }
       }
     }
 
