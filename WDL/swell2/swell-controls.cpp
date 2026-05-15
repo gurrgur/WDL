@@ -2058,14 +2058,19 @@ static void tv_send_selchange(HWND hwnd, HTREEITEM olditem, HTREEITEM newitem, U
 {
   HWND par = GetParent(hwnd);
   if (!par) return;
-  NMTREEVIEW nm = {};
-  nm.hdr.hwndFrom = hwnd;
-  nm.hdr.idFrom   = hwnd->m_id;
-  nm.hdr.code     = TVN_SELCHANGED;
-  nm.action       = action;
-  if (olditem) { nm.itemOld.hItem = olditem; nm.itemOld.mask = TVIF_HANDLE | TVIF_PARAM; nm.itemOld.lParam = olditem->m_param; }
-  if (newitem) { nm.itemNew.hItem = newitem; nm.itemNew.mask = TVIF_HANDLE | TVIF_PARAM; nm.itemNew.lParam = newitem->m_param; }
-  SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
+  static int __rent;
+  if (!__rent) {
+    __rent++;
+    NMTREEVIEW nm = {};
+    nm.hdr.hwndFrom = hwnd;
+    nm.hdr.idFrom   = hwnd->m_id;
+    nm.hdr.code     = TVN_SELCHANGED;
+    nm.action       = action;
+    if (olditem) { nm.itemOld.hItem = olditem; nm.itemOld.mask = TVIF_HANDLE | TVIF_PARAM; nm.itemOld.lParam = olditem->m_param; }
+    if (newitem) { nm.itemNew.hItem = newitem; nm.itemNew.mask = TVIF_HANDLE | TVIF_PARAM; nm.itemNew.lParam = newitem->m_param; }
+    SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
+    __rent--;
+  }
 }
 
 static void tv_send_mouse_notify(HWND hwnd, UINT code, HTREEITEM item, int x, int y)
