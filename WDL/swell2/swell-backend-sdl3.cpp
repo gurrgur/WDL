@@ -537,6 +537,24 @@ static HWND hittest_child(HWND parent, float x, float y)
   return NULL;
 }
 
+static void sdl_window_point_to_client(HWND hwnd, float *x, float *y)
+{
+  if (!hwnd || !x || !y) return;
+
+  HWND top = hwnd;
+  while (top->m_parent) top = (HWND)top->m_parent;
+
+  int nc_left = 0, nc_top = 0;
+  get_nc_offsets(top, &nc_left, &nc_top);
+  *x -= nc_left;
+  *y -= nc_top;
+
+  for (HWND p = hwnd; p && p->m_parent; p = (HWND)p->m_parent) {
+    *x -= p->m_position.left;
+    *y -= p->m_position.top;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // swell_sdlEventHandler: SDL event -> SWELL message translation
 // ---------------------------------------------------------------------------
@@ -845,20 +863,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         if (down && IsWindowEnabled(target))
           SendMessage(target, WM_MOUSEACTIVATE, 0, 0);
       } else if (cap) {
-        // Captured control — translate to top-level client coords first
-        HWND toplevel = cap;
-        while (toplevel->m_parent) toplevel = (HWND)toplevel->m_parent;
-        int nc_left = 0, nc_top = 0;
-        get_nc_offsets(toplevel, &nc_left, &nc_top);
-        mx -= nc_left;
-        my -= nc_top;
-        // Convert to cap-local coords
-        HWND p = cap;
-        while (p && p->m_parent) {
-          mx -= p->m_position.left;
-          my -= p->m_position.top;
-          p = (HWND)p->m_parent;
-        }
+        sdl_window_point_to_client(cap, &mx, &my);
       }
       if (!target) break;
 
@@ -919,6 +924,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
             my = cy;
           }
         }
+      } else {
+        sdl_window_point_to_client(cap, &mx, &my);
       }
       if (target) {
         // NC area mouse move
