@@ -511,17 +511,17 @@ static void get_nc_offsets(HWND hwnd, int *nc_left_out, int *nc_top_out)
 // Mouse hit-test: find deepest visible child at (x,y) in CLIENT coords
 // ---------------------------------------------------------------------------
 
-static HWND hittest_child(HWND parent, float x, float y)
+static HWND hittest_child(HWND parent, float *x, float *y)
 {
-  if (!parent) return NULL;
+  if (!parent || !x || !y) return NULL;
   int n = parent->m_children.GetSize();
   for (int i = n - 1; i >= 0; i--) {
     HWND ch = parent->m_children.Get(i);
     if (!ch || !ch->m_visible) continue;
     RECT cr = ch->m_position;
-    if (x >= cr.left && x < cr.right && y >= cr.top && y < cr.bottom) {
-      float cx = x - cr.left;
-      float cy = y - cr.top;
+    if (*x >= cr.left && *x < cr.right && *y >= cr.top && *y < cr.bottom) {
+      float cx = *x - cr.left;
+      float cy = *y - cr.top;
       // Apply NCCALCSIZE (matching windowfrompoint_recurse) so the
       // coordinate passed to the next recursion level is client-relative.
       int cw = cr.right - cr.left;
@@ -530,7 +530,9 @@ static HWND hittest_child(HWND parent, float x, float y)
       SendMessage(ch, WM_NCCALCSIZE, FALSE, (LPARAM)&ncp);
       cx -= ncp.rgrc[0].left;
       cy -= ncp.rgrc[0].top;
-      HWND deeper = hittest_child(ch, cx, cy);
+      HWND deeper = hittest_child(ch, &cx, &cy);
+      *x = cx;
+      *y = cy;
       return deeper ? deeper : ch;
     }
   }
@@ -850,11 +852,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         }
 
         target = e->hwnd;
-        HWND child = hittest_child(e->hwnd, cx, cy);
+        HWND child = hittest_child(e->hwnd, &cx, &cy);
         if (child) {
-          // coords relative to child's client origin
-          cx -= child->m_position.left;
-          cy -= child->m_position.top;
           target = child;
         }
         mx = cx;
@@ -914,10 +913,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
             target = e->hwnd;
           } else {
             target = e->hwnd;
-            HWND child = hittest_child(e->hwnd, cx, cy);
+            HWND child = hittest_child(e->hwnd, &cx, &cy);
             if (child) {
-              cx -= child->m_position.left;
-              cy -= child->m_position.top;
               target = child;
             }
             mx = cx;
@@ -953,7 +950,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         float cx = wmx - nc_left;
         float cy = wmy - nc_top;
         target = e->hwnd;
-        HWND child = hittest_child(e->hwnd, cx, cy);
+        HWND child = hittest_child(e->hwnd, &cx, &cy);
         if (child) target = child;
       }
       if (!target) break;
