@@ -2319,7 +2319,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (item->mask & TVIF_TEXT && item->pszText && item->cchTextMax > 0)
         lstrcpyn(item->pszText, h->m_value.Get(), item->cchTextMax);
       if (item->mask & TVIF_PARAM) item->lParam = h->m_param;
-      if (item->mask & TVIF_STATE) item->state = h->m_state | (h == st->m_sel ? TVIS_SELECTED : 0);
+      if (item->mask & TVIF_STATE) item->state = (h == st->m_sel ? TVIS_SELECTED : 0) | (h->m_state & TVIS_EXPANDED);
       if (item->mask & TVIF_CHILDREN) item->cChildren = h->m_children.GetSize() > 0 || h->m_haschildren ? 1 : 0;
       return TRUE;
     }
