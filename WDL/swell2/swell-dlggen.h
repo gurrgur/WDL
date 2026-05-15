@@ -94,7 +94,9 @@ struct SWELL_DlgResourceEntry
 #define WS_EX_STATICEDGE 0
 #define WS_EX_RIGHT 0
 #define SS_CENTERIMAGE 0                                       
+#ifndef WS_CLIPCHILDREN
 #define WS_CLIPCHILDREN 0
+#endif
 
 // more ignore flags for vc11+
 #define LVS_ALIGNLEFT 0 /* 0x0800 */

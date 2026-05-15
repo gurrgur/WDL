@@ -1947,6 +1947,22 @@ static void tv_send_selchange(HWND hwnd, HTREEITEM olditem, HTREEITEM newitem, U
   SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
 }
 
+static void tv_send_mouse_notify(HWND hwnd, UINT code, HTREEITEM item, int x, int y)
+{
+  HWND par = GetParent(hwnd);
+  if (!par) return;
+  NMMOUSE nm = {};
+  nm.hdr.hwndFrom = hwnd;
+  nm.hdr.idFrom = hwnd->m_id;
+  nm.hdr.code = code;
+  nm.dwItemSpec = (DWORD_PTR)item;
+  nm.dwItemData = item ? (DWORD_PTR)item->m_param : 0;
+  nm.pt.x = x;
+  nm.pt.y = y;
+  nm.dwHitInfo = item ? TVHT_ONITEM : TVHT_NOWHERE;
+  SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
+}
+
 // find parent of item (returns NULL if root-level); also returns index
 static HTREEITEM tv_find_parent(HTREEITEM root, HTREEITEM target, int *idx_out)
 {
@@ -1969,6 +1985,20 @@ static int tv_visible_count(HTREEITEM node)
       count += tv_visible_count(ch);
   }
   return count;
+}
+
+static int tv_get_depth(HTREEITEM root, HTREEITEM item)
+{
+  int depth = 0;
+  HTREEITEM cur = item;
+  while (cur) {
+    int idx = -1;
+    HTREEITEM par = tv_find_parent(root, cur, &idx);
+    if (!par || par == root) break;
+    depth++;
+    cur = par;
+  }
+  return depth;
 }
 
 // enumerate visible items into a flat list
@@ -2146,7 +2176,15 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int row = y / rh;
       if (row >= 0 && row < items.GetSize()) {
         hti->hItem = items.Get(row);
-        hti->flags = TVHT_ONITEM;
+        const int indent = rh;
+        const int expw = (rh / 4) * 2 + 3;
+        int base = tv_get_depth(st->m_root, hti->hItem) * indent;
+        if (hti->pt.x >= base && hti->pt.x < base + expw)
+          hti->flags = TVHT_ONITEMBUTTON;
+        else if (hti->pt.x >= base + expw)
+          hti->flags = TVHT_ONITEMLABEL;
+        else
+          hti->flags = TVHT_ONITEMINDENT;
         return (LRESULT)hti->hItem;
       }
       hti->hItem = NULL; hti->flags = TVHT_NOWHERE;
@@ -2347,7 +2385,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st) return 0;
       SetFocus(hwnd);
       int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
-      int indent = 16;
+      int indent = rh;
+      int expw = (rh / 4) * 2 + 3;
       WDL_PtrList<HTREEITEM__> items;
       tv_flatten(st->m_root, items);
       int my = GET_Y_LPARAM(lParam);
@@ -2355,14 +2394,9 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int row = (my + st->m_scroll_y) / rh;
       if (row >= 0 && row < items.GetSize()) {
         HTREEITEM item = items.Get(row);
-        // check expand arrow (first indent area)
-        // compute depth
-        int depth = 0;
-        HTREEITEM p = item;
-        while ((p = (HTREEITEM)(void *)1)) { // just use mx
-          break;
-        }
-        if (mx < indent && (item->m_children.GetSize() > 0 || item->m_haschildren)) {
+        int base = tv_get_depth(st->m_root, item) * indent;
+        if (mx >= base && mx < base + expw &&
+            (item->m_children.GetSize() > 0 || item->m_haschildren)) {
           SendMessage(hwnd, TVM_EXPAND, TVE_TOGGLE, (LPARAM)item);
         } else {
           HTREEITEM old = st->m_sel;
@@ -2372,7 +2406,22 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             InvalidateRect(hwnd, NULL, FALSE);
           }
         }
+        if (msg == WM_LBUTTONDBLCLK)
+          tv_send_mouse_notify(hwnd, NM_DBLCLK, item, mx, my);
       }
+      return 0;
+    }
+
+    case WM_LBUTTONUP: {
+      if (!st) return 0;
+      int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+      WDL_PtrList<HTREEITEM__> items;
+      tv_flatten(st->m_root, items);
+      int my = GET_Y_LPARAM(lParam);
+      int mx = GET_X_LPARAM(lParam);
+      int row = (my + st->m_scroll_y) / rh;
+      HTREEITEM item = row >= 0 && row < items.GetSize() ? items.Get(row) : NULL;
+      tv_send_mouse_notify(hwnd, NM_CLICK, item, mx, my);
       return 0;
     }
 
@@ -2415,7 +2464,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       WDL_PtrList<HTREEITEM__> items;
       tv_flatten(st->m_root, items);
 
-      int indent = 16;
+      int indent = rh;
+      int expw = (rh / 4) * 2 + 3;
       for (int i = 0; i < items.GetSize(); i++) {
         int ry = cr.top + i * rh - st->m_scroll_y;
         if (ry + rh < cr.top) continue;
@@ -2424,19 +2474,10 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         // compute depth by finding parent chain
         // rough: just indent proportional to scrolled x
-        int depth = 0;
-        {
-          HTREEITEM cur = item;
-          while (true) {
-            int didx = -1;
-            HTREEITEM p = tv_find_parent(st->m_root, cur, &didx);
-            if (!p || p == st->m_root) break;
-            depth++;
-            cur = p;
-          }
-        }
+        int depth = tv_get_depth(st->m_root, item);
 
-        int x = cr.left + depth * indent;
+        int base = cr.left + depth * indent;
+        int x = base + expw;
         bool sel = (item == st->m_sel);
 
         if (sel) {
@@ -2449,7 +2490,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         // Expand chevron
         if (item->m_children.GetSize() > 0 || item->m_haschildren) {
-          int ax = x - indent/2;
+          int ax = base + expw / 2;
           int ay = ry + rh/2;
           COLORREF arrowc = sel && focused ? (COLORREF)th.fg_on_accent
                                             : (COLORREF)th.fg_text_dim;
@@ -2921,7 +2962,7 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           SendMessage(hwnd, TCM_SETCURSEL, i, 0);
           return 0;
         }
-        x += tw + 4;
+        x += tw + 2;
       }
       ReleaseDC(hwnd, hdc);
       return 0;
@@ -2951,6 +2992,9 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       TEXTMETRIC tmtab; GetTextMetrics(hdc, &tmtab);
       int avgcwp = tmtab.tmAveCharWidth > 0 ? tmtab.tmAveCharWidth : 8;
       const int r = thm.corner_radius;
+      const int bw = thm.border_width > 0 ? thm.border_width : 1;
+      // Baseline where tab strip meets content area.
+      const int by = cr.top + tabH;
       int x = cr.left + thm.padding_button_h;
       RECT selR = { 0, 0, 0, 0 };
       for (int i = 0; i < st->m_tabs.GetSize(); i++) {
@@ -2958,35 +3002,38 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int tw = (int)strlen(s) * avgcwp + thm.padding_button_h * 2;
         bool sel = (i == st->m_curtab);
 
-        RECT tr = { x, cr.top + 2, x + tw, cr.top + tabH };
+        // Inactive tabs sit a few px lower so the active tab feels raised.
+        const int topInset = sel ? 2 : 5;
+        RECT tr = { x, cr.top + topInset, x + tw, by };
 
-        // Draw tab shape. Active tab: filled shape w/ top rounded corners,
-        // flat open bottom (no border line). Inactive: subtle rounded pill.
-        HBRUSH tbbr = CreateSolidBrush(sel ? (COLORREF)thm.bg_tab_active
-                                            : (COLORREF)thm.bg_tab);
-        HGDIOBJ otb = SelectObject(hdc, tbbr);
-        HGDIOBJ nul = SelectObject(hdc, GetStockObject(NULL_PEN));
-        RoundRect(hdc, tr.left, tr.top, tr.right, tr.bottom + r, r*2, r*2);
-        if (sel) {
-          // Mask bottom rounded corners to create flat bottom edge
-          Rectangle(hdc, tr.left, tr.bottom, tr.right + 1, tr.bottom + r + 1);
-        }
-        SelectObject(hdc, nul);
-        SelectObject(hdc, otb); DeleteObject(tbbr);
+        // Top corners rounded with theme corner_radius, bottom flat.
+        // Active tab extends 1px below baseline so its border overlaps the
+        // strip's bottom border, masking it under the tab.
+        const int shapeBottom = sel ? by + bw : by;
+        HBRUSH fillBr = CreateSolidBrush(sel ? (COLORREF)thm.bg_tab_active
+                                              : (COLORREF)thm.bg_tab);
+        HPEN borderPen = CreatePen(PS_SOLID, bw,
+                                   sel ? (COLORREF)thm.border_strong
+                                       : (COLORREF)thm.border);
+        HGDIOBJ ob = SelectObject(hdc, fillBr);
+        HGDIOBJ op = SelectObject(hdc, borderPen);
+        SWELL_DrawRoundRectEx(hdc, tr.left, tr.top, tr.right, shapeBottom,
+                              r, r, 0, 0);
+        SelectObject(hdc, op); DeleteObject(borderPen);
+        SelectObject(hdc, ob); DeleteObject(fillBr);
 
         SetTextColor(hdc, sel ? (COLORREF)thm.fg_text
                                : (COLORREF)thm.fg_text_dim);
         SWELL_DrawText(hdc, s, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         if (sel) selR = tr;
-        x += tw + 4;
+        x += tw + 2;
       }
 
       // Bottom border under the tab strip, skipping active tab so it
       // visually connects to the content area below.
-      HPEN bp = CreatePen(PS_SOLID, thm.border_width, (COLORREF)thm.border);
+      HPEN bp = CreatePen(PS_SOLID, bw, (COLORREF)thm.border);
       HGDIOBJ obp = SelectObject(hdc, bp);
-      const int by = cr.top + tabH;
       if (selR.left < selR.right) {
         MoveToEx(hdc, cr.left, by, NULL);
         LineTo(hdc, selR.left, by);

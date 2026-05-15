@@ -716,6 +716,7 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define WS_CHILD        0x40000000L
 #define WS_DISABLED     0x08000000L
 #define WS_CLIPSIBLINGS 0x04000000L
+#define WS_CLIPCHILDREN 0x01000000L
 #define WS_VISIBLE      0x02000000L // only used by GetWindowLong(GWL_STYLE) -- not settable
 #define WS_CAPTION      0x00C00000L
 #define WS_VSCROLL      0x00200000L
