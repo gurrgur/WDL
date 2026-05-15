@@ -232,8 +232,9 @@ static INT_PTR swellMessageBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
       const int sc10 = SWELL_UI_SCALE(10);
       const int sc8  = SWELL_UI_SCALE(8);
-      labsize.top += sc10;
-      labsize.bottom += sc10 + sc8;
+      const int vpad = sc10 + sc8;
+      labsize.top += vpad;
+      labsize.bottom += vpad;
 
       {
         RECT vp;
@@ -274,7 +275,7 @@ static INT_PTR swellMessageBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
       for (int i = 0; i < p->nbuttons; i++) {
         const int bid = p->buttons[i];
         SWELL_MakeButton(bid == p->default_id, mbidtostr(bid), bid,
-                         xpos, labsize.bottom,
+                         xpos, vpad + labsize.bottom,
                          button_sizes[i], button_height, 0);
         xpos += button_sizes[i] + bspace;
       }
@@ -283,11 +284,11 @@ static INT_PTR swellMessageBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
       SetWindowPos(hwnd, NULL, 0, 0,
                    labsize.right + sc8 * 2,
-                   labsize.bottom + button_height + sc8,
+                   vpad + labsize.bottom + button_height + sc8,
                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE);
 
       if (lab)
-        SetWindowPos(lab, NULL, sc8, 0, labsize.right, labsize.bottom,
+        SetWindowPos(lab, NULL, sc8, vpad, labsize.right, labsize.bottom,
                      SWP_NOACTIVATE | SWP_NOZORDER);
 
       SetFocus(GetDlgItem(hwnd, p->default_id));
