@@ -614,6 +614,75 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
   return result;
 }
 
+static void calcScroll(int wh, int totalw, int scroll_x, int *thumbsz, int *thumbpos)
+{
+  if (totalw <= 0) { *thumbsz = wh; *thumbpos = 0; return; }
+  const double isz = wh / (double) totalw;
+  int sz = (int)(wh * isz + 0.5);
+  if (sz < g_swell_theme.scrollbar_min_thumb_height)
+    sz = g_swell_theme.scrollbar_min_thumb_height;
+
+  *thumbpos = (int)(scroll_x * isz + 0.5);
+  if (*thumbpos >= wh - sz) *thumbpos = wh - sz;
+
+  *thumbsz = sz;
+}
+
+static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int scroll_x)
+{
+  if (totalw <= vieww) return;
+  const swell_theme &th = g_swell_theme;
+
+  int thumbsz, thumbpos;
+  calcScroll(vieww, totalw, scroll_x, &thumbsz, &thumbpos);
+
+  HBRUSH br  = CreateSolidBrush((COLORREF)th.scrollbar_thumb);
+  HBRUSH br2 = CreateSolidBrush((COLORREF)th.bg_scrollbar);
+  RECT fr = { cr.left, cr.bottom - th.scrollbar_width, cr.left + thumbpos, cr.bottom };
+  if (fr.right > fr.left) FillRect(hdc, &fr, br2);
+
+  fr.left = fr.right;
+  fr.right = fr.left + thumbsz;
+  if (fr.right > fr.left) FillRect(hdc, &fr, br);
+
+  fr.left = fr.right;
+  fr.right = cr.right;
+  if (fr.right > fr.left) FillRect(hdc, &fr, br2);
+
+  DeleteObject(br);
+  DeleteObject(br2);
+}
+
+static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int scroll_y)
+{
+  if (totalh <= viewh) return;
+  const swell_theme &th = g_swell_theme;
+
+  int thumbsz, thumbpos;
+  calcScroll(viewh, totalh, scroll_y, &thumbsz, &thumbpos);
+
+  HBRUSH br  = CreateSolidBrush((COLORREF)th.scrollbar_thumb);
+  HBRUSH br2 = CreateSolidBrush((COLORREF)th.bg_scrollbar);
+  RECT fr = { cr.right - th.scrollbar_width, cr.top, cr.right, cr.top + thumbpos };
+  if (fr.bottom > fr.top) FillRect(hdc, &fr, br2);
+
+  fr.top = fr.bottom;
+  fr.bottom = fr.top + thumbsz;
+  if (fr.bottom > fr.top) FillRect(hdc, &fr, br);
+
+  fr.top = fr.bottom;
+  fr.bottom = cr.bottom;
+  if (fr.bottom > fr.top) {
+    FillRect(hdc, &fr, br2);
+
+    fr.top = fr.bottom - 1;
+    FillRect(hdc, &fr, br2);
+  }
+
+  DeleteObject(br);
+  DeleteObject(br2);
+}
+
 LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   __SWELL_editControlState *st =

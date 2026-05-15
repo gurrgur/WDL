@@ -512,6 +512,7 @@ struct swell_theme {
   int menu_separator_height;
   int tab_height;
   int scrollbar_width;
+  int scrollbar_min_thumb_height;
   int checkbox_size;
   int radio_size;
 

@@ -2125,6 +2125,7 @@ static void swell_theme_populate_metrics(swell_theme &t)
   t.menu_separator_height   = 8;
   t.tab_height              = 30;
   t.scrollbar_width         = 14;
+  t.scrollbar_min_thumb_height = 4;
   t.checkbox_size           = 18;
   t.radio_size              = 18;
 
@@ -2157,7 +2158,7 @@ void swell_theme_rescale()
   SC(padding_listheader_h); SC(padding_listheader_v);
   SC(button_min_h); SC(edit_min_h);
   SC(menubar_height); SC(menu_item_height); SC(menu_separator_height);
-  SC(tab_height); SC(scrollbar_width);
+  SC(tab_height); SC(scrollbar_width); SC(scrollbar_min_thumb_height);
   SC(checkbox_size); SC(radio_size);
   SC(default_font_size); SC(small_font_size);
   #undef SC
