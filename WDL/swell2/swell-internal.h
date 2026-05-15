@@ -23,6 +23,7 @@
 #include <core/SkPaint.h>
 #include <core/SkBitmap.h>
 #include <core/SkImage.h>
+#include <core/SkFont.h>
 
 #define WDL_FastString WDL_String
 
@@ -532,6 +533,7 @@ void swell_theme_rescale();        // apply g_swell_ui_scale to metrics
 
 // swell-gdi.cpp internal
 void swell_DirtyContext(HDC__ *ctx, int l, int t, int r, int b);
+SkFont swell_make_skfont_from_hdc(HDC hdc);
 void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     int bmout_xpos, int bmout_ypos, bool forceref);
 

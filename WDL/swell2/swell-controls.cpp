@@ -534,6 +534,7 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
   HDC hdc = GetDC(hwnd);
   HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
   if (f) SelectObject(hdc, f);
+  SkFont skfont = swell_make_skfont_from_hdc(hdc);
 
   int result = 0;
 
@@ -542,9 +543,10 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
       int lo = 0, hi = tlen_orig;
       while (lo < hi) {
         int mid = (lo + hi + 1) / 2;
-        RECT mr = { 0, 0, 0, 0 };
-        SWELL_DrawText(hdc, txt_orig, mid, &mr, DT_CALCRECT | DT_LEFT | DT_SINGLELINE);
-        if (tr.left + (mr.right - mr.left) <= mx)
+        SkRect bounds;
+        skfont.measureText(txt_orig, mid, SkTextEncoding::kUTF8, &bounds);
+        int textW = (int)(bounds.width() + 0.5f);
+        if (tr.left + textW <= mx)
           lo = mid;
         else
           hi = mid - 1;
@@ -585,9 +587,10 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
         int lo = 0, hi = seglen;
         while (lo < hi) {
           int mid = (lo + hi + 1) / 2;
-          RECT mr = { 0, 0, 0, 0 };
-          SWELL_DrawText(hdc, txt + d0, mid, &mr, DT_CALCRECT | DT_LEFT);
-          if (tr.left + (mr.right - mr.left) <= mx)
+          SkRect bounds;
+          skfont.measureText(txt + d0, mid, SkTextEncoding::kUTF8, &bounds);
+          int textW = (int)(bounds.width() + 0.5f);
+          if (tr.left + textW <= mx)
             lo = mid;
           else
             hi = mid - 1;

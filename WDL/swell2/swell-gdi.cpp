@@ -1390,6 +1390,30 @@ static float swell_text_width(const SkFont &font, const char *buf, int len)
   return bounds.width();
 }
 
+SkFont swell_make_skfont_from_hdc(HDC ctx)
+{
+  SkFont font;
+  float fontSize = 12.0f;
+
+  if (ctx && HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
+    LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
+    if (lf) {
+      fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
+      int fontWeight = lf->lfWeight > 0 ? lf->lfWeight : FW_NORMAL;
+      bool fontItalic = lf->lfItalic != 0;
+      if (lf->lfFaceName[0]) {
+        font.setTypeface(swell_get_typeface(lf->lfFaceName, fontWeight, fontItalic));
+      }
+      font.setEmbolden(fontWeight >= FW_BOLD);
+    }
+  }
+  if (!font.getTypeface()) {
+    font.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
+  }
+  font.setSize(fontSize);
+  return font;
+}
+
 // Helper: word-wrap a logical text segment into display lines that fit within maxWidth.
 // Lines are broken at word boundaries (spaces) when possible; falls back to
 // character-level breaks for very long words.
