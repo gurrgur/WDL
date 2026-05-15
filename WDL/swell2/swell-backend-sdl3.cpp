@@ -168,6 +168,18 @@ void swell_oswindow_destroy(HWND hwnd)
   SDL_WindowEntry *e = find_entry_by_hwnd(hwnd);
   if (e) {
     SDL_Window *w = e->window;
+    // Snapshot current OS window position before destroying, matching
+    // original swell which calls GetWindowRect before oswindow_destroy.
+    // This ensures re-creating the window (hide then show) preserves the
+    // position the user last saw.
+    int lx = 0, ly = 0, lw = 0, lh = 0;
+    SDL_GetWindowPosition(w, &lx, &ly);
+    SDL_GetWindowSize(w, &lw, &lh);
+    hwnd->m_position.left   = swell_log_to_phys(lx);
+    hwnd->m_position.top    = swell_log_to_phys(ly);
+    hwnd->m_position.right  = hwnd->m_position.left + swell_log_to_phys(lw);
+    hwnd->m_position.bottom = hwnd->m_position.top  + swell_log_to_phys(lh);
+
     hwnd->m_oswindow = NULL;
     hwnd->m_backingstore.reset();
     remove_entry(e);
