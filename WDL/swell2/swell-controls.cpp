@@ -962,6 +962,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
       int rowH = tm.tmHeight + 2;
+      if (st) st->max_height = rowH;
       SkFont skfont = swell_make_skfont_from_hdc(hdc);
 
       const char *txt = hwnd->m_title.Get();
@@ -1188,7 +1189,9 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (st && st->cursor_state && focused) {
           int cpos = st->cursor_pos;
           if (cpos > tlen) cpos = tlen;
-          int cx = tr.left + (int)(cpos * (float)(tr.right - tr.left) / (tlen > 0 ? tlen : 1));
+          SkRect cbounds;
+          skfont.measureText(txt, cpos, SkTextEncoding::kUTF8, &cbounds);
+          int cx = tr.left + (int)(cbounds.width() + 0.5f);
           if (cx > tr.right - 1) cx = tr.right - 1;
           HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
           HGDIOBJ ocp = SelectObject(hdc, cp);
