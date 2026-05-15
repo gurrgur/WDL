@@ -74,4 +74,19 @@ if(SWELL2_BUILD_BENCHMARKS)
   )
 
   target_compile_definitions(bench_swell_app PRIVATE NOMINMAX ${SWELL2_BACKEND_DEFINE})
+
+  add_executable(bench_swell_window_app
+    bench_swell_window_app/bench_swell_window_app.cpp
+  )
+
+  target_include_directories(bench_swell_window_app PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+  )
+
+  target_link_libraries(bench_swell_window_app PRIVATE
+    Swell
+  )
+
+  target_compile_definitions(bench_swell_window_app PRIVATE NOMINMAX ${SWELL2_BACKEND_DEFINE})
 endif()
