@@ -363,96 +363,115 @@ void ListView_SetSelColors(HWND hwnd, int *colors, int ncolors)
 
 HTREEITEM TreeView_InsertItem(HWND hwnd, TV_INSERTSTRUCT *ins)
 {
+  if (!hwnd) return NULL;
   return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_INSERTITEM, 0, (LPARAM)ins);
 }
 
 BOOL TreeView_Expand(HWND hwnd, HTREEITEM item, UINT flag)
 {
+  if (!hwnd) return FALSE;
   return (BOOL)SendMessage(hwnd, SWELL_TVM_EXPAND, (WPARAM)flag, (LPARAM)item);
 }
 
 HTREEITEM TreeView_GetSelection(HWND hwnd)
 {
+  if (!hwnd) return NULL;
   return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETSELECTION, 0, 0);
 }
 
 void TreeView_DeleteItem(HWND hwnd, HTREEITEM item)
 {
+  if (!hwnd) return;
   SendMessage(hwnd, SWELL_TVM_DELETEITEM, 0, (LPARAM)item);
 }
 
 void TreeView_DeleteAllItems(HWND hwnd)
 {
+  if (!hwnd) return;
   SendMessage(hwnd, SWELL_TVM_DELETEALLITEMS, 0, 0);
 }
 
 void TreeView_SelectItem(HWND hwnd, HTREEITEM item)
 {
+  if (!hwnd) return;
   SendMessage(hwnd, SWELL_TVM_SELECTITEM, 0, (LPARAM)item);
 }
 
 void TreeView_EnsureVisible(HWND hwnd, HTREEITEM item)
 {
+  if (!hwnd) return;
   SendMessage(hwnd, SWELL_TVM_ENSUREVISIBLE, 0, (LPARAM)item);
 }
 
 BOOL TreeView_GetItem(HWND hwnd, LPTVITEM pitem)
 {
+  if (!hwnd) return FALSE;
   return (BOOL)SendMessage(hwnd, SWELL_TVM_GETITEM, 0, (LPARAM)pitem);
 }
 
 BOOL TreeView_SetItem(HWND hwnd, LPTVITEM pitem)
 {
+  if (!hwnd) return FALSE;
   return (BOOL)SendMessage(hwnd, SWELL_TVM_SETITEM, 0, (LPARAM)pitem);
 }
 
 HTREEITEM TreeView_HitTest(HWND hwnd, TVHITTESTINFO *hti)
 {
+  if (!hwnd) return NULL;
   return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_HITTEST, 0, (LPARAM)hti);
 }
 
 BOOL TreeView_SetIndent(HWND hwnd, int indent)
 {
+  if (!hwnd) return FALSE;
   return (BOOL)SendMessage(hwnd, SWELL_TVM_SETINDENT, (WPARAM)indent, 0);
 }
 
 HTREEITEM TreeView_GetParent(HWND hwnd, HTREEITEM item)
 {
+  if (!hwnd) return NULL;
   return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETPARENT, 0, (LPARAM)item);
 }
 
 HTREEITEM TreeView_GetChild(HWND hwnd, HTREEITEM item)
 {
+  if (!hwnd) return NULL;
   return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETCHILD, 0, (LPARAM)item);
 }
 
 HTREEITEM TreeView_GetNextSibling(HWND hwnd, HTREEITEM item)
 {
+  if (!hwnd) return NULL;
   return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETNEXTSIBLING, 0, (LPARAM)item);
 }
 
 HTREEITEM TreeView_GetRoot(HWND hwnd)
 {
+  if (!hwnd) return NULL;
   return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETROOT, 0, 0);
 }
 
 void TreeView_SetBkColor(HWND hwnd, int color)
 {
+  if (!hwnd) return;
   SendMessage(hwnd, SWELL_TVM_SETBKCOLOR, 0, (LPARAM)color);
 }
 
 void TreeView_SetTextColor(HWND hwnd, int color)
 {
+  if (!hwnd) return;
   SendMessage(hwnd, SWELL_TVM_SETTEXTCOLOR, 0, (LPARAM)color);
 }
 
 HTREEITEM TreeView_GetNextItem(HWND hwnd, HTREEITEM item, UINT flag)
 {
+  if (!hwnd) return NULL;
   return (HTREEITEM)SendMessage(hwnd, SWELL_TVM_GETNEXTITEM, (WPARAM)flag, (LPARAM)item);
 }
 
 int TreeView_GetCount(HWND hwnd)
 {
+  if (!hwnd) return 0;
   return (int)SendMessage(hwnd, SWELL_TVM_GETCOUNT, 0, 0);
 }
 
