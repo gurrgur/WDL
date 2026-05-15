@@ -683,6 +683,61 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int s
   DeleteObject(br2);
 }
 
+static int scrollFromThumbPos(int thumb_pos, int view, int total)
+{
+  if (view <= 0 || total <= 0) return 0;
+  return (int)(thumb_pos * (double)total / view + 0.5);
+}
+
+// Returns thumb bounds in scrollbar-local coordinates (0..view)
+static void getVThumb(int viewh, int totalh, int scroll_y, int *top, int *bottom)
+{
+  if (totalh <= viewh) { *top = 0; *bottom = viewh; return; }
+  int sz, pos;
+  calcScroll(viewh, totalh, scroll_y, &sz, &pos);
+  *top = pos;
+  *bottom = pos + sz;
+}
+
+static void getHThumb(int vieww, int totalw, int scroll_x, int *left, int *right)
+{
+  if (totalw <= vieww) { *left = 0; *right = vieww; return; }
+  int sz, pos;
+  calcScroll(vieww, totalw, scroll_x, &sz, &pos);
+  *left = pos;
+  *right = pos + sz;
+}
+
+// Hit test vertical scrollbar: 0=none, 1=above thumb, 2=on thumb, 3=below thumb
+static int hitVScrollbar(RECT cr, int viewh, int totalh, int scroll_y, int my)
+{
+  if (totalh <= viewh) return 0;
+  const swell_theme &th = g_swell_theme;
+  int sb_left = cr.right - th.scrollbar_width;
+  if (my < cr.top || my >= cr.bottom) return 0;
+  int ttop, tbot;
+  getVThumb(viewh, totalh, scroll_y, &ttop, &tbot);
+  int ry = my - cr.top;
+  if (ry < ttop) return 1;
+  if (ry < tbot) return 2;
+  return 3;
+}
+
+// Hit test horizontal scrollbar
+static int hitHScrollbar(RECT cr, int vieww, int totalw, int scroll_x, int mx)
+{
+  if (totalw <= vieww) return 0;
+  const swell_theme &th = g_swell_theme;
+  int sb_top = cr.bottom - th.scrollbar_width;
+  if (mx < cr.left || mx >= cr.right) return 0;
+  int tleft, tright;
+  getHThumb(vieww, totalw, scroll_x, &tleft, &tright);
+  int rx = mx - cr.left;
+  if (rx < tleft) return 1;
+  if (rx < tright) return 2;
+  return 3;
+}
+
 LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   __SWELL_editControlState *st =
@@ -957,6 +1012,38 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (st) {
         int mx = (short)LOWORD(lParam);
         int my = (short)HIWORD(lParam);
+
+        // Check vertical scrollbar first
+        RECT cr; GetClientRect(hwnd, &cr);
+        bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
+        if (multiline && st->ml_dline_starts.GetSize() > 0) {
+          int rowH = st->max_height > 0 ? st->max_height : 16;
+          int totalH = st->ml_dline_starts.GetSize() * rowH;
+          int viewH = cr.bottom - cr.top;
+          if (totalH > viewH) {
+            const swell_theme &th = g_swell_theme;
+            int hit = hitVScrollbar(cr, viewH, totalH, st->scroll_y, my);
+            if (hit && mx >= cr.right - th.scrollbar_width) {
+              if (hit == 2) {
+                st->m_sb_dragging = 1;
+                st->m_sb_drag_mouse = my;
+                st->m_sb_drag_scroll = st->scroll_y;
+                SetCapture(hwnd);
+              } else if (hit == 1) {
+                st->scroll_y -= viewH;
+                if (st->scroll_y < 0) st->scroll_y = 0;
+                InvalidateRect(hwnd, NULL, FALSE);
+              } else {
+                st->scroll_y += viewH;
+                int vmax = totalH - viewH;
+                if (st->scroll_y > vmax) st->scroll_y = vmax;
+                InvalidateRect(hwnd, NULL, FALSE);
+              }
+              return 0;
+            }
+          }
+        }
+
         int pos = edit_pos_from_xy(hwnd, mx, my, st);
         st->cursor_pos = pos;
         st->m_mouse_sel_active = true;
@@ -969,6 +1056,27 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_MOUSEMOVE:
+      if (st && st->m_sb_dragging) {
+        int my = (short)HIWORD(lParam);
+        int dy = my - st->m_sb_drag_mouse;
+        if (dy != 0) {
+          int rowH = st->max_height > 0 ? st->max_height : 16;
+          int totalH = st->ml_dline_starts.GetSize() * rowH;
+          RECT cr; GetClientRect(hwnd, &cr);
+          int viewH = cr.bottom - cr.top;
+          if (totalH > viewH) {
+            int ttop, tbot;
+            getVThumb(viewH, totalH, st->m_sb_drag_scroll, &ttop, &tbot);
+            int new_thumb = ttop + dy;
+            st->scroll_y = scrollFromThumbPos(new_thumb, viewH, totalH);
+            int vmax = totalH - viewH;
+            if (st->scroll_y > vmax) st->scroll_y = vmax;
+            if (st->scroll_y < 0) st->scroll_y = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+          }
+        }
+        return 0;
+      }
       if (st && st->m_mouse_sel_active) {
         int mx = (short)LOWORD(lParam);
         int my = (short)HIWORD(lParam);
@@ -982,6 +1090,11 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_LBUTTONUP:
       if (st) {
+        if (st->m_sb_dragging) {
+          st->m_sb_dragging = 0;
+          ReleaseCapture();
+          return 0;
+        }
         st->m_mouse_sel_active = false;
         ReleaseCapture();
       }
@@ -2014,8 +2127,68 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int hdr = (!st->m_is_listbox && st->m_cols.GetSize() > 0 &&
                   !(hwnd->m_style & LVS_NOCOLUMNHEADER)) ? (rh + 2) : 0;
       int my = GET_Y_LPARAM(lParam);
-      int row = (my - hdr + st->m_scroll_y) / rh;
+      int mx = GET_X_LPARAM(lParam);
       int n = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
+
+      // Check vertical scrollbar
+      int totalH = n * rh;
+      int viewH = cr.bottom - cr.top;
+      if (totalH > viewH) {
+        const swell_theme &th = g_swell_theme;
+        if (mx >= cr.right - th.scrollbar_width) {
+          int hit = hitVScrollbar(cr, viewH, totalH, st->m_scroll_y, my);
+          if (hit == 2) {
+            st->m_sb_dragging = 1;
+            st->m_sb_drag_mouse_y = my;
+            st->m_sb_drag_scroll_y = st->m_scroll_y;
+            SetCapture(hwnd);
+            return 0;
+          } else if (hit == 1) {
+            st->m_scroll_y -= viewH;
+            if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+          } else if (hit == 3) {
+            st->m_scroll_y += viewH;
+            int vmax = totalH - viewH;
+            if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+          }
+        }
+      }
+
+      // Check horizontal scrollbar
+      int totalW = 0;
+      for (int c = 0; c < st->m_cols.GetSize(); c++)
+        totalW += st->m_cols.Get()[c].xwid;
+      int viewW = cr.right - cr.left;
+      if (totalW > viewW) {
+        const swell_theme &th = g_swell_theme;
+        if (my >= cr.bottom - th.scrollbar_width) {
+          int hit = hitHScrollbar(cr, viewW, totalW, st->m_scroll_x, mx);
+          if (hit == 2) {
+            st->m_sb_dragging = 2;
+            st->m_sb_drag_mouse_x = mx;
+            st->m_sb_drag_scroll_x = st->m_scroll_x;
+            SetCapture(hwnd);
+            return 0;
+          } else if (hit == 1) {
+            st->m_scroll_x -= viewW;
+            if (st->m_scroll_x < 0) st->m_scroll_x = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+          } else if (hit == 3) {
+            st->m_scroll_x += viewW;
+            int hmax = totalW - viewW;
+            if (st->m_scroll_x > hmax) st->m_scroll_x = hmax;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+          }
+        }
+      }
+
+      int row = (my - hdr + st->m_scroll_y) / rh;
       if (row >= 0 && row < n) {
         int oldsel = st->m_selitem;
         st->m_selitem = row;
@@ -2049,6 +2222,61 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       return 0;
     }
+
+    case WM_MOUSEMOVE:
+      if (st && st->m_sb_dragging) {
+        if (st->m_sb_dragging == 1) {
+          int my = GET_Y_LPARAM(lParam);
+          int dy = my - st->m_sb_drag_mouse_y;
+          if (dy != 0) {
+            int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+            int n = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
+            int totalH = n * rh;
+            RECT cr; GetClientRect(hwnd, &cr);
+            int viewH = cr.bottom - cr.top;
+            if (totalH > viewH) {
+              int ttop, tbot;
+              getVThumb(viewH, totalH, st->m_sb_drag_scroll_y, &ttop, &tbot);
+              int new_thumb = ttop + dy;
+              st->m_scroll_y = scrollFromThumbPos(new_thumb, viewH, totalH);
+              int vmax = totalH - viewH;
+              if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+              if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+              InvalidateRect(hwnd, NULL, FALSE);
+            }
+          }
+        } else {
+          int mx = GET_X_LPARAM(lParam);
+          int dx = mx - st->m_sb_drag_mouse_x;
+          if (dx != 0) {
+            int totalW = 0;
+            for (int c = 0; c < st->m_cols.GetSize(); c++)
+              totalW += st->m_cols.Get()[c].xwid;
+            RECT cr; GetClientRect(hwnd, &cr);
+            int viewW = cr.right - cr.left;
+            if (totalW > viewW) {
+              int tleft, tright;
+              getHThumb(viewW, totalW, st->m_sb_drag_scroll_x, &tleft, &tright);
+              int new_thumb = tleft + dx;
+              st->m_scroll_x = scrollFromThumbPos(new_thumb, viewW, totalW);
+              int hmax = totalW - viewW;
+              if (st->m_scroll_x > hmax) st->m_scroll_x = hmax;
+              if (st->m_scroll_x < 0) st->m_scroll_x = 0;
+              InvalidateRect(hwnd, NULL, FALSE);
+            }
+          }
+        }
+        return 0;
+      }
+      return 0;
+
+    case WM_LBUTTONUP:
+      if (st && st->m_sb_dragging) {
+        st->m_sb_dragging = 0;
+        ReleaseCapture();
+        return 0;
+      }
+      return 0;
 
     case WM_MOUSEWHEEL: {
       if (!st) return 0;
@@ -2709,12 +2937,42 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st) return 0;
       SetFocus(hwnd);
       int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
-      int indent = rh;
-      int expw = (rh / 4) * 2 + 3;
-      WDL_PtrList<HTREEITEM__> items;
-      tv_flatten(st->m_root, items);
       int my = GET_Y_LPARAM(lParam);
       int mx = GET_X_LPARAM(lParam);
+
+      // Check vertical scrollbar
+      WDL_PtrList<HTREEITEM__> items;
+      tv_flatten(st->m_root, items);
+      int totalH = items.GetSize() * rh;
+      RECT cr; GetClientRect(hwnd, &cr);
+      int viewH = cr.bottom - cr.top;
+      if (totalH > viewH) {
+        const swell_theme &th = g_swell_theme;
+        if (mx >= cr.right - th.scrollbar_width) {
+          int hit = hitVScrollbar(cr, viewH, totalH, st->m_scroll_y, my);
+          if (hit == 2) {
+            st->m_sb_dragging = 1;
+            st->m_sb_drag_mouse = my;
+            st->m_sb_drag_scroll = st->m_scroll_y;
+            SetCapture(hwnd);
+            return 0;
+          } else if (hit == 1) {
+            st->m_scroll_y -= viewH;
+            if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+          } else if (hit == 3) {
+            st->m_scroll_y += viewH;
+            int vmax = totalH - viewH;
+            if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+          }
+        }
+      }
+
+      int indent = rh;
+      int expw = (rh / 4) * 2 + 3;
       int row = (my + st->m_scroll_y) / rh;
       if (row >= 0 && row < items.GetSize()) {
         HTREEITEM item = items.Get(row);
@@ -2736,7 +2994,38 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
     }
 
+    case WM_MOUSEMOVE:
+      if (st && st->m_sb_dragging) {
+        int my = GET_Y_LPARAM(lParam);
+        int dy = my - st->m_sb_drag_mouse;
+        if (dy != 0) {
+          int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+          WDL_PtrList<HTREEITEM__> items;
+          tv_flatten(st->m_root, items);
+          int totalH = items.GetSize() * rh;
+          RECT cr; GetClientRect(hwnd, &cr);
+          int viewH = cr.bottom - cr.top;
+          if (totalH > viewH) {
+            int ttop, tbot;
+            getVThumb(viewH, totalH, st->m_sb_drag_scroll, &ttop, &tbot);
+            int new_thumb = ttop + dy;
+            st->m_scroll_y = scrollFromThumbPos(new_thumb, viewH, totalH);
+            int vmax = totalH - viewH;
+            if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+            if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+          }
+        }
+        return 0;
+      }
+      return 0;
+
     case WM_LBUTTONUP: {
+      if (st && st->m_sb_dragging) {
+        st->m_sb_dragging = 0;
+        ReleaseCapture();
+        return 0;
+      }
       if (!st) return 0;
       int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
       WDL_PtrList<HTREEITEM__> items;

@@ -227,6 +227,9 @@ struct __SWELL_editControlState {
   int cursor_state;
   int cursor_timer;
   int scroll_x, scroll_y;
+  int m_sb_dragging;
+  int m_sb_drag_mouse;
+  int m_sb_drag_scroll;
   int max_height;
   int max_width;
   int cache_linelen_w;
@@ -244,6 +247,7 @@ struct __SWELL_editControlState {
 
   __SWELL_editControlState() : cursor_pos(0), sel1(-1), sel2(-1),
     cursor_state(0), cursor_timer(0), scroll_x(0), scroll_y(0),
+    m_sb_dragging(0), m_sb_drag_mouse(0), m_sb_drag_scroll(0),
     max_height(0), max_width(0), cache_linelen_w(0),
     cache_linelen_strlen(0), m_disable_contextmenu(false),
     m_mouse_sel_active(false), m_mouse_sel_anchor(0),
@@ -294,6 +298,9 @@ struct listViewState {
   bool m_is_multisel;
   bool m_is_listbox;
   int m_scroll_x, m_scroll_y;
+  int m_sb_dragging;
+  int m_sb_drag_mouse_x, m_sb_drag_mouse_y;
+  int m_sb_drag_scroll_x, m_sb_drag_scroll_y;
   int m_last_row_height;
   ListViewCapMode m_capmode_state;
   int m_capmode_data1, m_capmode_data2;
@@ -308,6 +315,8 @@ struct listViewState {
 
   listViewState() : m_owner_data_size(-1), m_selitem(-1),
     m_is_multisel(false), m_is_listbox(false), m_scroll_x(0), m_scroll_y(0),
+    m_sb_dragging(0), m_sb_drag_mouse_x(0), m_sb_drag_mouse_y(0),
+    m_sb_drag_scroll_x(0), m_sb_drag_scroll_y(0),
     m_last_row_height(16), m_capmode_state(LISTVIEW_CAP_NONE),
     m_capmode_data1(0), m_capmode_data2(0),
     m_status_imagelist(NULL), m_status_imagelist_type(0),
@@ -325,11 +334,16 @@ struct treeViewState {
   HTREEITEM m_sel;
   int m_last_row_height;
   int m_scroll_x, m_scroll_y;
+  int m_sb_dragging;
+  int m_sb_drag_mouse;
+  int m_sb_drag_scroll;
   int m_capmode;
   int m_color_bg, m_color_text;
 
   treeViewState() : m_sel(NULL), m_last_row_height(16),
-    m_scroll_x(0), m_scroll_y(0), m_capmode(0),
+    m_scroll_x(0), m_scroll_y(0),
+    m_sb_dragging(0), m_sb_drag_mouse(0), m_sb_drag_scroll(0),
+    m_capmode(0),
     m_color_bg(0xFFFFFFFF), m_color_text(0xFF000000) {
     m_root = new HTREEITEM__();
     m_root->m_state = TVIS_EXPANDED;
