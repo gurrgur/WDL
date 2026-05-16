@@ -237,10 +237,20 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       return 0;
 
+    case WM_SETCURSOR:
+      if (hwnd->m_parent) {
+        return SendMessage((HWND)hwnd->m_parent, msg, wParam, lParam);
+      }
+      {
+        HCURSOR c = SWELL_GetLastSetCursor();
+        if (!c) c = SWELL_LoadCursor(IDC_ARROW);
+        SetCursor(c);
+      }
+      return TRUE;
+
     case WM_CONTEXTMENU:
     case WM_MOUSEWHEEL:
     case WM_MOUSEHWHEEL:
-    case WM_SETCURSOR:
       if (hwnd->m_parent) {
         return SendMessage((HWND)hwnd->m_parent, msg, wParam, lParam);
       }
