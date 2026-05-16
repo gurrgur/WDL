@@ -116,17 +116,19 @@ HGDIOBJ__ *GDP_OBJECT_NEW()
 void GDP_OBJECT_DELETE(HGDIOBJ__ *obj)
 {
   if (!obj) return;
-  if (!HGDIOBJ_VALID(obj)) return;
-  std::lock_guard<std::mutex> lock(g_gdiobj_pool_mutex);
-  if (g_gdiobj_pool_count < SWELL_MAX_HGDIOBJ_POOL) {
-    memset(obj, 0, sizeof(HGDIOBJ__));
-    obj->_infreelist = true;
-    obj->_next = g_gdiobj_free_list;
-    g_gdiobj_free_list = obj;
-    g_gdiobj_pool_count++;
-  } else {
-    delete obj;
+  {
+    std::lock_guard<std::mutex> lock(g_gdiobj_pool_mutex);
+    if (!HGDIOBJ_VALID(obj)) return;
+    if (g_gdiobj_pool_count < SWELL_MAX_HGDIOBJ_POOL) {
+      memset(obj, 0, sizeof(HGDIOBJ__));
+      obj->_infreelist = true;
+      obj->_next = g_gdiobj_free_list;
+      g_gdiobj_free_list = obj;
+      g_gdiobj_pool_count++;
+      return;
+    }
   }
+  delete obj;
 }
 
 bool HGDIOBJ_VALID(HGDIOBJ__ *p, int reqType)
@@ -1088,7 +1090,8 @@ void LineTo(HDC ctx, int x, int y)
   int r2 = x, b2 = y;
   if (l > r2) { int tmp = l; l = r2; r2 = tmp; }
   if (t > b2) { int tmp = t; t = b2; b2 = tmp; }
-  swell_DirtyContext(ctx, l, t, r2, b2);
+  int sw = ctx->curpen->wid > 0 ? (int)(ctx->curpen->wid * 0.5f + 1.5f) : 1;
+  swell_DirtyContext(ctx, l - sw, t - sw, r2 + sw, b2 + sw);
 
   SkPaint strokePaint;
   strokePaint.setStyle(SkPaint::kStroke_Style);
@@ -1130,7 +1133,8 @@ void PolyBezierTo(HDC ctx, POINT *pts, int np)
     if (pts[i].x > r2) r2 = pts[i].x;
     if (pts[i].y > b2) b2 = pts[i].y;
   }
-  swell_DirtyContext(ctx, l, t, r2, b2);
+  int sw = ctx->curpen->wid > 0 ? (int)(ctx->curpen->wid * 0.5f + 1.5f) : 1;
+  swell_DirtyContext(ctx, l - sw, t - sw, r2 + sw, b2 + sw);
 
   SkPath path;
   path.moveTo(ctx->lastpos_x, ctx->lastpos_y);
@@ -1345,10 +1349,11 @@ static sk_sp<SkTypeface> swell_get_typeface(const char *family, int weight, bool
   static sk_sp<SkFontMgr> s_fontmgr;
   static std::unordered_map<std::string, sk_sp<SkTypeface>> s_cache;
   static std::mutex s_cache_mutex;
-  if (!s_fontmgr) {
+  static std::once_flag s_fontmgr_once;
+  std::call_once(s_fontmgr_once, []() {
     s_fontmgr = SkFontMgr_New_FontConfig(nullptr,
         SkFontScanner_Make_FreeType());
-  }
+  });
   if (!s_fontmgr || !family || !family[0]) return nullptr;
 
   char key[128];
@@ -1867,6 +1872,39 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
     }
   }
 
+  // Draw underlines for &-prefix chars in multiline path
+  if (haveUnderlines) {
+    const int ulH = 1;
+    const int ulOff = 2;
+    for (int ui = 0; ui < prefixUnderlineAt.GetSize(); ui++) {
+      int uIdx = prefixUnderlineAt.Get()[ui];
+      int lineIdx = -1;
+      for (int i = 0; i < numLines; i++) {
+        int lStart = dlineStarts.Get()[i];
+        int lEnd2  = dlineEnds.Get()[i];
+        if (uIdx >= lStart && uIdx < lEnd2) {
+          lineIdx = i;
+          break;
+        }
+      }
+      if (lineIdx < 0) continue;
+      int lStart2 = dlineStarts.Get()[lineIdx];
+      int lEnd2   = dlineEnds.Get()[lineIdx];
+      float lineW = swell_text_width(font, buf + lStart2, lEnd2 - lStart2);
+      float lx2 = (float)r->left;
+      if (align & DT_CENTER)
+        lx2 = (float)(r->left + (availW - lineW) / 2);
+      else if (align & DT_RIGHT)
+        lx2 = (float)(r->right - lineW);
+
+      float uLeft = lx2 + swell_text_width(font, buf + lStart2, uIdx - lStart2);
+      float uRight = uLeft + swell_text_width(font, buf + uIdx, 1);
+      float ulY = yOffset + lineIdx * rowH + ascent + descent + ulOff + 0.5f;
+      ctx->canvas->drawRect(
+        SkRect::MakeLTRB(uLeft, ulY, uRight, ulY + ulH), underlinePaint);
+    }
+  }
+
   return totalH;
 }
 
@@ -1921,7 +1959,8 @@ int GetTextFace(HDC ctx, int nCount, LPTSTR lpFaceName)
 int GetGlyphIndicesW(HDC ctx, wchar_t *buf, int len, unsigned short *indices,
                      int flags)
 {
-  (void)ctx; (void)buf; (void)len; (void)indices; (void)flags;
+  (void)ctx; (void)buf; (void)flags;
+  if (indices && len > 0) memset(indices, 0, (size_t)len * sizeof(unsigned short));
   return 0;
 }
 
@@ -2030,14 +2069,13 @@ int AddFontResourceEx(LPCTSTR str, DWORD fl, void *pdv)
 
 HFONT SWELL_GetDefaultFont()
 {
-  if (g_swell_default_font_instance)
-    return g_swell_default_font_instance;
-
-  g_swell_default_font_instance = CreateFont(
-      -g_swell_theme.default_font_size, 0, 0, 0, FW_NORMAL,
-      0, 0, 0, 0, 0, 0, 0, 0, g_swell_deffont_face);
-
-  g_swell_default_font = g_swell_default_font_instance;
+  static std::once_flag s_def_font_once;
+  std::call_once(s_def_font_once, []() {
+    g_swell_default_font_instance = CreateFont(
+        -g_swell_theme.default_font_size, 0, 0, 0, FW_NORMAL,
+        0, 0, 0, 0, 0, 0, 0, 0, g_swell_deffont_face);
+    g_swell_default_font = g_swell_default_font_instance;
+  });
   return g_swell_default_font_instance;
 }
 
