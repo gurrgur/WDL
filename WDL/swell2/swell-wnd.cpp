@@ -131,15 +131,13 @@ LRESULT SendMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
   hwnd->Release();
 
   if (msg == WM_DESTROY) {
-    // destroy children
-    HWND child = hwnd->m_children.GetSize() > 0 ? hwnd->m_children.Get(0) : NULL;
-    while (child) {
-      HWND next = HWND(NULL);
-      int idx = hwnd->m_children.Find(child);
-      if (idx >= 0 && idx + 1 < hwnd->m_children.GetSize())
-        next = hwnd->m_children.Get(idx + 1);
-      SendMessage(child, WM_DESTROY, 0, 0);
-      child = next;
+    // destroy children (snapshot list first to survive mutations during destroy)
+    {
+      WDL_PtrList<HWND__> tmpChildren;
+      for (int i = 0; i < hwnd->m_children.GetSize(); i++)
+        tmpChildren.Add(hwnd->m_children.Get(i));
+      for (int i = 0; i < tmpChildren.GetSize(); i++)
+        SendMessage(tmpChildren.Get(i), WM_DESTROY, 0, 0);
     }
     // destroy owned windows (skip modal dialog boxes)
     for (int i = hwnd->m_owned.GetSize() - 1; i >= 0; i--) {
