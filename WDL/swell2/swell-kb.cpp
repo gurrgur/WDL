@@ -49,15 +49,19 @@ int SWELL_KeyToASCII(int wParam, int lParam, int *newflags)
   bool ctrl    = (lParam & FCONTROL) != 0;
   bool alt     = (lParam & FALT)     != 0;
 
-  // Ctrl and Alt combos don't produce printable ASCII (they are accelerators)
-  if (ctrl || alt) return 0;
+  // Alt combos don't produce printable ASCII (Alt+digit = OEM alt-codes)
+  if (alt) return 0;
 
   int ch = 0;
 
-  // Letters A-Z
+  // Letters A-Z (with Ctrl: return ASCII control code 1-26)
   if (wParam >= 'A' && wParam <= 'Z') {
-    ch = shift ? wParam : (wParam + ('a' - 'A'));
-    if (newflags) *newflags = lParam & ~FSHIFT;
+    if (ctrl) {
+      ch = wParam - 'A' + 1;
+    } else {
+      ch = shift ? wParam : (wParam + ('a' - 'A'));
+    }
+    if (newflags) *newflags = lParam & ~(FSHIFT | FCONTROL);
     return ch;
   }
 

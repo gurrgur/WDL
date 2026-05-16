@@ -80,6 +80,7 @@ HWND__::~HWND__()
   }
 
   if (m_font) {
+    DeleteObject(m_font);
     m_font = NULL;
   }
 
@@ -601,6 +602,7 @@ static void fireTimers()
       HWND hwnd = rec->hwnd;
       UINT_PTR timerid = rec->timerid;
       TIMERPROC tProc = rec->tProc;
+      if (hwnd) hwnd->Retain();
       g_timer_mutex.Leave();
 
       if (tProc) {
@@ -610,6 +612,7 @@ static void fireTimers()
       }
 
       g_timer_mutex.Enter();
+      if (hwnd) hwnd->Release();
       rec->refcnt--;
       if (rec->refcnt < 0) {
         delete rec;
@@ -655,7 +658,7 @@ static void RecurseDestroyWindow(HWND hwnd)
     WDL_PtrList<HWND__> tmpOwned;
     for (int i = hwnd->m_owned.GetSize() - 1; i >= 0; i--) {
       HWND ow = hwnd->m_owned.Get(i);
-      if (ow) {
+      if (ow && ow->m_hashaddestroy < 2) {
         hwnd->m_owned.Delete(i, false);
         tmpOwned.Add(ow);
       }
@@ -768,8 +771,6 @@ void ShowWindow(HWND hwnd, int cmd)
   if (hwnd->m_visible) {
     InvalidateRect(hwnd, NULL, FALSE);
   }
-
-  SendMessage(hwnd, WM_SHOWWINDOW, hwnd->m_visible ? TRUE : FALSE, cmd);
 }
 
 void EnableWindow(HWND hwnd, int enable)
@@ -1883,11 +1884,12 @@ BOOL GetFileTime(int filedes, FILETIME *lpCreationTime,
 
 void SWELL_RunMessageLoop()
 {
-  // Process events first — they may resize/invalidate windows
-  SWELL_RunEvents();
-
-  // Flush posted messages (matches swell-experimental ordering)
+  // Flush posted messages first (matching original order):
+  // posted messages may generate more messages and need fresh OS events.
   SWELL_MessageQueue_Flush();
+
+  // Process OS events — they may resize/invalidate windows
+  SWELL_RunEvents();
 
   // Paint all dirty top-level windows (deferred from InvalidateRect calls)
   HWND w = g_swell_top_level_list;

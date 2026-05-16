@@ -615,8 +615,43 @@ BOOL ShellExecute(HWND hwndDlg, const char *action,
   (void)hwndDlg; (void)action; (void)blah;
   if (!content1) return FALSE;
 
-  // Auto-reap zombies: avoid accumulating defunct child processes
-  signal(SIGCHLD, SIG_IGN);
+  // Auto-reap zombies: only install handler once (not on every call)
+  {
+    static bool s_sigchld_installed = false;
+    if (!s_sigchld_installed) {
+      s_sigchld_installed = true;
+      signal(SIGCHLD, SIG_IGN);
+    }
+  }
+
+  // Detect URL scheme (http://, https://, ftp://, mailto:, etc.)
+  if (strstr(content1, "://") || !strncmp(content1, "mailto:", 7)) {
+    const char *argv[] = { "xdg-open", content1, content2 && content2[0] ? content2 : NULL, NULL };
+    pid_t pid = fork();
+    if (pid == 0) { execvp("xdg-open", (char *const *)argv); _exit(1); }
+    return pid > 0;
+  }
+
+  // explorer.exe → open containing directory (or xdg-open the path)
+  if (strstr(content1, "explorer") || strstr(content1, "Explorer")) {
+    const char *target = content2 && content2[0] ? content2 : content3;
+    if (target && target[0]) {
+      const char *argv[] = { "xdg-open", target, NULL };
+      pid_t pid = fork();
+      if (pid == 0) { execvp("xdg-open", (char *const *)argv); _exit(1); }
+      return pid > 0;
+    }
+    return FALSE;
+  }
+
+  // notepad.exe → open text file
+  if (strstr(content1, "notepad") || strstr(content1, "Notepad")) {
+    const char *target = content2;
+    const char *argv[] = { "xdg-open", target && target[0] ? target : NULL, NULL };
+    pid_t pid = fork();
+    if (pid == 0) { execvp("xdg-open", (char *const *)argv); _exit(1); }
+    return pid > 0;
+  }
 
   pid_t pid = fork();
   if (pid == 0) {
@@ -654,6 +689,12 @@ BOOL ShellExecute(HWND hwndDlg, const char *action,
     args[argc] = NULL;
 
     execvp(content1, (char *const *)args);
+
+    // execvp failed — try xdg-open as fallback for files/dirs
+    if (content2 && content2[0]) {
+      const char *fallback[] = { "xdg-open", content2, NULL };
+      execvp("xdg-open", (char *const *)fallback);
+    }
     _exit(1);
   }
   return pid > 0 ? TRUE : FALSE;
@@ -676,7 +717,7 @@ void GetTempPath(int sz, char *buf)
 // ============================================================================
 
 static bool g_clipboard_open = false;
-static char *g_clipboard_last_buf = NULL;
+static char *g_clipboard_cache = NULL;
 
 bool OpenClipboard(HWND hwndDlg)
 {
@@ -692,8 +733,8 @@ void CloseClipboard()
 
 void EmptyClipboard()
 {
-  free(g_clipboard_last_buf);
-  g_clipboard_last_buf = NULL;
+  free(g_clipboard_cache);
+  g_clipboard_cache = NULL;
 #ifdef SWELL_TARGET_SDL3
   SDL_SetClipboardText("");
 #endif
@@ -704,13 +745,14 @@ HANDLE GetClipboardData(UINT type)
   if (type != CF_TEXT) return NULL;
 #ifdef SWELL_TARGET_SDL3
   if (!SDL_HasClipboardText()) return NULL;
+  if (g_clipboard_cache) return g_clipboard_cache;
   const char *txt = SDL_GetClipboardText();
   if (!txt) return NULL;
   int len = (int)strlen(txt) + 1;
-  HANDLE h = GlobalAlloc(0, len);
-  if (h) memcpy(GlobalLock(h), txt, len);
+  g_clipboard_cache = (char *)malloc(len);
+  if (g_clipboard_cache) memcpy(g_clipboard_cache, txt, len);
   SDL_free((void*)txt);
-  return h;
+  return g_clipboard_cache;
 #else
   return NULL;
 #endif
@@ -958,7 +1000,7 @@ BOOL CloseHandle(HANDLE hand)
   if (magic == SWELL_HANDLE_MAGIC_THREAD) {
     ThreadHandle *th = (ThreadHandle *)hand;
     th->magic = 0;
-    pthread_join(th->tid, NULL);
+    pthread_detach(th->tid);
     free(th);
     return TRUE;
   }
