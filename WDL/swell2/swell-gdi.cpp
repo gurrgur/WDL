@@ -1407,7 +1407,9 @@ void StretchBltFromMem(HDC hdcOut, int x, int y, int w, int h,
 
   SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
 
-  hdcOut->canvas->drawImageRect(img, dstRect, SkSamplingOptions());
+  SkPaint cpPaint;
+  cpPaint.setBlendMode(SkBlendMode::kSrc);
+  hdcOut->canvas->drawImageRect(img, dstRect, SkSamplingOptions(), &cpPaint);
 }
 
 int SWELL_GetScaling256(void)
