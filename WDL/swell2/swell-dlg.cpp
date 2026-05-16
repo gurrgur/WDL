@@ -470,19 +470,23 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
   // Find first focusable child
   HWND firstFocus = find_first_focusable(hwnd);
 
-  // Fire WM_INITDIALOG
+  // Fire WM_INITDIALOG — retain firstFocus around dlgproc
+  // since the callback may destroy it
   INT_PTR initret = 0;
+  if (firstFocus) firstFocus->Retain();
   if (dlgproc) {
     initret = dlgproc(hwnd, WM_INITDIALOG, (WPARAM)firstFocus, param);
   }
 
   if (hwnd->m_hashaddestroy >= 2) {
+    if (firstFocus) firstFocus->Release();
     return NULL;
   }
 
   if (initret && firstFocus) {
     SetFocus(firstFocus);
   }
+  if (firstFocus) firstFocus->Release();
 
   return hwnd;
 }
