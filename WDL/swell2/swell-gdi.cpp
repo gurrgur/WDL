@@ -1115,7 +1115,7 @@ void SetPixel(HDC ctx, int x, int y, int c)
 
 void PolyBezierTo(HDC ctx, POINT *pts, int np)
 {
-  if (!HDC_VALID(ctx) || !ctx->canvas || !pts || np < 1) return;
+  if (!HDC_VALID(ctx) || !ctx->canvas || !pts || np < 3) return;
   if (!pen_valid(ctx)) {
     ctx->lastpos_x = (float)pts[np - 1].x;
     ctx->lastpos_y = (float)pts[np - 1].y;
@@ -1904,9 +1904,23 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
 int GetTextFace(HDC ctx, int nCount, LPTSTR lpFaceName)
 {
-  (void)ctx;
-  if (lpFaceName && nCount > 0) lpFaceName[0] = 0;
-  return 0;
+  if (!lpFaceName || nCount <= 0) return 0;
+  lpFaceName[0] = 0;
+  if (!HDC_VALID(ctx)) return 0;
+
+  const SkFont &font = swell_get_cached_skfont(ctx);
+  sk_sp<SkTypeface> tf = font.refTypeface();
+  if (!tf) return 0;
+
+  SkString name;
+  tf->getFamilyName(&name);
+  if (name.isEmpty()) return 0;
+
+  int len = (int)name.size();
+  if (len >= nCount) len = nCount - 1;
+  memcpy(lpFaceName, name.c_str(), len);
+  lpFaceName[len] = 0;
+  return len;
 }
 
 int GetGlyphIndicesW(HDC ctx, wchar_t *buf, int len, unsigned short *indices,

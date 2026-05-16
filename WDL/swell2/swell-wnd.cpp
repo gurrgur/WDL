@@ -929,6 +929,8 @@ HWND SetParent(HWND hwnd, HWND newPar)
         break;
       }
     }
+    if (oldPar->m_focused_child == hwnd)
+      oldPar->m_focused_child = NULL;
   } else {
     // remove from global top-level list
     if (hwnd->m_prev) hwnd->m_prev->m_next = hwnd->m_next;
@@ -1858,21 +1860,16 @@ BOOL GetFileTime(int filedes, FILETIME *lpCreationTime,
   struct stat st;
   if (fstat(filedes, &st) < 0) return FALSE;
 
-  // convert time_t to 64-bit Windows FILETIME (100ns intervals since 1601)
-  unsigned long long t = (unsigned long long)st.st_mtime * 10000000ULL + 116444736000000000ULL;
+  auto toFileTime = [](time_t tm, FILETIME *ft) {
+    if (!ft) return;
+    unsigned long long t = (unsigned long long)tm * 10000000ULL + 116444736000000000ULL;
+    ft->dwLowDateTime = (DWORD)t;
+    ft->dwHighDateTime = (DWORD)(t >> 32);
+  };
 
-  if (lpCreationTime) {
-    lpCreationTime->dwLowDateTime = (DWORD)t;
-    lpCreationTime->dwHighDateTime = (DWORD)(t >> 32);
-  }
-  if (lpLastAccessTime) {
-    lpLastAccessTime->dwLowDateTime = (DWORD)t;
-    lpLastAccessTime->dwHighDateTime = (DWORD)(t >> 32);
-  }
-  if (lpLastWriteTime) {
-    lpLastWriteTime->dwLowDateTime = (DWORD)t;
-    lpLastWriteTime->dwHighDateTime = (DWORD)(t >> 32);
-  }
+  toFileTime(st.st_ctime, lpCreationTime);
+  toFileTime(st.st_atime, lpLastAccessTime);
+  toFileTime(st.st_mtime, lpLastWriteTime);
   return TRUE;
 }
 
