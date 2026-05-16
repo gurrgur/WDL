@@ -2791,6 +2791,57 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
 
+    case WM_KEYDOWN: {
+      if (!st || st->m_data.GetSize() == 0) return 0;
+      const int n = st->m_data.GetSize();
+      int sel = st->m_selitem;
+      if (sel < 0) sel = 0;
+      switch (wParam) {
+        case VK_UP:
+          if (sel > 0) sel--;
+          break;
+        case VK_DOWN:
+          if (sel + 1 < n) sel++;
+          break;
+        case VK_HOME:
+          sel = 0;
+          break;
+        case VK_END:
+          sel = n - 1;
+          break;
+        case VK_PRIOR:
+        case VK_NEXT: {
+          RECT cr; GetClientRect(hwnd, &cr);
+          int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+          if (rh < 1) rh = 16;
+          int viewH = cr.bottom - cr.top;
+          if (wParam == VK_PRIOR) {
+            sel -= viewH / rh;
+            if (sel < 0) sel = 0;
+          } else {
+            sel += viewH / rh;
+            if (sel >= n) sel = n - 1;
+          }
+          break;
+        }
+        default: return 0;
+      }
+      if (sel != st->m_selitem) {
+        st->m_selitem = sel;
+        RECT cr; GetClientRect(hwnd, &cr);
+        int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+        if (rh < 1) rh = 16;
+        int sy = sel * rh;
+        if (sy < st->m_scroll_y)
+          st->m_scroll_y = sy;
+        else if (sy + rh > st->m_scroll_y + cr.bottom - cr.top)
+          st->m_scroll_y = sy + rh - (cr.bottom - cr.top);
+        if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
+    }
+
     default:
       return DefWindowProc(hwnd, msg, wParam, lParam);
   }
