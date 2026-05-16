@@ -914,10 +914,20 @@ void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
 {
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
+  const float w = (float)(x2 - x);
+  const float h = (float)(y2 - y);
+  if (w <= 0.0f || h <= 0.0f) return;
   swell_DirtyContext(ctx, x, y, x2, y2);
 
+  // Win32 RoundRect receives the corner ellipse dimensions, not radii.
+  // Skia wants radii, so halve the values before drawing.
+  float rx = (float)(xrnd > 0 ? xrnd : 0) * 0.5f;
+  float ry = (float)(yrnd > 0 ? yrnd : 0) * 0.5f;
+  if (rx > w * 0.5f) rx = w * 0.5f;
+  if (ry > h * 0.5f) ry = h * 0.5f;
+
   SkRect rect = SkRect::MakeLTRB((float)x, (float)y, (float)x2, (float)y2);
-  SkRRect rr = SkRRect::MakeRectXY(rect, (float)xrnd, (float)yrnd);
+  SkRRect rr = SkRRect::MakeRectXY(rect, rx, ry);
 
   if (brush_valid(ctx)) {
     SkPaint fillPaint;
@@ -939,8 +949,14 @@ void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
     float hsw = sw * 0.5f;
     SkRect strokeRect = SkRect::MakeLTRB((float)x + hsw, (float)y + hsw,
                                          (float)x2 - hsw, (float)y2 - hsw);
-    SkRRect strokeRR = SkRRect::MakeRectXY(strokeRect, (float)xrnd, (float)yrnd);
-    ctx->canvas->drawRRect(strokeRR, strokePaint);
+    if (strokeRect.width() > 0.0f && strokeRect.height() > 0.0f) {
+      float srx = rx - hsw;
+      float sry = ry - hsw;
+      if (srx < 0.0f) srx = 0.0f;
+      if (sry < 0.0f) sry = 0.0f;
+      SkRRect strokeRR = SkRRect::MakeRectXY(strokeRect, srx, sry);
+      ctx->canvas->drawRRect(strokeRR, strokePaint);
+    }
   }
 }
 
@@ -990,14 +1006,22 @@ void SWELL_DrawRoundRectEx(HDC ctx, int x, int y, int x2, int y2,
     strokePaint.setStrokeWidth(sw);
     strokePaint.setAntiAlias(true);
     float hsw = sw * 0.5f;
-    SkVector sradii[4] = {
-      { fTL, fTL }, { fTR, fTR }, { fBR, fBR }, { fBL, fBL }
-    };
     SkRect sr = SkRect::MakeLTRB((float)x + hsw, (float)y + hsw,
                                  (float)x2 - hsw, (float)y2 - hsw);
-    SkRRect srr;
-    srr.setRectRadii(sr, sradii);
-    ctx->canvas->drawRRect(srr, strokePaint);
+    if (sr.width() > 0.0f && sr.height() > 0.0f) {
+      float sTL = fTL - hsw, sTR = fTR - hsw;
+      float sBR = fBR - hsw, sBL = fBL - hsw;
+      if (sTL < 0.0f) sTL = 0.0f; if (sTR < 0.0f) sTR = 0.0f;
+      if (sBR < 0.0f) sBR = 0.0f; if (sBL < 0.0f) sBL = 0.0f;
+      clampPair(sTL, sTR, sr.width()); clampPair(sBL, sBR, sr.width());
+      clampPair(sTL, sBL, sr.height()); clampPair(sTR, sBR, sr.height());
+      SkVector sradii[4] = {
+        { sTL, sTL }, { sTR, sTR }, { sBR, sBR }, { sBL, sBL }
+      };
+      SkRRect srr;
+      srr.setRectRadii(sr, sradii);
+      ctx->canvas->drawRRect(srr, strokePaint);
+    }
   }
 }
 

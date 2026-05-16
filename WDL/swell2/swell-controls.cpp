@@ -538,16 +538,11 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         if (focused) {
-          // Focus ring drawn just outside the button bounds.
-          int o = th.focus_ring_offset;
-          RECT fr = { cr.left - o, cr.top - o,
-                      cr.right + o - 1, cr.bottom + o - 1 };
           HPEN fp = CreatePen(PS_SOLID, th.focus_ring_width,
                               (COLORREF)th.focus_ring);
           HGDIOBJ ofp = SelectObject(hdc, fp);
           HGDIOBJ ofb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-          int rr = r + o;
-          RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr*2, rr*2);
+          RoundRect(hdc, cr.left, cr.top, cr.right, cr.bottom, r*2, r*2);
           SelectObject(hdc, ofp); DeleteObject(fp);
           SelectObject(hdc, ofb);
         }
@@ -704,7 +699,7 @@ static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int
     const int minr = scaled_px(2);
     if (rr > maxr) rr = maxr;
     if (rr < minr) rr = minr;
-    RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr, rr);
+    RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr*2, rr*2);
     SelectObject(hdc, op);
     SelectObject(hdc, ob);
   }
@@ -740,7 +735,7 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int s
     const int minr = scaled_px(2);
     if (rr > maxr) rr = maxr;
     if (rr < minr) rr = minr;
-    RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr, rr);
+    RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr*2, rr*2);
     SelectObject(hdc, op);
     SelectObject(hdc, ob);
   }
