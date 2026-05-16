@@ -1101,6 +1101,12 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
     }
   }
 
+  // Hide the popup before destruction so SDL3 re-evaluates which
+  // window is under the cursor. Without this, SDL3 still routes
+  // mouse events to the now-destroyed popup window until the user
+  // moves the mouse, causing the next menubar click to be dropped.
+  if (mw.sdlwin) SDL_HideWindow(mw.sdlwin);
+
   return mw.result;
 }
 
