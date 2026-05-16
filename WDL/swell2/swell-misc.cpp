@@ -22,6 +22,7 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <signal.h>
 #include <time.h>
@@ -1013,9 +1014,9 @@ HANDLE CreateEvent(void *SA, BOOL manualReset, BOOL initialSig,
 {
   (void)SA; (void)ignored;
   int fd[2];
-  if (pipe(fd) != 0) return NULL;
-  fcntl(fd[0], F_SETFL, O_NONBLOCK);
-  fcntl(fd[1], F_SETFL, O_NONBLOCK);
+  if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) return NULL;
+  fcntl(fd[0], F_SETFL, fcntl(fd[0], F_GETFL) | O_NONBLOCK);
+  fcntl(fd[1], F_SETFL, fcntl(fd[1], F_GETFL) | O_NONBLOCK);
   EventHandle *ev = (EventHandle *)malloc(sizeof(EventHandle));
   ev->magic = SWELL_HANDLE_MAGIC_EVENT;
   ev->rd = fd[0];
