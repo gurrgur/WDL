@@ -24,6 +24,7 @@
 //   extern rettype (*funcname)(parms);
 //
 // We need to define (not just declare) all those pointers:
+#undef _WDL_SWELL_H_API_DEFINED_
 #undef SWELL_API_DEFINE
 #define SWELL_API_DEFINE(ret, func, parms) ret (*func) parms = nullptr;
 #include "swell-functions.h"
@@ -48,6 +49,7 @@ static void resolve_one(const char *name, void **ptr)
 // Reuse the double-include trick to generate name+pointer pairs.
 static void resolve_all()
 {
+#undef _WDL_SWELL_H_API_DEFINED_
 #undef SWELL_API_DEFINE
 #define SWELL_API_DEFINE(ret, func, parms) \
   resolve_one(#func, (void **)&func);
