@@ -767,6 +767,12 @@ void ShowWindow(HWND hwnd, int cmd)
   if (hwnd->m_visible && !wasVisible && !hwnd->m_parent && !hwnd->m_oswindow) {
     swell_oswindow_manage(hwnd, cmd != SW_SHOWNA);
   }
+  // SW_HIDE on a top-level: tear down the OS window. Without this the SDL
+  // window stays mapped even though m_visible is false, so popups (drag
+  // readouts, tooltips) never disappear.
+  else if (!hwnd->m_visible && wasVisible && !hwnd->m_parent && hwnd->m_oswindow) {
+    swell_oswindow_manage(hwnd, false);
+  }
 
   if (cmd == SW_SHOW)
     SetForegroundWindow(hwnd);
