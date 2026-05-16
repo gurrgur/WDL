@@ -718,7 +718,24 @@ void GetTempPath(int sz, char *buf)
 // ============================================================================
 
 static bool g_clipboard_open = false;
-static char *g_clipboard_cache = NULL;
+
+#define MAX_CLIPBOARD_ENTRIES 32
+
+struct sw_clipboard_format_rec {
+  char name[256];
+  UINT id;
+};
+
+struct sw_clipboard_data_rec {
+  UINT format;
+  HANDLE data;
+};
+
+static sw_clipboard_format_rec g_clipboard_formats[MAX_CLIPBOARD_ENTRIES];
+static int g_clipboard_format_count = 0;
+
+static sw_clipboard_data_rec g_clipboard_data[MAX_CLIPBOARD_ENTRIES];
+static int g_clipboard_data_count = 0;
 
 bool OpenClipboard(HWND hwndDlg)
 {
@@ -734,8 +751,10 @@ void CloseClipboard()
 
 void EmptyClipboard()
 {
-  free(g_clipboard_cache);
-  g_clipboard_cache = NULL;
+  for (int i = 0; i < g_clipboard_data_count; i++) {
+    GlobalFree(g_clipboard_data[i].data);
+  }
+  g_clipboard_data_count = 0;
 #ifdef SWELL_TARGET_SDL3
   SDL_SetClipboardText("");
 #endif
@@ -743,41 +762,93 @@ void EmptyClipboard()
 
 HANDLE GetClipboardData(UINT type)
 {
-  if (type != CF_TEXT) return NULL;
+  // Look up in our own stored clipboard data first
+  for (int i = 0; i < g_clipboard_data_count; i++) {
+    if (g_clipboard_data[i].format == type)
+      return g_clipboard_data[i].data;
+  }
 #ifdef SWELL_TARGET_SDL3
-  if (!SDL_HasClipboardText()) return NULL;
-  if (g_clipboard_cache) return g_clipboard_cache;
-  const char *txt = SDL_GetClipboardText();
-  if (!txt) return NULL;
-  int len = (int)strlen(txt) + 1;
-  g_clipboard_cache = (char *)malloc(len);
-  if (g_clipboard_cache) memcpy(g_clipboard_cache, txt, len);
-  SDL_free((void*)txt);
-  return g_clipboard_cache;
-#else
-  return NULL;
+  // CF_TEXT fallback: fetch from OS clipboard if SDL has text
+  if (type == CF_TEXT) {
+    if (!SDL_HasClipboardText()) return NULL;
+    const char *txt = SDL_GetClipboardText();
+    if (!txt) return NULL;
+    int len = (int)strlen(txt) + 1;
+    char *buf = (char *)malloc(len);
+    if (buf) {
+      memcpy(buf, txt, len);
+      // Cache it so it's freed on EmptyClipboard
+      if (g_clipboard_data_count < MAX_CLIPBOARD_ENTRIES) {
+        g_clipboard_data[g_clipboard_data_count].format = CF_TEXT;
+        g_clipboard_data[g_clipboard_data_count].data = buf;
+        g_clipboard_data_count++;
+      }
+    }
+    SDL_free((void*)txt);
+    return buf;
+  }
 #endif
+  return NULL;
 }
 
 void SetClipboardData(UINT type, HANDLE h)
 {
-  if (type != CF_TEXT || !h) return;
+  if (!h) return;
 #ifdef SWELL_TARGET_SDL3
-  SDL_SetClipboardText((const char *)h);
+  if (type == CF_TEXT) {
+    SDL_SetClipboardText((const char *)h);
+  }
 #endif
+  // Store / replace in our list
+  for (int i = 0; i < g_clipboard_data_count; i++) {
+    if (g_clipboard_data[i].format == type) {
+      GlobalFree(g_clipboard_data[i].data);
+      g_clipboard_data[i].data = h;
+      return;
+    }
+  }
+  if (g_clipboard_data_count < MAX_CLIPBOARD_ENTRIES) {
+    g_clipboard_data[g_clipboard_data_count].format = type;
+    g_clipboard_data[g_clipboard_data_count].data = h;
+    g_clipboard_data_count++;
+  }
 }
 
 static UINT g_next_clipboard_format = 0xC000;  // custom format base
 
 UINT RegisterClipboardFormat(const char *desc)
 {
-  (void)desc;
-  return g_next_clipboard_format++;
+  if (!desc || !desc[0]) return 0;
+  // Look up existing
+  for (int i = 0; i < g_clipboard_format_count; i++) {
+    if (!strcmp(g_clipboard_formats[i].name, desc))
+      return g_clipboard_formats[i].id;
+  }
+  // Register new
+  if (g_clipboard_format_count < MAX_CLIPBOARD_ENTRIES) {
+    const char *src = desc;
+    char *dst = g_clipboard_formats[g_clipboard_format_count].name;
+    int i = 0;
+    while (i < (int)sizeof(g_clipboard_formats[0].name) - 1 && *src)
+      dst[i++] = *src++;
+    dst[i] = 0;
+    g_clipboard_formats[g_clipboard_format_count].id = g_next_clipboard_format++;
+    g_clipboard_format_count++;
+    return g_clipboard_formats[g_clipboard_format_count - 1].id;
+  }
+  return 0;
 }
 
 UINT EnumClipboardFormats(UINT lastfmt)
 {
-  if (lastfmt == 0) return CF_TEXT;
+  if (lastfmt == 0) {
+    if (g_clipboard_data_count > 0) return g_clipboard_data[0].format;
+    return 0;
+  }
+  for (int i = 0; i < g_clipboard_data_count; i++) {
+    if (g_clipboard_data[i].format == lastfmt && i + 1 < g_clipboard_data_count)
+      return g_clipboard_data[i + 1].format;
+  }
   return 0;
 }
 
