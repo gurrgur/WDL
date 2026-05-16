@@ -13,6 +13,8 @@
 
 #include <cstring>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 
 #include <core/SkPath.h>
 #include <core/SkRRect.h>
@@ -1276,15 +1278,23 @@ void SetBkMode(HDC ctx, int col)
 static sk_sp<SkTypeface> swell_get_typeface(const char *family, int weight, bool italic)
 {
   static sk_sp<SkFontMgr> s_fontmgr;
+  static std::unordered_map<std::string, sk_sp<SkTypeface>> s_cache;
   if (!s_fontmgr) {
     s_fontmgr = SkFontMgr_New_FontConfig(nullptr,
         SkFontScanner_Make_FreeType());
   }
   if (!s_fontmgr || !family || !family[0]) return nullptr;
+
+  char key[128];
+  snprintf(key, sizeof(key), "%s:%d:%d", family, weight, italic ? 1 : 0);
+  auto it = s_cache.find(key);
+  if (it != s_cache.end()) return it->second;
+
   SkFontStyle style(weight, SkFontStyle::kNormal_Width,
       italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
   sk_sp<SkTypeface> tf = s_fontmgr->matchFamilyStyle(family, style);
   if (!tf) tf = s_fontmgr->legacyMakeTypeface(family, style);
+  if (tf) s_cache[key] = tf;
   return tf;
 }
 
