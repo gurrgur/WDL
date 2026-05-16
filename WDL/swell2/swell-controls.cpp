@@ -172,6 +172,34 @@ static void fill_bg(HWND hwnd, HDC hdc, UINT ctlmsg, int defcol)
 // 1. buttonWindowProc
 // ===========================================================================
 
+static void uncheck_radio_group(HWND hwnd)
+{
+  HWND par = GetParent(hwnd);
+  if (!par) return;
+  int n = par->m_children.GetSize();
+  int myIdx = -1;
+  for (int i = 0; i < n; i++) {
+    if (par->m_children.Get(i) == hwnd) { myIdx = i; break; }
+  }
+  if (myIdx < 0) return;
+  int grpStart = 0;
+  for (int i = myIdx - 1; i >= 0; i--) {
+    if (par->m_children.Get(i)->m_style & WS_GROUP) { grpStart = i; break; }
+  }
+  int grpEnd = n;
+  for (int i = myIdx + 1; i < n; i++) {
+    if (par->m_children.Get(i)->m_style & WS_GROUP) { grpEnd = i; break; }
+  }
+  for (int i = grpStart; i < grpEnd; i++) {
+    HWND sib = par->m_children.Get(i);
+    if (!sib || sib == hwnd) continue;
+    if ((sib->m_style & 0xFF) == BS_AUTORADIOBUTTON) {
+      buttonWindowState *ss = (buttonWindowState *)(void *)sib->m_private_data;
+      if (ss) { ss->state = BST_UNCHECKED; InvalidateRect(sib, NULL, FALSE); }
+    }
+  }
+}
+
 LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   buttonWindowState *st = (buttonWindowState *)(void *)hwnd->m_private_data;
@@ -252,22 +280,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           st->state = (st->state + 1) % 3;
         else if (style == BS_AUTORADIOBUTTON) {
           st->state = BST_CHECKED;
-          // uncheck sibling radio buttons in same group
-          HWND par = GetParent(hwnd);
-          if (par) {
-            int n = par->m_children.GetSize();
-            bool past_group_start = false;
-            for (int i = 0; i < n; i++) {
-              HWND sib = par->m_children.Get(i);
-              if (!sib || sib == hwnd) continue;
-              if (sib->m_style & WS_GROUP) past_group_start = true;
-              if (past_group_start) break;
-              if ((sib->m_style & 0xFF) == BS_AUTORADIOBUTTON) {
-                buttonWindowState *ss = (buttonWindowState *)(void *)sib->m_private_data;
-                if (ss) { ss->state = BST_UNCHECKED; InvalidateRect(sib, NULL, FALSE); }
-              }
-            }
-          }
+          uncheck_radio_group(hwnd);
         }
         InvalidateRect(hwnd, NULL, FALSE);
         notify_parent(hwnd, BN_CLICKED);
@@ -283,20 +296,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           InvalidateRect(hwnd, NULL, FALSE);
         } else if (style == BS_AUTORADIOBUTTON) {
           st->state = BST_CHECKED;
-          HWND par = GetParent(hwnd);
-          if (par) {
-            bool past_group_start = false;
-            for (int i = 0; i < par->m_children.GetSize(); i++) {
-              HWND sib = par->m_children.Get(i);
-              if (!sib || sib == hwnd) continue;
-              if (sib->m_style & WS_GROUP) past_group_start = true;
-              if (past_group_start) break;
-              if ((sib->m_style & 0xFF) == BS_AUTORADIOBUTTON) {
-                buttonWindowState *ss = (buttonWindowState *)(void *)sib->m_private_data;
-                if (ss) { ss->state = BST_UNCHECKED; InvalidateRect(sib, NULL, FALSE); }
-              }
-            }
-          }
+          uncheck_radio_group(hwnd);
           InvalidateRect(hwnd, NULL, FALSE);
         }
         notify_parent(hwnd, BN_CLICKED);
@@ -907,6 +907,8 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_MOUSEWHEEL:
+      if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) || (GetAsyncKeyState(VK_MENU) & 0x8000))
+        return DefWindowProc(hwnd, msg, wParam, lParam);
       if (st && (hwnd->m_style & ES_MULTILINE)) {
         int delta = (short)HIWORD(wParam);
         st->scroll_y -= delta / 40 * (st->max_height > 0 ? st->max_height : 16);
@@ -921,6 +923,51 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int len = (int)strlen(t);
       bool shift = (lParam & FSHIFT) != 0;
       bool ctrl  = (lParam & FCONTROL) != 0;
+
+      // --- Clipboard shortcuts (Ctrl+C/X/V) ---
+      if (ctrl && (wParam == 'C' || wParam == 'c' ||
+                   wParam == 'X' || wParam == 'x' ||
+                   wParam == 'V' || wParam == 'v')) {
+        if (wParam == 'C' || wParam == 'c' || wParam == 'X' || wParam == 'x') {
+          if (st->sel1 >= 0 && st->sel1 != st->sel2) {
+            int s1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
+            int s2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
+            if (s2 <= len) {
+              int slen = s2 - s1;
+              HANDLE h = GlobalAlloc(GMEM_MOVEABLE, slen + 1);
+              if (h) {
+                char *dst = (char *)GlobalLock(h);
+                memcpy(dst, t + s1, slen);
+                dst[slen] = 0;
+                GlobalUnlock(h);
+                if (OpenClipboard(hwnd)) {
+                  EmptyClipboard();
+                  SetClipboardData(CF_TEXT, h);
+                  CloseClipboard();
+                } else {
+                  GlobalFree(h);
+                }
+              }
+            }
+          }
+          if ((wParam == 'X' || wParam == 'x') &&
+              !(hwnd->m_style & ES_READONLY))
+            SendMessage(hwnd, EM_REPLACESEL, 0, (LPARAM)"");
+        } else {
+          if (!(hwnd->m_style & ES_READONLY) && OpenClipboard(hwnd)) {
+            HANDLE h = GetClipboardData(CF_TEXT);
+            if (h) {
+              const char *src = (const char *)GlobalLock(h);
+              if (src) {
+                SendMessage(hwnd, EM_REPLACESEL, 0, (LPARAM)src);
+                GlobalUnlock(h);
+              }
+            }
+            CloseClipboard();
+          }
+        }
+        return 1;
+      }
 
       if (wParam == VK_BACK) {
         if (hwnd->m_style & ES_READONLY) return 1;
@@ -2302,6 +2349,8 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
 
     case WM_MOUSEWHEEL: {
+      if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) || (GetAsyncKeyState(VK_MENU) & 0x8000))
+        return DefWindowProc(hwnd, msg, wParam, lParam);
       if (!st) return 0;
       int delta = (short)HIWORD(wParam);
       st->m_scroll_y -= delta / 40 * (st->m_last_row_height > 0 ? st->m_last_row_height : 16);
@@ -3078,6 +3127,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_MOUSEWHEEL: {
+      if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) || (GetAsyncKeyState(VK_MENU) & 0x8000))
+        return DefWindowProc(hwnd, msg, wParam, lParam);
       if (!st) return 0;
       int delta = (short)HIWORD(wParam);
       st->m_scroll_y -= delta / 40 * (st->m_last_row_height > 0 ? st->m_last_row_height : 16);
