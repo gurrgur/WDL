@@ -994,8 +994,9 @@ int GetSystemMetrics(int idx)
 // Magic values stored as first field in heap-allocated handle structs.
 // CloseHandle checks these to safely distinguish swell-owned allocations
 // from plain integer values (fds, sockets) that REAPER passes as HANDLE.
-static const uint32_t SWELL_HANDLE_MAGIC_EVENT  = 0x53574556u; // 'SWEV'
-static const uint32_t SWELL_HANDLE_MAGIC_THREAD = 0x53575448u; // 'SWTH'
+static const uint32_t SWELL_HANDLE_MAGIC_EVENT   = 0x53574556u; // 'SWEV'
+static const uint32_t SWELL_HANDLE_MAGIC_THREAD  = 0x53575448u; // 'SWTH'
+static const uint32_t SWELL_HANDLE_MAGIC_PROCESS = 0x53575043u; // 'SWPC'
 
 // ---- Simple event using pipe ----
 struct EventHandle {
@@ -1011,6 +1012,11 @@ struct ThreadHandle {
   DWORD retv;
   DWORD (*proc)(LPVOID);
   LPVOID parm;
+};
+
+struct ProcessHandle {
+  uint32_t magic; // = SWELL_HANDLE_MAGIC_PROCESS
+  pid_t pid;
 };
 
 static void *thread_thunk(void *arg)
@@ -1099,6 +1105,13 @@ BOOL CloseHandle(HANDLE hand)
     th->magic = 0;
     pthread_detach(th->tid);
     free(th);
+    return TRUE;
+  }
+  if (magic == SWELL_HANDLE_MAGIC_PROCESS) {
+    ProcessHandle *ph = (ProcessHandle *)hand;
+    ph->magic = 0;
+    // Don't kill the process — just free the handle
+    free(ph);
     return TRUE;
   }
   // Unknown handle type (fd, socket, etc.) — do not free
@@ -1209,6 +1222,31 @@ DWORD WaitForSingleObject(HANDLE hand, DWORD msTO)
     }
   }
 
+  if (magic == SWELL_HANDLE_MAGIC_PROCESS) {
+    ProcessHandle *ph = (ProcessHandle *)hand;
+    pid_t pid = ph->pid;
+    int status;
+    pid_t r = waitpid(pid, &status, WNOHANG);
+    if (r > 0) return WAIT_OBJECT_0;
+    if (msTO == 0) return WAIT_TIMEOUT;
+    if (msTO == INFINITE) {
+      while (true) {
+        usleep(10000);
+        r = waitpid(pid, &status, WNOHANG);
+        if (r > 0) return WAIT_OBJECT_0;
+        if (r < 0) return (DWORD)WAIT_FAILED;
+      }
+    }
+    DWORD start = GetTickCount();
+    while (GetTickCount() - start < msTO) {
+      usleep(10000);
+      r = waitpid(pid, &status, WNOHANG);
+      if (r > 0) return WAIT_OBJECT_0;
+      if (r < 0) return (DWORD)WAIT_FAILED;
+    }
+    return WAIT_TIMEOUT;
+  }
+
   // PID handle fallback: use kill(pid,0) to validate it's a real process.
   // Linux pid_max defaults to 4,194,304; this avoids the old value-range
   // heuristic that broke PID handles above 0x100000.
@@ -1297,13 +1335,25 @@ HANDLE SWELL_CreateProcess(const char *exe, int nparams, const char **params)
     _exit(1);
   }
   free(argv);
-  return (HANDLE)(intptr_t)pid;
+  ProcessHandle *ph = (ProcessHandle *)malloc(sizeof(ProcessHandle));
+  if (!ph) return NULL;
+  ph->magic = SWELL_HANDLE_MAGIC_PROCESS;
+  ph->pid = pid;
+  return (HANDLE)ph;
 }
 
 int SWELL_GetProcessExitCode(HANDLE hand)
 {
-  pid_t pid = (pid_t)(intptr_t)hand;
-  if (pid <= 0) return -1;
+  if (!hand || (uintptr_t)hand < 4096u) return -1;
+  uint32_t magic = *(const uint32_t *)hand;
+  pid_t pid;
+  if (magic == SWELL_HANDLE_MAGIC_PROCESS) {
+    pid = ((ProcessHandle *)hand)->pid;
+  } else {
+    // Backward compat: raw pid values (from older code)
+    pid = (pid_t)(intptr_t)hand;
+    if (pid <= 0) return -1;
+  }
   int status;
   pid_t r = waitpid(pid, &status, WNOHANG);
   if (r == 0) return -1;  // still running
@@ -1778,6 +1828,11 @@ bool SWELL_SetGLContextToView(HWND h)           { (void)h; return false; }
 #ifndef SWELL_TARGET_OSX
 HANDLE SWELL_CreateProcessFromPID(int pid)
 {
-  return (HANDLE)(intptr_t)pid;
+  if (pid <= 0) return NULL;
+  ProcessHandle *ph = (ProcessHandle *)malloc(sizeof(ProcessHandle));
+  if (!ph) return NULL;
+  ph->magic = SWELL_HANDLE_MAGIC_PROCESS;
+  ph->pid = (pid_t)pid;
+  return (HANDLE)ph;
 }
 #endif
