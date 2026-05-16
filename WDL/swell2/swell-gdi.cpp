@@ -377,6 +377,24 @@ HDC GetWindowDC(HWND hwnd)
 {
   if (!hwnd) return nullptr;
 
+  {
+    static const bool s_dbg_ncpaint = !!getenv("SWELL_DBG_NCPAINT");
+    if (s_dbg_ncpaint) {
+      void *coolsb = hwnd->m_props.Get("CoolSBSubclassPtr");
+      if (coolsb) {
+        const RECT &p = hwnd->m_position;
+        printf("[swell2 GetWindowDC] hwnd=%p class=%s id=%d pos=%d,%d-%d,%d coolsb=%p paintctx=%p backing=%d\n",
+          (void*)hwnd,
+          hwnd->m_classname ? hwnd->m_classname : "(null)",
+          hwnd->m_id,
+          (int)p.left, (int)p.top, (int)p.right, (int)p.bottom,
+          coolsb, (void*)hwnd->m_paintctx,
+          hwnd->m_backingstore ? 1 : 0);
+        fflush(stdout);
+      }
+    }
+  }
+
   // Walk up to find ancestor with backing store, but do NOT
   // apply NCCALCSIZE on the starting window — give full window area.
   int xoffs = 0, yoffs = 0;
@@ -597,7 +615,7 @@ HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
   obj->type = TYPE_BITMAP;
 
   SkBitmap *bm = new SkBitmap();
-  if (!bm->allocN32Pixels(width, height)) {
+  if (!bm->tryAllocN32Pixels(width, height)) {
     delete bm;
     GDP_OBJECT_DELETE(obj);
     return nullptr;
@@ -635,7 +653,7 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
   if (h <= 0) h = 32;
 
   SkBitmap *bm = new SkBitmap();
-  if (!bm->allocN32Pixels(w, h)) {
+  if (!bm->tryAllocN32Pixels(w, h)) {
     delete bm;
     GDP_OBJECT_DELETE(obj);
     return nullptr;
@@ -2194,13 +2212,17 @@ int AddFontResourceEx(LPCTSTR str, DWORD fl, void *pdv)
 
 HFONT SWELL_GetDefaultFont()
 {
-  static std::once_flag s_def_font_once;
-  std::call_once(s_def_font_once, []() {
+  static int s_last_font_size = 0;
+  int cur_size = g_swell_theme.default_font_size;
+  if (!g_swell_default_font_instance || s_last_font_size != cur_size) {
+    if (g_swell_default_font_instance)
+      DeleteObject(g_swell_default_font_instance);
     g_swell_default_font_instance = CreateFont(
-        -g_swell_theme.default_font_size, 0, 0, 0, FW_NORMAL,
+        -cur_size, 0, 0, 0, FW_NORMAL,
         0, 0, 0, 0, 0, 0, 0, 0, g_swell_deffont_face);
     g_swell_default_font = g_swell_default_font_instance;
-  });
+    s_last_font_size = cur_size;
+  }
   return g_swell_default_font_instance;
 }
 
@@ -2304,6 +2326,24 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     int nc_top  = ncr.top;
 
     if (forceref) {
+      static const bool s_dbg_ncpaint = !!getenv("SWELL_DBG_NCPAINT");
+      if (s_dbg_ncpaint) {
+        void *coolsb = hwnd->m_props.Get("CoolSBSubclassPtr");
+        bool wantscroll = (hwnd->m_style & (WS_HSCROLL|WS_VSCROLL)) != 0;
+        if (coolsb || wantscroll) {
+          const RECT &p = hwnd->m_position;
+          printf("[swell2 NCPAINT] hwnd=%p class=%s id=%d title='%s' pos=%d,%d-%d,%d (%dx%d) style=0x%08lx exstyle=0x%08lx coolsb=%p parent=%p\n",
+            (void*)hwnd,
+            hwnd->m_classname ? hwnd->m_classname : "(null)",
+            hwnd->m_id,
+            hwnd->m_title.Get() ? hwnd->m_title.Get() : "",
+            (int)p.left, (int)p.top, (int)p.right, (int)p.bottom,
+            (int)(p.right-p.left), (int)(p.bottom-p.top),
+            (unsigned long)hwnd->m_style, (unsigned long)hwnd->m_exstyle,
+            coolsb, (void*)hwnd->m_parent);
+          fflush(stdout);
+        }
+      }
       SendMessage(hwnd, WM_NCPAINT, 1, 0);
     }
 
