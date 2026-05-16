@@ -793,7 +793,7 @@ static void menu_draw(MenuWindow *mw)
       cp.setStyle(SkPaint::kStroke_Style);
       cp.setStrokeCap(SkPaint::kRound_Cap);
       cp.setStrokeJoin(SkPaint::kRound_Join);
-      const float s = (float)th.checkbox_size;
+      const float s = (float)menu_scaled_px(10);
       const float l = ((float)item_pad + (float)menu_lpad()) * 0.5f - s * 0.5f;
       const float t = (float)iy + ((float)ih - s) * 0.5f;
       SkPath ck;

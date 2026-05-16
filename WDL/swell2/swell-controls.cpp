@@ -3866,15 +3866,6 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       const int sep_x = cr.right - btnw;
       if (hdc->canvas) {
-        const float vm = (float)scaled_px(6);
-        SkPaint sep;
-        sep.setAntiAlias(false);
-        sep.setColor(controls_to_sk((COLORREF)th.border, 150));
-        sep.setStrokeWidth((float)th.border_width);
-        const float sx = (float)sep_x + 0.5f;
-        hdc->canvas->drawLine(sx, (float)cr.top + vm,
-                              sx, (float)cr.bottom - vm, sep);
-
         SkPaint arrow;
         arrow.setAntiAlias(true);
         arrow.setColor(controls_to_sk((COLORREF)th.fg_text_dim));
