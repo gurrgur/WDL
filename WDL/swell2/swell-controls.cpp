@@ -671,7 +671,7 @@ static void calcScroll(int wh, int totalw, int scroll_x, int *thumbsz, int *thum
   *thumbsz = sz;
 }
 
-static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int scroll_x)
+static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int scroll_x, bool hover)
 {
   if (totalw <= vieww) return;
   const swell_theme &th = g_swell_theme;
@@ -681,10 +681,12 @@ static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int
   FillRect(hdc, &tr, tb);
   DeleteObject(tb);
 
+  int thumbcol = hover ? th.scrollbar_thumb_hover : th.scrollbar_thumb;
+
   int thumbsz, thumbpos;
   calcScroll(vieww, totalw, scroll_x, &thumbsz, &thumbpos);
 
-  HBRUSH br  = CreateSolidBrush((COLORREF)th.scrollbar_thumb);
+  HBRUSH br  = CreateSolidBrush((COLORREF)thumbcol);
   HPEN np = (HPEN)GetStockObject(NULL_PEN);
   const int min_thumb = scaled_px(2);
   int margin = scaled_px(3);
@@ -712,7 +714,7 @@ static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int
   DeleteObject(br);
 }
 
-static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int scroll_y)
+static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int scroll_y, bool hover)
 {
   if (totalh <= viewh) return;
   const swell_theme &th = g_swell_theme;
@@ -722,10 +724,12 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int s
   FillRect(hdc, &tr, tb);
   DeleteObject(tb);
 
+  int thumbcol = hover ? th.scrollbar_thumb_hover : th.scrollbar_thumb;
+
   int thumbsz, thumbpos;
   calcScroll(viewh, totalh, scroll_y, &thumbsz, &thumbpos);
 
-  HBRUSH br  = CreateSolidBrush((COLORREF)th.scrollbar_thumb);
+  HBRUSH br  = CreateSolidBrush((COLORREF)thumbcol);
   HPEN np = (HPEN)GetStockObject(NULL_PEN);
   const int min_thumb = scaled_px(2);
   int margin = scaled_px(3);
@@ -1179,8 +1183,31 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 int vmax = totalH - viewH;
                 if (st->scroll_y > vmax) st->scroll_y = vmax;
                 InvalidateRect(hwnd, NULL, FALSE);
-              }
-              return 0;
+      }
+      if (st && !st->m_sb_dragging && !st->m_mouse_sel_active) {
+        int mx = (short)LOWORD(lParam);
+        int my = (short)HIWORD(lParam);
+        bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
+        int new_hover = 0;
+        if (multiline && st->ml_dline_starts.GetSize() > 0) {
+          int rowH = st->max_height > 0 ? st->max_height : 16;
+          int totalH = st->ml_dline_starts.GetSize() * rowH;
+          RECT cr; GetClientRect(hwnd, &cr);
+          int viewH = cr.bottom - cr.top;
+          if (totalH > viewH) {
+            const swell_theme &th = g_swell_theme;
+            if (mx >= cr.right - th.scrollbar_width) {
+              int hit = hitVScrollbar(cr, viewH, totalH, st->scroll_y, my);
+              if (hit == 2) new_hover = 1;
+            }
+          }
+        }
+        if (new_hover != st->m_sb_hover) {
+          st->m_sb_hover = new_hover;
+          InvalidateRect(hwnd, NULL, FALSE);
+        }
+      }
+      return 0;
             }
           }
         }
@@ -1470,7 +1497,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
           }
 
-        drawVerticalScrollbar(hdc, cr, cr.bottom - cr.top, totalH, scrollY);
+        drawVerticalScrollbar(hdc, cr, cr.bottom - cr.top, totalH, scrollY, st && st->m_sb_hover);
         }
       else
       {
@@ -2432,6 +2459,38 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
       }
+      if (st && !st->m_sb_dragging) {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+        RECT cr; GetClientRect(hwnd, &cr);
+        const swell_theme &th = g_swell_theme;
+        int new_hover = 0;
+
+        // Vertical scrollbar
+        int n = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
+        int totalH = n * rh;
+        int viewH = cr.bottom - cr.top;
+        if (totalH > viewH && mx >= cr.right - th.scrollbar_width) {
+          int hit = hitVScrollbar(cr, viewH, totalH, st->m_scroll_y, my);
+          if (hit == 2) new_hover |= 1;
+        }
+
+        // Horizontal scrollbar
+        int totalW = 0;
+        for (int c = 0; c < st->m_cols.GetSize(); c++)
+          totalW += st->m_cols.Get()[c].xwid;
+        int viewW = cr.right - cr.left;
+        if (totalW > viewW && my >= cr.bottom - th.scrollbar_width) {
+          int hit = hitHScrollbar(cr, viewW, totalW, st->m_scroll_x, mx);
+          if (hit == 2) new_hover |= 2;
+        }
+
+        if (new_hover != st->m_sb_hover) {
+          st->m_sb_hover = new_hover;
+          InvalidateRect(hwnd, NULL, FALSE);
+        }
+      }
       return 0;
 
     case WM_LBUTTONUP:
@@ -2634,13 +2693,13 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       // Vertical scrollbar
       {
         RECT sb_cr = cr; sb_cr.right = cr_right_orig; sb_cr.bottom = cr_bottom_orig;
-        drawVerticalScrollbar(hdc, sb_cr, sb_cr.bottom - sb_cr.top, n * rh, st->m_scroll_y);
+        drawVerticalScrollbar(hdc, sb_cr, sb_cr.bottom - sb_cr.top, n * rh, st->m_scroll_y, st->m_sb_hover & 1);
       }
 
       // Horizontal scrollbar
       if (totalW > 0) {
         RECT sb_cr = cr; sb_cr.right = cr_right_orig; sb_cr.bottom = cr_bottom_orig;
-        drawHorizontalScrollbar(hdc, sb_cr, sb_cr.right - sb_cr.left, totalW, st->m_scroll_x);
+        drawHorizontalScrollbar(hdc, sb_cr, sb_cr.right - sb_cr.left, totalW, st->m_scroll_x, st->m_sb_hover & 2);
       }
 
       SWELL_PopClipRegion(hdc);
@@ -3215,6 +3274,28 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
       }
+      if (st && !st->m_sb_dragging) {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        RECT cr; GetClientRect(hwnd, &cr);
+        const swell_theme &th = g_swell_theme;
+        int new_hover = 0;
+        if (mx >= cr.right - th.scrollbar_width) {
+          WDL_PtrList<HTREEITEM__> items;
+          tv_flatten(st->m_root, items);
+          int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+          int totalH = items.GetSize() * rh;
+          int viewH = cr.bottom - cr.top;
+          if (totalH > viewH) {
+            int hit = hitVScrollbar(cr, viewH, totalH, st->m_scroll_y, my);
+            if (hit == 2) new_hover = 1;
+          }
+        }
+        if (new_hover != st->m_sb_hover) {
+          st->m_sb_hover = new_hover;
+          InvalidateRect(hwnd, NULL, FALSE);
+        }
+      }
       return 0;
 
     case WM_LBUTTONUP: {
@@ -3357,7 +3438,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       {
         RECT sb_cr = cr; sb_cr.right = cr_right_orig;
-        drawVerticalScrollbar(hdc, sb_cr, sb_cr.bottom - sb_cr.top, items.GetSize() * rh, st->m_scroll_y);
+        drawVerticalScrollbar(hdc, sb_cr, sb_cr.bottom - sb_cr.top, items.GetSize() * rh, st->m_scroll_y, st->m_sb_hover);
       }
 
       SWELL_PopClipRegion(hdc);
