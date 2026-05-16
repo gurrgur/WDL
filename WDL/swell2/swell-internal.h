@@ -427,6 +427,7 @@ extern HWND g_swell_focused_oswindow_hwnd;
 
 extern HWND g_swell_top_level_list;       // doubly-linked list of top-level windows
 extern HWND g_swell_top_level_list_end;
+extern int g_swell_event_dispatch_depth;
 
 extern int g_swell_ui_scale;              // DPI scaling: 256 = 1.0x
 #define SWELL_UI_SCALE(x) (((x)*g_swell_ui_scale)/256)

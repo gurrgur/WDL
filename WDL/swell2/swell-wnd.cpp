@@ -19,6 +19,7 @@ HWND g_swell_foreground = NULL;
 HWND g_swell_focused_oswindow_hwnd = NULL;
 HWND g_swell_top_level_list = NULL;
 HWND g_swell_top_level_list_end = NULL;
+int g_swell_event_dispatch_depth = 0;
 
 // Timer list
 TimerInfoRec *g_timer_list = NULL;
@@ -1618,6 +1619,7 @@ void UpdateWindow(HWND hwnd)
   HWND top = hwnd;
   while (top->m_parent) top = (HWND)top->m_parent;
   if (!top->m_backingstore) return;
+  if (g_swell_event_dispatch_depth > 0) return;
 
   // guard against re-entrant paint cycles when UpdateWindow is called
   // from within a WM_PAINT handler (matching swell-experimental's

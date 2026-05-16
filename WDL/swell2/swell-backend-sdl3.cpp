@@ -139,6 +139,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
     SDL_DestroyWindow(sdlwin);
     return;
   }
+  SDL_SetRenderVSync(rend, 1);
 
   add_entry(sdlwin, hwnd, rend);
   hwnd->m_oswindow = sdlwin;
@@ -1020,6 +1021,13 @@ static void swell_sdlEventHandler(SDL_Event *evt)
   }
 }
 
+static void swell_sdlDispatchEvent(SDL_Event *evt)
+{
+  g_swell_event_dispatch_depth++;
+  swell_sdlEventHandler(evt);
+  g_swell_event_dispatch_depth--;
+}
+
 // ---------------------------------------------------------------------------
 // swell_load_program_icon: load <exe_dir>/Resources/main.png as window icon
 // ---------------------------------------------------------------------------
@@ -1058,12 +1066,43 @@ static void swell_load_program_icon()
 // SWELL_RunEvents: poll SDL3 events and dispatch
 // ---------------------------------------------------------------------------
 
+static bool swell_sdl_has_dirty_window()
+{
+  for (HWND w = g_swell_top_level_list; w; w = w->m_next) {
+    if ((w->m_invalidated || w->m_child_invalidated) && w->m_backingstore)
+      return true;
+  }
+  return false;
+}
+
 void SWELL_RunEvents()
 {
   SDL_Event evt;
+  SDL_Event pending_motion;
+  bool has_pending_motion = false;
+
   while (SDL_PollEvent(&evt)) {
-    swell_sdlEventHandler(&evt);
+    if (evt.type == SDL_EVENT_MOUSE_MOTION) {
+      pending_motion = evt;
+      has_pending_motion = true;
+      continue;
+    }
+
+    if (has_pending_motion) {
+      swell_sdlDispatchEvent(&pending_motion);
+      has_pending_motion = false;
+      if (swell_sdl_has_dirty_window()) {
+        swell_sdlDispatchEvent(&evt);
+        return;
+      }
+    }
+
+    swell_sdlDispatchEvent(&evt);
+    if (swell_sdl_has_dirty_window()) return;
   }
+
+  if (has_pending_motion)
+    swell_sdlDispatchEvent(&pending_motion);
 }
 
 // ---------------------------------------------------------------------------

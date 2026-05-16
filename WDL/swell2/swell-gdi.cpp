@@ -2092,6 +2092,11 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     forceref = true;
 
   if (forceref || hwnd->m_child_invalidated) {
+    // Clear old dirty state before sending paint messages. Any invalidation
+    // caused by input or app code during paint remains set for the next frame.
+    hwnd->m_invalidated = false;
+    hwnd->m_child_invalidated = false;
+
     swell_gdpLocalContext ctx_local{};
     ctx_local.ctx.canvas = canvas;
     if (canvas)
@@ -2160,7 +2165,6 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     if (canvas) canvas->restoreToCount(client_paint_save);
 
     hwnd->m_paintctx = nullptr;
-    hwnd->m_invalidated = false;
 
     // Recurse into visible children that need paint.
     // Child m_position is in client coordinates; canvas is already translated
@@ -2192,8 +2196,6 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     // Undo the NC translation for child recursion
     if (canvas && (nc_left || nc_top))
       canvas->restoreToCount(nc_save);
-
-    hwnd->m_child_invalidated = false;
   }
 }
 
