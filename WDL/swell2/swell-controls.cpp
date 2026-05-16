@@ -676,6 +676,11 @@ static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int
   if (totalw <= vieww) return;
   const swell_theme &th = g_swell_theme;
 
+  RECT tr = { cr.left, cr.bottom - th.scrollbar_width, cr.right, cr.bottom };
+  HBRUSH tb = CreateSolidBrush((COLORREF)th.bg_scrollbar);
+  FillRect(hdc, &tr, tb);
+  DeleteObject(tb);
+
   int thumbsz, thumbpos;
   calcScroll(vieww, totalw, scroll_x, &thumbsz, &thumbpos);
 
@@ -711,6 +716,11 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int s
 {
   if (totalh <= viewh) return;
   const swell_theme &th = g_swell_theme;
+
+  RECT tr = { cr.right - th.scrollbar_width, cr.top, cr.right, cr.bottom };
+  HBRUSH tb = CreateSolidBrush((COLORREF)th.bg_scrollbar);
+  FillRect(hdc, &tr, tb);
+  DeleteObject(tb);
 
   int thumbsz, thumbpos;
   calcScroll(viewh, totalh, scroll_y, &thumbsz, &thumbpos);
