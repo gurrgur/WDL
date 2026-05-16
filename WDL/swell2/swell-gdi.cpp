@@ -609,6 +609,7 @@ HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
 {
   (void)numplanes;
   if (width <= 0 || height <= 0) return nullptr;
+  if (!bits || bitsperpixel != 32) return nullptr;
 
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) return nullptr;
