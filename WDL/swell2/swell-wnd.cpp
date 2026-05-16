@@ -348,9 +348,13 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           }
           return 1;
         }
-        // Tab navigation: find next/prev focusable child
-        if (wParam == VK_TAB && (lParam & ~FSHIFT) == FVIRTKEY) {
+        // Tab/arrow navigation: find next/prev focusable child
+        if ((wParam == VK_TAB && (lParam & ~FSHIFT) == FVIRTKEY) ||
+            wParam == VK_LEFT || wParam == VK_RIGHT ||
+            wParam == VK_UP || wParam == VK_DOWN) {
           bool back = (lParam & FSHIFT) != 0;
+          if (wParam == VK_LEFT || wParam == VK_UP) back = true;
+          else if (wParam == VK_RIGHT || wParam == VK_DOWN) back = false;
           int n = hwnd->m_children.GetSize();
           int startIdx = 0;
           HWND curFocus = GetFocus();
