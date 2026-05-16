@@ -1234,40 +1234,19 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 st->m_sb_drag_mouse = my;
                 st->m_sb_drag_scroll = st->scroll_y;
                 SetCapture(hwnd);
+                return 0;
               } else if (hit == 1) {
                 st->scroll_y -= viewH;
                 if (st->scroll_y < 0) st->scroll_y = 0;
                 InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
               } else {
                 st->scroll_y += viewH;
                 int vmax = totalH - viewH;
                 if (st->scroll_y > vmax) st->scroll_y = vmax;
                 InvalidateRect(hwnd, NULL, FALSE);
-      }
-      if (st && !st->m_sb_dragging && !st->m_mouse_sel_active) {
-        int mx = (short)LOWORD(lParam);
-        int my = (short)HIWORD(lParam);
-        bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
-        int new_hover = 0;
-        if (multiline && st->ml_dline_starts.GetSize() > 0) {
-          int rowH = st->max_height > 0 ? st->max_height : 16;
-          int totalH = st->ml_dline_starts.GetSize() * rowH;
-          RECT cr; GetClientRect(hwnd, &cr);
-          int viewH = cr.bottom - cr.top;
-          if (totalH > viewH) {
-            const swell_theme &th = g_swell_theme;
-            if (mx >= cr.right - th.scrollbar_width) {
-              int hit = hitVScrollbar(cr, viewH, totalH, st->scroll_y, my);
-              if (hit == 2) new_hover = 1;
-            }
-          }
-        }
-        if (new_hover != st->m_sb_hover) {
-          st->m_sb_hover = new_hover;
-          InvalidateRect(hwnd, NULL, FALSE);
-        }
-      }
-      return 0;
+                return 0;
+              }
             }
           }
         }
