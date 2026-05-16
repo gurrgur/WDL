@@ -459,9 +459,23 @@ static void append_zenity_filters(char *cmd, int cmdsz, int *pos,
     const char *desc = p;
     const char *pat  = p + strlen(p) + 1;
     if (!*pat) break;
+    // Escape double quotes in desc and pat to avoid shell injection
+    char edesc[512], epat[512];
+    const char *s;
+    char *d;
+    for (s = desc, d = edesc; *s && d < edesc + sizeof(edesc) - 2; s++) {
+      if (*s == '"') *d++ = '\\';
+      *d++ = *s;
+    }
+    *d = 0;
+    for (s = pat, d = epat; *s && d < epat + sizeof(epat) - 2; s++) {
+      if (*s == '"') *d++ = '\\';
+      *d++ = *s;
+    }
+    *d = 0;
     // format: --file-filter="desc | *.ext *.ext2"
     int n = snprintf(cmd + *pos, cmdsz - *pos,
-                     " --file-filter=\"%s | %s\"", desc, pat);
+                     " --file-filter=\"%s | %s\"", edesc, epat);
     if (n > 0) { *pos += n; if (*pos >= cmdsz) *pos = cmdsz - 1; }
     p = pat + strlen(pat) + 1;
   }
