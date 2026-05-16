@@ -9,6 +9,7 @@
 #endif
 #include "swell-internal.h"
 #include "../wdlutf8.h"
+#include <core/SkPath.h>
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
@@ -3725,6 +3726,70 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 // 7. tabControlWindowProc
 // ===========================================================================
 
+static void draw_active_tab_outline(HDC hdc, const RECT &cr,
+                                    const RECT &selR, int by,
+                                    int radius, int inner_radius,
+                                    int stroke_width, COLORREF color)
+{
+  if (!hdc || !hdc->canvas || selR.left >= selR.right) return;
+
+  const float sw = (float)(stroke_width > 0 ? stroke_width : 1);
+  const float hs = sw * 0.5f;
+  const float l = (float)cr.left + hs;
+  const float rr = (float)cr.right - 1.0f - hs;
+  const float b = (float)cr.bottom - 1.0f - hs;
+  const float y = (float)by + hs;
+  const float tl = (float)selR.left + hs;
+  const float tr = (float)selR.right - hs;
+  const float tt = (float)selR.top + hs;
+  float r = (float)radius;
+  float ir = (float)inner_radius;
+
+  if (r < 0.0f) r = 0.0f;
+  if (ir < 0.0f) ir = 0.0f;
+  const float tabw = tr - tl;
+  const float tabh = y - tt;
+  const float pagew = rr - l;
+  const float pageh = b - y;
+  if (tabw <= 0.0f || pagew <= 0.0f) return;
+  if (r > tabw * 0.5f) r = tabw * 0.5f;
+  if (r > tabh) r = tabh;
+  if (pageh <= 0.0f) r = 0.0f;
+  else if (r > pageh) r = pageh;
+  if (ir > tabh) ir = tabh;
+  if (ir > tabw * 0.25f) ir = tabw * 0.25f;
+
+  SkPath p;
+  p.moveTo(l, y);
+  p.lineTo(tl - ir, y);
+  if (ir > 0.0f) p.quadTo(tl, y, tl, y - ir);
+  p.lineTo(tl, tt + r);
+  if (r > 0.0f) p.quadTo(tl, tt, tl + r, tt);
+  p.lineTo(tr - r, tt);
+  if (r > 0.0f) p.quadTo(tr, tt, tr, tt + r);
+  p.lineTo(tr, y - ir);
+  if (ir > 0.0f) p.quadTo(tr, y, tr + ir, y);
+  p.lineTo(rr, y);
+
+  if (pageh > 0.0f) {
+    p.lineTo(rr, b - r);
+    if (r > 0.0f) p.quadTo(rr, b, rr - r, b);
+    p.lineTo(l + r, b);
+    if (r > 0.0f) p.quadTo(l, b, l, b - r);
+    p.lineTo(l, y);
+  }
+
+  SkPaint paint;
+  paint.setStyle(SkPaint::kStroke_Style);
+  paint.setStrokeWidth(sw);
+  paint.setStrokeJoin(SkPaint::kRound_Join);
+  paint.setStrokeCap(SkPaint::kButt_Cap);
+  paint.setAntiAlias(true);
+  paint.setColor(SWELL_TO_SKCOLOR(color, 255));
+  hdc->canvas->drawPath(p, paint);
+  swell_DirtyContext(hdc, cr.left, cr.top, cr.right, cr.bottom);
+}
+
 LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   tabControlState *st = (tabControlState *)(void *)hwnd->m_private_data;
@@ -3913,45 +3978,17 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         x += tw + 2;
       }
 
-      HPEN bp = CreatePen(PS_SOLID, bw, (COLORREF)thm.border_strong);
-      HGDIOBJ obp = SelectObject(hdc, bp);
       if (selR.left < selR.right) {
         const int ir = r > 3 ? r / 2 : 2;
-
-        if (cr.bottom > by + r) {
-          MoveToEx(hdc, cr.left + r, cr.bottom - 1, NULL);
-          LineTo(hdc, cr.right - r - 1, cr.bottom - 1);
-          SWELL_DrawArc(hdc, cr.right - 2*r - 1, cr.bottom - 2*r - 1,
-                        cr.right - 1, cr.bottom - 1, 90.0f, -90.0f);
-          LineTo(hdc, cr.right - 1, by);
-        } else {
-          MoveToEx(hdc, cr.right - 1, by, NULL);
-        }
-
-        LineTo(hdc, selR.right + ir, by);
-        SWELL_DrawArc(hdc, selR.right, by - 2*ir,
-                      selR.right + 2*ir, by, 90.0f, 90.0f);
-        LineTo(hdc, selR.right, selR.top + r);
-        SWELL_DrawArc(hdc, selR.right - 2*r, selR.top,
-                      selR.right, selR.top + 2*r, 0.0f, -90.0f);
-        LineTo(hdc, selR.left + r, selR.top);
-        SWELL_DrawArc(hdc, selR.left, selR.top,
-                      selR.left + 2*r, selR.top + 2*r, 270.0f, -90.0f);
-        LineTo(hdc, selR.left, by - ir);
-        SWELL_DrawArc(hdc, selR.left - 2*ir, by - 2*ir,
-                      selR.left, by, 0.0f, 90.0f);
-        LineTo(hdc, cr.left, by);
-
-        if (cr.bottom > by + r) {
-          LineTo(hdc, cr.left, cr.bottom - r - 1);
-          SWELL_DrawArc(hdc, cr.left, cr.bottom - 2*r - 1,
-                        cr.left + 2*r, cr.bottom - 1, 180.0f, -90.0f);
-        }
+        draw_active_tab_outline(hdc, cr, selR, by, r, ir, bw,
+                                (COLORREF)thm.border_strong);
       } else {
+        HPEN bp = CreatePen(PS_SOLID, bw, (COLORREF)thm.border);
+        HGDIOBJ obp = SelectObject(hdc, bp);
         MoveToEx(hdc, cr.left, by, NULL);
         LineTo(hdc, cr.right, by);
+        SelectObject(hdc, obp); DeleteObject(bp);
       }
-      SelectObject(hdc, obp); DeleteObject(bp);
 
       EndPaint(hwnd, &ps);
       return 0;
