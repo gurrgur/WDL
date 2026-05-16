@@ -1450,7 +1450,7 @@ bool    SWELL_IsCursorVisible()       { return g_cursor_vis_cnt >= 0; }
 BOOL    SWELL_SetCursorPos(int X, int Y)
 {
 #ifdef SWELL_TARGET_SDL3
-  SDL_WarpMouseGlobal((float)X, (float)Y);
+  SDL_WarpMouseGlobal((float)swell_phys_to_log(X), (float)swell_phys_to_log(Y));
   return TRUE;
 #else
   (void)X; (void)Y; return FALSE;

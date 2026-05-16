@@ -910,6 +910,48 @@ void Arc(HDC ctx, int l, int t, int r, int b,
   SWELL_DrawArc(ctx, l, t, r, b, start, sweep);
 }
 
+static void swell_clamp_round_rect_pair(float &a, float &b, float lim)
+{
+  float s = a + b;
+  if (s > lim && s > 0.0f) {
+    float k = lim / s;
+    a *= k;
+    b *= k;
+  }
+}
+
+static void swell_draw_rrect_fill(HDC ctx, const SkRRect &rr,
+                                  SkColor color, float alpha)
+{
+  SkPaint paint;
+  paint.setStyle(SkPaint::kFill_Style);
+  paint.setColor(color);
+  paint.setAlphaf(alpha);
+  paint.setAntiAlias(true);
+  ctx->canvas->drawRRect(rr, paint);
+}
+
+static void swell_draw_rrect_border(HDC ctx, const SkRRect &outer,
+                                    const SkRRect *inner,
+                                    SkColor color, float alpha)
+{
+  SkPaint paint;
+  paint.setStyle(SkPaint::kFill_Style);
+  paint.setColor(color);
+  paint.setAlphaf(alpha);
+  paint.setAntiAlias(true);
+
+  if (inner) {
+    SkPath path;
+    path.setFillType(SkPathFillType::kEvenOdd);
+    path.addRRect(outer);
+    path.addRRect(*inner);
+    ctx->canvas->drawPath(path, paint);
+  } else {
+    ctx->canvas->drawRRect(outer, paint);
+  }
+}
+
 void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
 {
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
@@ -929,34 +971,45 @@ void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
   SkRect rect = SkRect::MakeLTRB((float)x, (float)y, (float)x2, (float)y2);
   SkRRect rr = SkRRect::MakeRectXY(rect, rx, ry);
 
-  if (brush_valid(ctx)) {
-    SkPaint fillPaint;
-    fillPaint.setStyle(SkPaint::kFill_Style);
-    fillPaint.setColor(ctx->curbrush->color);
-    fillPaint.setAlphaf(ctx->curbrush->alpha);
-    fillPaint.setAntiAlias(true);
-    ctx->canvas->drawRRect(rr, fillPaint);
-  }
-
-  if (pen_valid(ctx)) {
-    SkPaint strokePaint;
-    strokePaint.setStyle(SkPaint::kStroke_Style);
-    strokePaint.setColor(ctx->curpen->color);
-    strokePaint.setAlphaf(ctx->curpen->alpha);
+  if (pen_valid(ctx) && brush_valid(ctx)) {
     float sw = ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f;
-    strokePaint.setStrokeWidth(sw);
-    strokePaint.setAntiAlias(true);
-    float hsw = sw * 0.5f;
-    SkRect strokeRect = SkRect::MakeLTRB((float)x + hsw, (float)y + hsw,
-                                         (float)x2 - hsw, (float)y2 - hsw);
-    if (strokeRect.width() > 0.0f && strokeRect.height() > 0.0f) {
-      float srx = rx - hsw;
-      float sry = ry - hsw;
-      if (srx < 0.0f) srx = 0.0f;
-      if (sry < 0.0f) sry = 0.0f;
-      SkRRect strokeRR = SkRRect::MakeRectXY(strokeRect, srx, sry);
-      ctx->canvas->drawRRect(strokeRR, strokePaint);
+    SkRRect innerRR;
+    SkRect inner = SkRect::MakeLTRB((float)x + sw, (float)y + sw,
+                                    (float)x2 - sw, (float)y2 - sw);
+
+    swell_draw_rrect_fill(ctx, rr, ctx->curpen->color, ctx->curpen->alpha);
+
+    if (inner.width() > 0.0f && inner.height() > 0.0f) {
+      float irx = rx - sw;
+      float iry = ry - sw;
+      if (irx < 0.0f) irx = 0.0f;
+      if (iry < 0.0f) iry = 0.0f;
+      if (irx > inner.width() * 0.5f) irx = inner.width() * 0.5f;
+      if (iry > inner.height() * 0.5f) iry = inner.height() * 0.5f;
+      innerRR = SkRRect::MakeRectXY(inner, irx, iry);
+      swell_draw_rrect_fill(ctx, innerRR,
+                            ctx->curbrush->color, ctx->curbrush->alpha);
     }
+  } else if (brush_valid(ctx)) {
+    swell_draw_rrect_fill(ctx, rr, ctx->curbrush->color, ctx->curbrush->alpha);
+  } else if (pen_valid(ctx)) {
+    float sw = ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f;
+    SkRRect innerRR;
+    SkRRect *innerPtr = nullptr;
+    SkRect inner = SkRect::MakeLTRB((float)x + sw, (float)y + sw,
+                                    (float)x2 - sw, (float)y2 - sw);
+    if (inner.width() > 0.0f && inner.height() > 0.0f) {
+      float irx = rx - sw;
+      float iry = ry - sw;
+      if (irx < 0.0f) irx = 0.0f;
+      if (iry < 0.0f) iry = 0.0f;
+      if (irx > inner.width() * 0.5f) irx = inner.width() * 0.5f;
+      if (iry > inner.height() * 0.5f) iry = inner.height() * 0.5f;
+      innerRR = SkRRect::MakeRectXY(inner, irx, iry);
+      innerPtr = &innerRR;
+    }
+    swell_draw_rrect_border(ctx, rr, innerPtr,
+                            ctx->curpen->color, ctx->curpen->alpha);
   }
 }
 
@@ -974,12 +1027,10 @@ void SWELL_DrawRoundRectEx(HDC ctx, int x, int y, int x2, int y2,
   float fTR = (float)(rTR < 0 ? 0 : rTR);
   float fBR = (float)(rBR < 0 ? 0 : rBR);
   float fBL = (float)(rBL < 0 ? 0 : rBL);
-  auto clampPair = [](float &a, float &b, float lim){
-    float s = a + b;
-    if (s > lim && s > 0.0f) { float k = lim / s; a *= k; b *= k; }
-  };
-  clampPair(fTL, fTR, w); clampPair(fBL, fBR, w);
-  clampPair(fTL, fBL, h); clampPair(fTR, fBR, h);
+  swell_clamp_round_rect_pair(fTL, fTR, w);
+  swell_clamp_round_rect_pair(fBL, fBR, w);
+  swell_clamp_round_rect_pair(fTL, fBL, h);
+  swell_clamp_round_rect_pair(fTR, fBR, h);
 
   SkVector radii[4] = {
     { fTL, fTL }, { fTR, fTR }, { fBR, fBR }, { fBL, fBL }
@@ -988,40 +1039,55 @@ void SWELL_DrawRoundRectEx(HDC ctx, int x, int y, int x2, int y2,
   SkRRect rr;
   rr.setRectRadii(rect, radii);
 
-  if (brush_valid(ctx)) {
-    SkPaint fillPaint;
-    fillPaint.setStyle(SkPaint::kFill_Style);
-    fillPaint.setColor(ctx->curbrush->color);
-    fillPaint.setAlphaf(ctx->curbrush->alpha);
-    fillPaint.setAntiAlias(true);
-    ctx->canvas->drawRRect(rr, fillPaint);
-  }
-
-  if (pen_valid(ctx)) {
-    SkPaint strokePaint;
-    strokePaint.setStyle(SkPaint::kStroke_Style);
-    strokePaint.setColor(ctx->curpen->color);
-    strokePaint.setAlphaf(ctx->curpen->alpha);
+  if (pen_valid(ctx) && brush_valid(ctx)) {
     float sw = ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f;
-    strokePaint.setStrokeWidth(sw);
-    strokePaint.setAntiAlias(true);
-    float hsw = sw * 0.5f;
-    SkRect sr = SkRect::MakeLTRB((float)x + hsw, (float)y + hsw,
-                                 (float)x2 - hsw, (float)y2 - hsw);
+    SkRRect innerRR;
+    SkRect sr = SkRect::MakeLTRB((float)x + sw, (float)y + sw,
+                                 (float)x2 - sw, (float)y2 - sw);
+
+    swell_draw_rrect_fill(ctx, rr, ctx->curpen->color, ctx->curpen->alpha);
+
     if (sr.width() > 0.0f && sr.height() > 0.0f) {
-      float sTL = fTL - hsw, sTR = fTR - hsw;
-      float sBR = fBR - hsw, sBL = fBL - hsw;
+      float sTL = fTL - sw, sTR = fTR - sw;
+      float sBR = fBR - sw, sBL = fBL - sw;
       if (sTL < 0.0f) sTL = 0.0f; if (sTR < 0.0f) sTR = 0.0f;
       if (sBR < 0.0f) sBR = 0.0f; if (sBL < 0.0f) sBL = 0.0f;
-      clampPair(sTL, sTR, sr.width()); clampPair(sBL, sBR, sr.width());
-      clampPair(sTL, sBL, sr.height()); clampPair(sTR, sBR, sr.height());
+      swell_clamp_round_rect_pair(sTL, sTR, sr.width());
+      swell_clamp_round_rect_pair(sBL, sBR, sr.width());
+      swell_clamp_round_rect_pair(sTL, sBL, sr.height());
+      swell_clamp_round_rect_pair(sTR, sBR, sr.height());
       SkVector sradii[4] = {
         { sTL, sTL }, { sTR, sTR }, { sBR, sBR }, { sBL, sBL }
       };
-      SkRRect srr;
-      srr.setRectRadii(sr, sradii);
-      ctx->canvas->drawRRect(srr, strokePaint);
+      innerRR.setRectRadii(sr, sradii);
+      swell_draw_rrect_fill(ctx, innerRR,
+                            ctx->curbrush->color, ctx->curbrush->alpha);
     }
+  } else if (brush_valid(ctx)) {
+    swell_draw_rrect_fill(ctx, rr, ctx->curbrush->color, ctx->curbrush->alpha);
+  } else if (pen_valid(ctx)) {
+    float sw = ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f;
+    SkRRect innerRR;
+    SkRRect *innerPtr = nullptr;
+    SkRect sr = SkRect::MakeLTRB((float)x + sw, (float)y + sw,
+                                 (float)x2 - sw, (float)y2 - sw);
+    if (sr.width() > 0.0f && sr.height() > 0.0f) {
+      float sTL = fTL - sw, sTR = fTR - sw;
+      float sBR = fBR - sw, sBL = fBL - sw;
+      if (sTL < 0.0f) sTL = 0.0f; if (sTR < 0.0f) sTR = 0.0f;
+      if (sBR < 0.0f) sBR = 0.0f; if (sBL < 0.0f) sBL = 0.0f;
+      swell_clamp_round_rect_pair(sTL, sTR, sr.width());
+      swell_clamp_round_rect_pair(sBL, sBR, sr.width());
+      swell_clamp_round_rect_pair(sTL, sBL, sr.height());
+      swell_clamp_round_rect_pair(sTR, sBR, sr.height());
+      SkVector sradii[4] = {
+        { sTL, sTL }, { sTR, sTR }, { sBR, sBR }, { sBL, sBL }
+      };
+      innerRR.setRectRadii(sr, sradii);
+      innerPtr = &innerRR;
+    }
+    swell_draw_rrect_border(ctx, rr, innerPtr,
+                            ctx->curpen->color, ctx->curpen->alpha);
   }
 }
 
@@ -2112,9 +2178,48 @@ static bool swell_child_needs_parent_underpaint(HWND child)
   if (!child) return false;
   return child->m_wndproc == buttonWindowProc ||
          child->m_wndproc == editWindowProc ||
+         child->m_wndproc == listViewWindowProc ||
+         child->m_wndproc == treeViewWindowProc ||
          child->m_wndproc == comboWindowProc ||
+         child->m_wndproc == tabControlWindowProc ||
          child->m_wndproc == trackbarWindowProc ||
          child->m_wndproc == progressWindowProc;
+}
+
+static void swell_underpaint_child_background(HWND parent, HWND child,
+                                              SkCanvas *canvas,
+                                              swell_gdpLocalContext *ctx)
+{
+  if (!parent || !child || !canvas || !ctx) return;
+
+  RECT cr = child->m_position;
+  if (cr.right <= cr.left || cr.bottom <= cr.top) return;
+
+  const int save = canvas->save();
+  canvas->clipRect(
+      SkRect::MakeLTRB((float)cr.left, (float)cr.top,
+                       (float)cr.right, (float)cr.bottom),
+      SkClipOp::kIntersect, false);
+
+  if (parent->m_style & WS_CLIPCHILDREN) {
+    for (int i = 0; i < parent->m_children.GetSize(); i++) {
+      HWND other = parent->m_children.Get(i);
+      if (!other || other == child || !other->m_visible) continue;
+      RECT orc = other->m_position;
+      if (orc.right <= orc.left || orc.bottom <= orc.top) continue;
+      canvas->clipRect(
+          SkRect::MakeLTRB((float)orc.left, (float)orc.top,
+                           (float)orc.right, (float)orc.bottom),
+          SkClipOp::kDifference, false);
+    }
+  }
+
+  RECT oldClip = ctx->clipr;
+  ctx->clipr = cr;
+  SendMessage(parent, WM_PAINT, (WPARAM)ctx, 0);
+  ctx->clipr = oldClip;
+
+  canvas->restoreToCount(save);
 }
 
 void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
@@ -2198,6 +2303,16 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
       SendMessage(hwnd, WM_PAINT, (WPARAM)&ctx_local, 0);
     }
     if (canvas) canvas->restoreToCount(client_paint_save);
+
+    if (!forceref && canvas) {
+      for (int i = 0; i < hwnd->m_children.GetSize(); i++) {
+        HWND child = hwnd->m_children.Get(i);
+        if (!child || !child->m_visible) continue;
+        if (!child->m_invalidated && !child->m_child_invalidated) continue;
+        if (!swell_child_needs_parent_underpaint(child)) continue;
+        swell_underpaint_child_background(hwnd, child, canvas, &ctx_local);
+      }
+    }
 
     hwnd->m_paintctx = nullptr;
 
@@ -2373,7 +2488,7 @@ static void swell_theme_populate_dark(swell_theme &t)
 
 static void swell_theme_populate_metrics(swell_theme &t)
 {
-  t.corner_radius           = 2;
+  t.corner_radius           = 4;
   t.corner_radius_large     = 6;
   t.border_width            = 1;
   t.focus_ring_width        = 2;
