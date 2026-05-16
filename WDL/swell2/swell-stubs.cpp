@@ -53,6 +53,7 @@
 #define SWELL_LVM_DELETECOLUMN           (LVM_FIRST+28)
 #define SWELL_LVM_GETCOLUMNWIDTH         (LVM_FIRST+29)
 #define SWELL_LVM_SETCOLUMNWIDTH         (LVM_FIRST+30)
+#define SWELL_LVM_GETCOLUMNCOUNT         (LVM_FIRST+101)
 #define SWELL_LVM_GETHEADER              (LVM_FIRST+31)
 #define SWELL_LVM_GETTOPINDEX            (LVM_FIRST+39)
 #define SWELL_LVM_GETCOUNTPERPAGE        (LVM_FIRST+40)
@@ -298,7 +299,7 @@ HWND ListView_GetHeader(HWND h)
 
 int Header_GetItemCount(HWND h)
 {
-  return (int)SendMessage(h, SWELL_LVM_GETITEMCOUNT, 0, 0);
+  return (int)SendMessage(h, SWELL_LVM_GETCOLUMNCOUNT, 0, 0);
 }
 
 BOOL Header_GetItem(HWND h, int col, HDITEM *hi)
@@ -324,7 +325,7 @@ BOOL Header_SetItem(HWND h, int col, HDITEM *hi)
 
 int SWELL_GetListViewHeaderHeight(HWND h)
 {
-  (void)h; return 20;
+  (void)h; return SWELL_UI_SCALE(20);
 }
 
 void SWELL_SetListViewFastClickMask(HWND hList, int mask)

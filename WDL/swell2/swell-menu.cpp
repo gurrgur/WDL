@@ -199,7 +199,10 @@ void InsertMenuItem(HMENU hMenu, int pos, BOOL byPos, MENUITEMINFO *mi)
     }
   }
   if (mi->fMask & MIIM_ID)       it->m_id = (int)mi->wID;
-  if (mi->fMask & MIIM_FTYPE)    it->m_flags = (it->m_flags & ~0x8FF) | (mi->fType & 0x8FF);
+  if (mi->fMask & MIIM_FTYPE) {
+    it->m_flags = (it->m_flags & ~0x8FF) | (mi->fType & 0x8FF);
+    if (mi->fType & MFT_SEPARATOR) it->m_name.Set(""); // separators carry no text
+  }
   if (mi->fMask & MIIM_STATE)    it->m_flags = (it->m_flags & ~0x0F) | (mi->fState & 0x0F);
   if (mi->fMask & MIIM_SUBMENU) {
     it->m_submenu = mi->hSubMenu;
@@ -1000,6 +1003,28 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
           }
           if (prev >= 0) {
             mw.hovered = prev;
+            menu_draw(&mw); menu_present(&mw);
+          }
+        } else if (key == SDLK_HOME) {
+          int first = 0;
+          while (first < mw.n_items) {
+            SWELL_MenuItem *it = mw.menu->m_items.Get(first);
+            if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) break;
+            first++;
+          }
+          if (first < mw.n_items) {
+            mw.hovered = first;
+            menu_draw(&mw); menu_present(&mw);
+          }
+        } else if (key == SDLK_END) {
+          int last = mw.n_items - 1;
+          while (last >= 0) {
+            SWELL_MenuItem *it = mw.menu->m_items.Get(last);
+            if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) break;
+            last--;
+          }
+          if (last >= 0) {
+            mw.hovered = last;
             menu_draw(&mw); menu_present(&mw);
           }
         }

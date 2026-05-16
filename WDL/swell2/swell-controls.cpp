@@ -53,6 +53,7 @@
 #define LVM_GETCOLUMNWIDTH              (LVM_FIRST+29)
 #define LVM_SETCOLUMNWIDTH              (LVM_FIRST+30)
 #define LVM_GETHEADER                   (LVM_FIRST+31)
+#define LVM_GETCOLUMNCOUNT              (LVM_FIRST+101)
 #define LVM_GETTOPINDEX                 (LVM_FIRST+39)
 #define LVM_GETCOUNTPERPAGE             (LVM_FIRST+40)
 #define LVM_GETSELECTEDCOUNT            (LVM_FIRST+50)
@@ -2143,6 +2144,10 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case LVM_GETHEADER:
       return (LRESULT)hwnd; // return self as header
+
+    case LVM_GETCOLUMNCOUNT:
+      if (!st) return 0;
+      return (LRESULT)st->m_cols.GetSize();
 
     // ---- ListBox messages ----
 
