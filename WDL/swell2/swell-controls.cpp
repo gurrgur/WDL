@@ -3833,9 +3833,9 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CHAR:
       // Only editable combos (not CBS_DROPDOWNLIST) accept typed text
       if (st && (hwnd->m_style & 0x0F) != CBS_DROPDOWNLIST) {
-        // Editable combo: set title to typed character
+        // Editable combo: append typed character to title
         char s[2] = { (char)wParam, 0 };
-        hwnd->m_title.Set(s);
+        hwnd->m_title.Append(s);
         st->selidx = -1;
         InvalidateRect(hwnd, NULL, FALSE);
         notify_parent(hwnd, CBN_EDITCHANGE);
