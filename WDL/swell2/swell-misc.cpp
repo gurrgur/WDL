@@ -1200,10 +1200,17 @@ HCURSOR SWELL_LoadCursor(const char *idx)
       return (HCURSOR)e;
     }
   }
-  // System cursor by integer ID
-  SDL_SystemCursor sc = idcname_to_sdl(idx);
-  SDL_Cursor *c = SDL_CreateSystemCursor(sc);
-  return (HCURSOR)c;
+  // Integer ID (MAKEINTRESOURCE): auto-register to cache and avoid leak
+  if ((size_t)idx <= 0xFFFF) {
+    CursorEntry *e = (CursorEntry *)calloc(1, sizeof(CursorEntry));
+    e->id = (char *)idx;
+    e->cursor = SDL_CreateSystemCursor(idcname_to_sdl(idx));
+    e->next = g_cursor_list;
+    g_cursor_list = e;
+    return (HCURSOR)e;
+  }
+  // String ID not found in registered list
+  return NULL;
 #else
   (void)idx; return NULL;
 #endif
