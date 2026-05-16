@@ -172,10 +172,6 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
       return 0;
 
-    case WM_CLOSE:
-      DestroyWindow(hwnd);
-      return 0;
-
     case WM_NCHITTEST:
       if (!hwnd->m_parent && hwnd->m_menu) {
         RECT r;
