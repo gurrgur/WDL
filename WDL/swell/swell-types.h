@@ -1145,6 +1145,16 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define DFC_SCROLL              3
 #define DFC_BUTTON              4
 
+#define SBS_HORZ             0x0000
+#define SBS_VERT             0x0001
+
+#define SBM_SETPOS           0x00E0
+#define SBM_GETPOS           0x00E1
+#define SBM_SETRANGE         0x00E2
+#define SBM_GETRANGE         0x00E3
+#define SBM_SETSCROLLINFO    0x00E9
+#define SBM_GETSCROLLINFO    0x00EA
+
 #define ESB_ENABLE_BOTH     0x0000
 #define ESB_DISABLE_BOTH    0x0003
 

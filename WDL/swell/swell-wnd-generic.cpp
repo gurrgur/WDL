@@ -1761,6 +1761,270 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int totalh, int scroll_y)
   DeleteObject(br2);
 }
 
+static void scrollbar_calc_thumb(int px_length, int nMin, int nMax, int nPage,
+                                  int nPos, int *thumbsz, int *thumbpos)
+{
+  int range = nMax - nMin;
+  int total_range = range + nPage;
+  if (total_range <= 0) total_range = 1;
+  int minsz = g_swell_ctheme.scrollbar_min_thumb_height;
+
+  int sz = px_length * nPage / total_range;
+  if (sz < minsz) sz = minsz;
+  if (sz > px_length) sz = px_length;
+
+  int avail = px_length - sz;
+  int pos = range > 0 ? (nPos - nMin) * avail / range : 0;
+
+  *thumbsz = sz;
+  *thumbpos = pos;
+}
+
+static int scrollbar_pos_from_thumb(int thumbpos, int px_length, int thumbsz,
+                                     int nMin, int nMax, int nPage)
+{
+  int range = nMax - nMin;
+  int avail = px_length - thumbsz;
+  if (avail <= 0) return nMin;
+  return nMin + thumbpos * range / avail;
+}
+
+LRESULT scrollBarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  scrollBarState *st = (scrollBarState *)hwnd->m_private_data;
+  switch (msg)
+  {
+    case WM_CREATE: {
+      if (!st) {
+        st = new scrollBarState;
+        hwnd->m_private_data = (INT_PTR)st;
+      }
+      hwnd->m_wantfocus = false;
+    }
+    return 0;
+
+    case WM_DESTROY:
+      delete st;
+      hwnd->m_private_data = 0;
+      return 0;
+
+    case WM_ERASEBKGND:
+      return 1;
+
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC hdc = BeginPaint(hwnd, &ps);
+      if (!hdc || !st) { if (hdc) EndPaint(hwnd, &ps); return 0; }
+      RECT cr;
+      GetClientRect(hwnd, &cr);
+      bool horiz = (hwnd->m_style & SBS_VERT) == 0;
+
+      int thumbsz, thumbpos;
+      int len = horiz ? (cr.right - cr.left) : (cr.bottom - cr.top);
+      scrollbar_calc_thumb(len, st->m_nMin, st->m_nMax, st->m_nPage,
+                           st->m_nPos, &thumbsz, &thumbpos);
+      int sw = g_swell_ctheme.scrollbar_width;
+
+      HBRUSH brFg = CreateSolidBrush(g_swell_ctheme.scrollbar_fg);
+      HBRUSH brBg = CreateSolidBrush(g_swell_ctheme.scrollbar_bg);
+
+      if (horiz) {
+        RECT fr = { cr.left, cr.bottom - sw, cr.left + thumbpos, cr.bottom };
+        if (fr.right > fr.left) FillRect(hdc, &fr, brBg);
+        fr.left = fr.right;
+        fr.right = fr.left + thumbsz;
+        if (fr.right > fr.left) FillRect(hdc, &fr, brFg);
+        fr.left = fr.right;
+        fr.right = cr.right;
+        if (fr.right > fr.left) FillRect(hdc, &fr, brBg);
+      } else {
+        RECT fr = { cr.right - sw, cr.top, cr.right, cr.top + thumbpos };
+        if (fr.bottom > fr.top) FillRect(hdc, &fr, brBg);
+        fr.top = fr.bottom;
+        fr.bottom = fr.top + thumbsz;
+        if (fr.bottom > fr.top) FillRect(hdc, &fr, brFg);
+        fr.top = fr.bottom;
+        fr.bottom = cr.bottom;
+        if (fr.bottom > fr.top) FillRect(hdc, &fr, brBg);
+      }
+
+      DeleteObject(brFg);
+      DeleteObject(brBg);
+      EndPaint(hwnd, &ps);
+    }
+    return 0;
+
+    case WM_LBUTTONDOWN: {
+      if (!st) return 0;
+      SetCapture(hwnd);
+      int mx = GET_X_LPARAM(lParam);
+      int my = GET_Y_LPARAM(lParam);
+      RECT cr;
+      GetClientRect(hwnd, &cr);
+      bool horiz = (hwnd->m_style & SBS_VERT) == 0;
+
+      int len = horiz ? (cr.right - cr.left) : (cr.bottom - cr.top);
+      int thumbsz, thumbpos;
+      scrollbar_calc_thumb(len, st->m_nMin, st->m_nMax, st->m_nPage,
+                           st->m_nPos, &thumbsz, &thumbpos);
+      int click = horiz ? mx - cr.left : my - cr.top;
+
+      if (click >= thumbpos && click < thumbpos + thumbsz) {
+        st->m_sb_dragging = 1;
+        st->m_sb_drag_mouse = click;
+        st->m_sb_drag_scroll = st->m_nPos;
+      } else {
+        int dpos = click < thumbpos ? -st->m_nPage : st->m_nPage;
+        int old = st->m_nPos;
+        st->m_nPos += dpos;
+        if (st->m_nPos < st->m_nMin) st->m_nPos = st->m_nMin;
+        if (st->m_nPos > st->m_nMax) st->m_nPos = st->m_nMax;
+        if (st->m_nPos != old) {
+          WPARAM code = (dpos < 0) ? SB_PAGEUP : SB_PAGEDOWN;
+          if (horiz) {
+            code = (dpos < 0) ? SB_PAGELEFT : SB_PAGERIGHT;
+            SendMessage(GetParent(hwnd), WM_HSCROLL, MAKEWPARAM(code, st->m_nPos), (LPARAM)hwnd);
+          } else {
+            SendMessage(GetParent(hwnd), WM_VSCROLL, MAKEWPARAM(code, st->m_nPos), (LPARAM)hwnd);
+          }
+          InvalidateRect(hwnd, NULL, FALSE);
+        }
+        st->m_sb_dragging = 0;
+        ReleaseCapture();
+      }
+    }
+    return 0;
+
+    case WM_MOUSEMOVE:
+      if (st && st->m_sb_dragging) {
+        RECT cr;
+        GetClientRect(hwnd, &cr);
+        bool horiz = (hwnd->m_style & SBS_VERT) == 0;
+        int len = horiz ? (cr.right - cr.left) : (cr.bottom - cr.top);
+        int mx = horiz ? GET_X_LPARAM(lParam) : GET_Y_LPARAM(lParam);
+        int click = horiz ? mx - cr.left : mx - cr.top;
+        int dy = click - st->m_sb_drag_mouse;
+        if (dy != 0) {
+          int thumbsz, thumbpos;
+          scrollbar_calc_thumb(len, st->m_nMin, st->m_nMax, st->m_nPage,
+                               st->m_sb_drag_scroll, &thumbsz, &thumbpos);
+          int newpos = scrollbar_pos_from_thumb(thumbpos + dy, len, thumbsz,
+                                                 st->m_nMin, st->m_nMax, st->m_nPage);
+          int old = st->m_nPos;
+          st->m_nPos = newpos;
+          if (st->m_nPos < st->m_nMin) st->m_nPos = st->m_nMin;
+          if (st->m_nPos > st->m_nMax) st->m_nPos = st->m_nMax;
+          if (st->m_nPos != old) {
+            if (horiz)
+              SendMessage(GetParent(hwnd), WM_HSCROLL, MAKEWPARAM(SB_THUMBTRACK, st->m_nPos), (LPARAM)hwnd);
+            else
+              SendMessage(GetParent(hwnd), WM_VSCROLL, MAKEWPARAM(SB_THUMBTRACK, st->m_nPos), (LPARAM)hwnd);
+            InvalidateRect(hwnd, NULL, FALSE);
+          }
+        }
+        return 0;
+      }
+      return 0;
+
+    case WM_LBUTTONUP:
+      if (st && st->m_sb_dragging) {
+        st->m_sb_dragging = 0;
+        ReleaseCapture();
+        bool horiz = (hwnd->m_style & SBS_VERT) == 0;
+        if (horiz)
+          SendMessage(GetParent(hwnd), WM_HSCROLL, MAKEWPARAM(SB_THUMBPOSITION, st->m_nPos), (LPARAM)hwnd);
+        else
+          SendMessage(GetParent(hwnd), WM_VSCROLL, MAKEWPARAM(SB_THUMBPOSITION, st->m_nPos), (LPARAM)hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+      }
+      return 0;
+
+    case WM_MOUSEWHEEL: {
+      if (!st) return 0;
+      int delta = (short)HIWORD(wParam);
+      int amt = delta / 40;
+      if (amt == 0) amt = (delta > 0) ? 1 : -1;
+      int old = st->m_nPos;
+      st->m_nPos -= amt * st->m_nPage;
+      if (st->m_nPos < st->m_nMin) st->m_nPos = st->m_nMin;
+      if (st->m_nPos > st->m_nMax) st->m_nPos = st->m_nMax;
+      if (st->m_nPos != old) {
+        bool horiz = (hwnd->m_style & SBS_VERT) == 0;
+        if (!horiz)
+          SendMessage(GetParent(hwnd), WM_VSCROLL, MAKEWPARAM(SB_THUMBPOSITION, st->m_nPos), (LPARAM)hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+    }
+    return 0;
+
+    case WM_SIZE:
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+
+    case SBM_SETPOS:
+      if (st) {
+        int old = st->m_nPos;
+        st->m_nPos = (int)wParam;
+        if (st->m_nPos < st->m_nMin) st->m_nPos = st->m_nMin;
+        if (st->m_nPos > st->m_nMax) st->m_nPos = st->m_nMax;
+        if (st->m_nPos != old && lParam) InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return st ? st->m_nPos : 0;
+
+    case SBM_GETPOS:
+      return st ? st->m_nPos : 0;
+
+    case SBM_SETRANGE:
+      if (st) {
+        int oldMin = st->m_nMin, oldMax = st->m_nMax;
+        st->m_nMin = (int)wParam;
+        st->m_nMax = (int)lParam;
+        if (st->m_nPos < st->m_nMin) st->m_nPos = st->m_nMin;
+        if (st->m_nPos > st->m_nMax) st->m_nPos = st->m_nMax;
+        if (oldMin != st->m_nMin || oldMax != st->m_nMax)
+          InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
+
+    case SBM_GETRANGE: {
+      if (!st) { if (wParam) *(int*)wParam = 0; if (lParam) *(int*)lParam = 0; }
+      if (wParam) *(int*)wParam = st->m_nMin;
+      if (lParam) *(int*)lParam = st->m_nMax;
+    }
+    return 0;
+
+    case SBM_SETSCROLLINFO:
+      if (st && lParam) {
+        SCROLLINFO *si = (SCROLLINFO *)lParam;
+        int oldPos = st->m_nPos;
+        if (si->fMask & SIF_RANGE)  { st->m_nMin = si->nMin; st->m_nMax = si->nMax; }
+        if (si->fMask & SIF_PAGE)   st->m_nPage = si->nPage;
+        if (si->fMask & SIF_POS)    st->m_nPos = si->nPos;
+        if (st->m_nPos < st->m_nMin) st->m_nPos = st->m_nMin;
+        if (st->m_nPos > st->m_nMax) st->m_nPos = st->m_nMax;
+        if (st->m_nPage < 1) st->m_nPage = 1;
+        if (wParam) InvalidateRect(hwnd, NULL, FALSE);
+        return MAKELONG(oldPos, 0);
+      }
+      return 0;
+
+    case SBM_GETSCROLLINFO:
+      if (st && lParam) {
+        SCROLLINFO *si = (SCROLLINFO *)lParam;
+        if (si->fMask & SIF_RANGE)  { si->nMin = st->m_nMin; si->nMax = st->m_nMax; }
+        if (si->fMask & SIF_PAGE)   si->nPage = st->m_nPage;
+        if (si->fMask & SIF_POS)    si->nPos = st->m_nPos;
+        if (si->fMask & SIF_TRACKPOS) si->nTrackPos = st->m_nPos;
+      }
+      return 1;
+
+    default:
+      return DefWindowProc(hwnd, msg, wParam, lParam);
+  }
+  return 0;
+}
+
 static int editMeasureLineLength(HDC hdc, const char *str, int str_len)
 {
   RECT tmp = {0,};
@@ -6287,6 +6551,18 @@ HWND SWELL_MakeControl(const char *cname, int idx, const char *classname, int st
   else if (!stricmp(classname,"COMBOBOX"))
   {
     return SWELL_MakeCombo(idx, x, y, w, h, style);
+  }
+  else if (!stricmp(classname, "ScrollBar"))
+  {
+    RECT tr = MakeCoords(x, y, w, h, false);
+    HWND hwnd = new HWND__(m_make_owner, idx, &tr, cname,
+                           !(style & SWELL_NOT_WS_VISIBLE),
+                           scrollBarWindowProc);
+    hwnd->m_wantfocus = false;
+    hwnd->m_style = WS_CHILD | (style & ~SWELL_NOT_WS_VISIBLE);
+    hwnd->m_classname = "ScrollBar";
+    hwnd->m_wndproc(hwnd, WM_CREATE, 0, 0);
+    return hwnd;
   }
   return 0;
 }
