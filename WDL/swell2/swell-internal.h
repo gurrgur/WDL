@@ -212,6 +212,10 @@ struct HTREEITEM__ {
 
   HTREEITEM__() : m_param(0), m_state(0), m_haschildren(false),
     m_image(-1), m_selimage(-1) {}
+  ~HTREEITEM__() {
+    for (int i = 0; i < m_children.GetSize(); i++)
+      delete m_children.Get(i);
+  }
 };
 
 // ---- Control state types ----
@@ -350,6 +354,7 @@ struct treeViewState {
     m_root = new HTREEITEM__();
     m_root->m_state = TVIS_EXPANDED;
   }
+  ~treeViewState() { delete m_root; }
 };
 
 class __SWELL_ComboBoxInternalState_rec {
@@ -564,6 +569,7 @@ void swell_oswindow_update_enable(HWND hwnd);
 void swell_oswindow_update_text(HWND hwnd);
 void swell_oswindow_invalidate(HWND hwnd, const RECT *r);
 void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r);
+void swell_oswindow_maximize(HWND hwnd);
 HWND  swell_oswindow_to_hwnd(SWELL_OSWINDOW osw);
 SWELL_OSWINDOW swell_oswindow_from_hwnd(HWND hwnd);
 
@@ -609,5 +615,14 @@ int swell_menubar_hittest(HWND hwnd, int win_x, RECT *item_screen_rect_out);
 HWND swell_invoke_control_creators(HWND parent, const char *cname, int idx,
                                    const char *classname, int style,
                                    int x, int y, int w, int h);
+
+// swell-misc.cpp: drag-drop callback function pointers (set via SWELL_ExtendedAPI)
+extern void (*SWELL_DDrop_onDragLeave)(void);
+extern void (*SWELL_DDrop_onDragOver)(HWND, int, int);
+extern void (*SWELL_DDrop_onDragEnter)(void *, HWND, int, int);
+extern const char *(*SWELL_DDrop_getDroppedFileTargetPath)(const char *);
+
+// swell-misc.cpp: application name (set via SWELL_ExtendedAPI "APPNAME")
+extern const char *g_swell_appname;
 
 #endif // _SWELL_INTERNAL_H_

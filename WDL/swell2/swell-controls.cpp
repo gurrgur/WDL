@@ -204,9 +204,11 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case BM_SETIMAGE:
       if (st) {
+        HANDLE prev = st->bitmap;
         st->bitmap_mode = (int)wParam;
         st->bitmap = (HICON)lParam;
         InvalidateRect(hwnd, NULL, FALSE);
+        return (LRESULT)prev;
       }
       return 0;
 
@@ -276,9 +278,28 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_KEYDOWN:
       if ((wParam == VK_SPACE || wParam == VK_RETURN) && st) {
         DWORD style = hwnd->m_style & 0xFF;
-        if (style == BS_PUSHBUTTON || style == BS_DEFPUSHBUTTON) {
-          notify_parent(hwnd, BN_CLICKED);
+        if (style == BS_AUTOCHECKBOX || style == BS_AUTO3STATE) {
+          st->state = (st->state + 1) % 3;
+          InvalidateRect(hwnd, NULL, FALSE);
+        } else if (style == BS_AUTORADIOBUTTON) {
+          st->state = BST_CHECKED;
+          HWND par = GetParent(hwnd);
+          if (par) {
+            bool past_group_start = false;
+            for (int i = 0; i < par->m_children.GetSize(); i++) {
+              HWND sib = par->m_children.Get(i);
+              if (!sib || sib == hwnd) continue;
+              if (sib->m_style & WS_GROUP) past_group_start = true;
+              if (past_group_start) break;
+              if ((sib->m_style & 0xFF) == BS_AUTORADIOBUTTON) {
+                buttonWindowState *ss = (buttonWindowState *)(void *)sib->m_private_data;
+                if (ss) { ss->state = BST_UNCHECKED; InvalidateRect(sib, NULL, FALSE); }
+              }
+            }
+          }
+          InvalidateRect(hwnd, NULL, FALSE);
         }
+        notify_parent(hwnd, BN_CLICKED);
       }
       return 0;
 
@@ -3911,9 +3932,10 @@ LRESULT progressWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case PBM_DELTAPOS: {
       if (!p) return 0;
+      int prev = p[0];
       p[0] += (int)wParam;
       InvalidateRect(hwnd, NULL, FALSE);
-      return p[0];
+      return prev;
     }
 
     case WM_ERASEBKGND:
