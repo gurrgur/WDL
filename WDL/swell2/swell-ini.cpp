@@ -8,6 +8,8 @@
 #include "../mutex.h"
 #include "../wdlcstring.h"
 
+extern char *g_swell_defini;
+
 // swell-types.h defines min/max as Win32-compat macros.  Undefine them
 // before including C++ standard library headers which use min()/max() as
 // member functions.
@@ -60,6 +62,8 @@ static uint32_t crc32_calc(const void *data, int len)
 static std::string resolve_ini_path(const char *fn)
 {
   if (!fn || !fn[0]) {
+    if (g_swell_defini && g_swell_defini[0])
+      return std::string(g_swell_defini);
     const char *home = getenv("HOME");
     if (!home || !home[0])
       home = "/tmp";
@@ -370,35 +374,29 @@ BOOL GetPrivateProfileStruct(const char *appname, const char *keyname,
 {
   if (!appname || !keyname || bufsz < 0) return FALSE;
 
-  int hexlen = bufsz * 2 + 8 + 1;
+  int hexlen = (bufsz + 1) * 2 + 16;
   char *tmp = (char *)malloc(hexlen);
   if (!tmp) return FALSE;
 
   BOOL ret = FALSE;
   GetPrivateProfileString(appname, keyname, "", tmp, hexlen, fn);
 
-  if ((int)strlen(tmp) == bufsz * 2 + 8) {
+  if ((int)strlen(tmp) == (bufsz + 1) * 2) {
     uint8_t *out = (uint8_t *)buf;
     const char *src = tmp;
+    uint8_t sum = 0;
     int i;
     for (i = 0; i < bufsz; ++i) {
-      if (!read_hex_byte(src, out + i)) break;
+      uint8_t cv;
+      if (!read_hex_byte(src, &cv)) break;
+      out[i] = cv;
+      sum += cv;
       src += 2;
     }
     if (i == bufsz) {
-      uint8_t crc_bytes[4];
-      if (read_hex_byte(src + 0, crc_bytes + 0) &&
-          read_hex_byte(src + 2, crc_bytes + 1) &&
-          read_hex_byte(src + 4, crc_bytes + 2) &&
-          read_hex_byte(src + 6, crc_bytes + 3)) {
-        uint32_t stored_crc =
-          ((uint32_t)crc_bytes[0] << 24) |
-          ((uint32_t)crc_bytes[1] << 16) |
-          ((uint32_t)crc_bytes[2] << 8)  |
-          ((uint32_t)crc_bytes[3]);
-        if (stored_crc == crc32_calc(buf, bufsz))
-          ret = TRUE;
-      }
+      uint8_t cv;
+      if (read_hex_byte(src, &cv) && cv == sum)
+        ret = TRUE;
     }
   }
 
@@ -415,19 +413,19 @@ BOOL WritePrivateProfileStruct(const char *appname, const char *keyname,
   if (!buf || bufsz <= 0)
     return WritePrivateProfileString(appname, keyname, (const char *)buf, fn);
 
-  int hexlen = bufsz * 2 + 8 + 1;
+  int hexlen = (bufsz + 1) * 2 + 1;
   char *tmp = (char *)malloc(hexlen);
   if (!tmp) return FALSE;
 
   const uint8_t *src = (const uint8_t *)buf;
   char *p = tmp;
+  uint8_t sum = 0;
   for (int i = 0; i < bufsz; ++i) {
     sprintf(p, "%02X", src[i]);
+    sum += src[i];
     p += 2;
   }
-
-  uint32_t crc = crc32_calc(buf, bufsz);
-  sprintf(p, "%08X", crc);
+  sprintf(p, "%02X", sum);
 
   BOOL ret = WritePrivateProfileString(appname, keyname, tmp, fn);
   free(tmp);

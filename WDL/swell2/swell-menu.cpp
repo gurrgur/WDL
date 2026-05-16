@@ -156,11 +156,12 @@ int AddMenuItem(HMENU hMenu, int pos, const char *name, int tagid)
   SWELL_MenuItem *it = new SWELL_MenuItem();
   if (name) it->m_name.Set(name);
   it->m_id = tagid;
-  if (pos < 0 || pos >= hMenu->m_items.GetSize())
+  int sz = hMenu->m_items.GetSize();
+  if (pos < 0 || pos >= sz)
     hMenu->m_items.Add(it);
   else
     hMenu->m_items.Insert(pos, it);
-  return pos < 0 ? hMenu->m_items.GetSize() - 1 : pos;
+  return pos < 0 || pos >= sz ? hMenu->m_items.GetSize() - 1 : pos;
 }
 
 void SWELL_InsertMenu(HMENU menu, int pos, unsigned int flag, UINT_PTR idx, const char *str)
@@ -168,7 +169,10 @@ void SWELL_InsertMenu(HMENU menu, int pos, unsigned int flag, UINT_PTR idx, cons
   if (!menu) return;
   SWELL_MenuItem *it = new SWELL_MenuItem();
   it->m_flags = flag & ~MF_BYPOSITION;
-  it->m_id    = (int)idx;
+  if (flag & MF_POPUP)
+    it->m_submenu = (HMENU)idx;
+  else
+    it->m_id    = (int)idx;
   if (str && !(flag & MF_SEPARATOR)) it->m_name.Set(str);
 
   bool byPos = (flag & MF_BYPOSITION) != 0;
@@ -499,7 +503,7 @@ static sk_sp<SkTypeface> menu_get_typeface()
                         SkFontStyle::kNormal_Width,
                         SkFontStyle::kUpright_Slant);
       // Try modern system fonts in order
-      const char *faces[] = { "Adwaita Sans", "Noto Sans", "Segoe UI",
+      const char *faces[] = { "Roboto", "Noto Sans", "Segoe UI",
                                "DejaVu Sans", "Liberation Sans",
                                "FreeSans", "Arial", nullptr };
       for (int i = 0; faces[i]; i++) {
@@ -961,8 +965,11 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
             SWELL_MenuItem *it = mw.menu->m_items.Get(mw.hovered);
             if (it && !(it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR))) {
               if ((it->m_flags & MF_POPUP) && it->m_submenu) {
-                int item_sx = sx + mw.w;
-                int item_sy = sy + mw.item_y[mw.hovered];
+                int item_sx = swell_phys_to_log(sx + mw.w);
+                int item_sy = swell_phys_to_log(sy + mw.item_y[mw.hovered]);
+                SendMessage(owner_hwnd, WM_INITMENUPOPUP,
+                            (WPARAM)it->m_submenu,
+                            MAKELPARAM(mw.hovered, FALSE));
                 int r = run_menu_window(it->m_submenu, item_sx, item_sy,
                                         owner_hwnd, &mw,
                                         mw.item_y[mw.hovered]);
@@ -1035,9 +1042,12 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
               if ((it->m_flags & MF_POPUP) && it->m_submenu) {
                 if (submenu_open != idx) {
                   submenu_open = idx;
-                  int item_sx = sx + mw.w;
-                  int item_sy = sy + mw.item_y[idx];
-                  int r = run_menu_window(it->m_submenu, swell_phys_to_log(item_sx), swell_phys_to_log(item_sy),
+                  int item_sx = swell_phys_to_log(sx + mw.w);
+                  int item_sy = swell_phys_to_log(sy + mw.item_y[idx]);
+                  SendMessage(owner_hwnd, WM_INITMENUPOPUP,
+                              (WPARAM)it->m_submenu,
+                              MAKELPARAM(idx, FALSE));
+                  int r = run_menu_window(it->m_submenu, item_sx, item_sy,
                                           owner_hwnd, &mw,
                                           mw.item_y[idx]);
                   submenu_open = -1;
@@ -1083,9 +1093,8 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
 
   if (cmd && !(flags & TPM_RETURNCMD) && !(flags & TPM_NONOTIFY)) {
     SendMessage(hwnd, WM_COMMAND, (WPARAM)cmd, 0);
-    return 0;
   }
-  return cmd;
+  return (flags & TPM_RETURNCMD) ? cmd : (cmd != 0);
 }
 
 #else  // headless stub for TrackPopupMenu

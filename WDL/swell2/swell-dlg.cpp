@@ -477,7 +477,6 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
   }
 
   if (hwnd->m_hashaddestroy >= 2) {
-    s_last_dlgret = -1;
     return NULL;
   }
 
