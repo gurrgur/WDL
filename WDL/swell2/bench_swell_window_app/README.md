@@ -26,3 +26,13 @@ WDL/swell2/build/bench_swell_window_app --bench textedit_selection --duration-ms
 
 JSON includes target duration, actual elapsed time, iteration count, operation
 count, ops/sec, ns/op, and paint/message counters.
+
+Current benchmark names:
+
+```text
+resize_window control_layout paint_update text_layout_multiline
+clip_region_stack dirty_rect_coalesce widget_messages textedit_selection
+scrolling_lists menu_popup_navigation font_churn bitmap_lifecycle
+timer_postmessage window_tree_traversal theme_syscolor listview_churn
+treeview_churn tab_menu dialog_create_destroy mixed_window
+```

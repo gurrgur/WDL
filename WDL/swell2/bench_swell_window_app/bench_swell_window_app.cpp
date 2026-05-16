@@ -153,6 +153,67 @@ static const std::string &long_edit_text()
   return g_long_text;
 }
 
+static void ensure_scroll_data(WindowBenchState &s)
+{
+  if (s.listbox && SendMessage(s.listbox, LB_GETCOUNT, 0, 0) < 256)
+  {
+    SendMessage(s.listbox, LB_RESETCONTENT, 0, 0);
+    for (int i = 0; i < 256; ++i)
+    {
+      char buf[64];
+      snprintf(buf, sizeof(buf), "Scrollable list row %03d", i);
+      SendMessage(s.listbox, LB_ADDSTRING, 0, (LPARAM)buf);
+    }
+  }
+
+  if (s.listview && ListView_GetItemCount(s.listview) < 256)
+  {
+    ListView_DeleteAllItems(s.listview);
+    for (int i = 0; i < 256; ++i)
+    {
+      char name[64];
+      char value[64];
+      snprintf(name, sizeof(name), "scroll item %03d", i);
+      snprintf(value, sizeof(value), "value %03d", i * 7);
+      LVITEM item = {0};
+      item.mask = LVIF_TEXT;
+      item.iItem = i;
+      item.pszText = name;
+      ListView_InsertItem(s.listview, &item);
+      ListView_SetItemText(s.listview, i, 1, value);
+    }
+  }
+
+  if (s.treeview && TreeView_GetCount(s.treeview) < 128)
+  {
+    TreeView_DeleteAllItems(s.treeview);
+    for (int i = 0; i < 32; ++i)
+    {
+      char root_text[64];
+      snprintf(root_text, sizeof(root_text), "scroll root %02d", i);
+      TVINSERTSTRUCT root = {0};
+      root.hParent = TVI_ROOT;
+      root.hInsertAfter = TVI_LAST;
+      root.item.mask = TVIF_TEXT | TVIF_CHILDREN;
+      root.item.pszText = root_text;
+      root.item.cChildren = 1;
+      HTREEITEM hroot = TreeView_InsertItem(s.treeview, &root);
+      for (int c = 0; c < 4; ++c)
+      {
+        char child_text[64];
+        snprintf(child_text, sizeof(child_text), "scroll child %02d", c);
+        TVINSERTSTRUCT child = {0};
+        child.hParent = hroot;
+        child.hInsertAfter = TVI_LAST;
+        child.item.mask = TVIF_TEXT;
+        child.item.pszText = child_text;
+        TreeView_InsertItem(s.treeview, &child);
+      }
+      TreeView_Expand(s.treeview, hroot, TVE_EXPAND);
+    }
+  }
+}
+
 static LRESULT CALLBACK PaintProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   switch (msg)
@@ -310,6 +371,11 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARA
       ++g_state.notify_count;
       return 0;
 
+    case WM_TIMER:
+    case WM_USER + 150:
+      ++g_state.notify_count;
+      return 0;
+
     case WM_CLOSE:
       DestroyWindow(hwndDlg);
       return 1;
@@ -422,6 +488,261 @@ static void bench_textedit_selection(WindowBenchState &s, int, int, uint64_t ite
   pump_messages();
 }
 
+static void bench_text_layout_multiline(WindowBenchState &, int, int, uint64_t iter)
+{
+  HDC hdc = SWELL_CreateMemContext(NULL, 720, 480);
+  if (!hdc) return;
+
+  LOGFONT lf = {0};
+  lf.lfHeight = -12 - (int)(iter % 6);
+  lf.lfWeight = (iter & 1) ? 700 : 400;
+  lstrcpyn(lf.lfFaceName, "Arial", 32);
+  HFONT font = CreateFontIndirect(&lf);
+  HGDIOBJ old_font = font ? SelectObject(hdc, (HGDIOBJ)font) : NULL;
+
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, RGB(25, 35, 55));
+  const std::string &txt = long_edit_text();
+  const int text_len = std::min((int)txt.size(), 4096 + (int)(iter % 8) * 512);
+  for (int i = 0; i < 8; ++i)
+  {
+    RECT r = {8 + (i % 4) * 16, 8, 300 + (i % 5) * 60, 460};
+    DrawText(hdc, txt.c_str(), text_len, &r, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    RECT calc = {0, 0, 240 + (i % 5) * 40, 0};
+    DrawText(hdc, txt.c_str(), std::min(text_len, 1024 + (i % 8) * 256), &calc,
+             DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+  }
+
+  if (old_font) SelectObject(hdc, old_font);
+  if (font) DeleteObject((HGDIOBJ)font);
+  SWELL_DeleteGfxContext(hdc);
+}
+
+static void bench_clip_region_stack(WindowBenchState &, int, int, uint64_t iter)
+{
+  HDC hdc = SWELL_CreateMemContext(NULL, 640, 420);
+  if (!hdc) return;
+
+  uint32_t state = (uint32_t)iter * 811u + 19u;
+  HBRUSH brush = CreateSolidBrush(RGB(80, 140, 210));
+  for (int i = 0; i < 64; ++i)
+  {
+    RECT clip = {
+      rnd(state, 520),
+      rnd(state, 320),
+      0,
+      0
+    };
+    clip.right = clip.left + 40 + rnd(state, 120);
+    clip.bottom = clip.top + 30 + rnd(state, 90);
+    RECT fill = {clip.left - 16, clip.top - 16, clip.right + 16, clip.bottom + 16};
+    SWELL_PushClipRegion(hdc);
+    SWELL_SetClipRegion(hdc, &clip);
+    FillRect(hdc, &fill, brush);
+    SWELL_PopClipRegion(hdc);
+  }
+  DeleteObject((HGDIOBJ)brush);
+  SWELL_DeleteGfxContext(hdc);
+}
+
+static void bench_dirty_rect_coalesce(WindowBenchState &s, int, int, uint64_t iter)
+{
+  if (!s.paint) return;
+  RECT cr;
+  GetClientRect(s.paint, &cr);
+  uint32_t state = (uint32_t)iter * 1223u + 31u;
+  for (int i = 0; i < 192; ++i)
+  {
+    RECT dirty = {
+      rnd(state, std::max(1, cr.right - 8)),
+      rnd(state, std::max(1, cr.bottom - 8)),
+      0,
+      0
+    };
+    dirty.right = std::min(cr.right, dirty.left + 4 + rnd(state, 48));
+    dirty.bottom = std::min(cr.bottom, dirty.top + 4 + rnd(state, 36));
+    InvalidateRect(s.paint, &dirty, 0);
+  }
+  UpdateWindow(s.paint);
+  SendMessage(s.paint, WM_PAINT, 0, 0);
+  pump_messages();
+}
+
+static void bench_scrolling_lists(WindowBenchState &s, int, int, uint64_t iter)
+{
+  ensure_scroll_data(s);
+  for (int i = 0; i < 96; ++i)
+  {
+    const int row = (int)((iter * 17 + i * 5) % 256);
+    SendMessage(s.listbox, LB_SETCURSEL, row, 0);
+    ListView_EnsureVisible(s.listview, row, TRUE);
+    ListView_SetItemState(s.listview, row, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_Scroll(s.listview, 0, (i & 1) ? 12 : -12);
+    HTREEITEM root = TreeView_GetRoot(s.treeview);
+    if (root)
+    {
+      HTREEITEM item = root;
+      for (int n = 0; n < (row % 20); ++n)
+      {
+        HTREEITEM next = TreeView_GetNextItem(s.treeview, item, TVGN_NEXTVISIBLE);
+        if (!next) break;
+        item = next;
+      }
+      TreeView_SelectItem(s.treeview, item);
+      TreeView_EnsureVisible(s.treeview, item);
+    }
+  }
+  pump_messages();
+}
+
+static void bench_menu_popup_navigation(WindowBenchState &s, int, int, uint64_t iter)
+{
+  for (int i = 0; i < 64; ++i)
+  {
+    HMENU menu = CreatePopupMenu();
+    if (!menu) continue;
+    for (int n = 0; n < 16; ++n)
+    {
+      char label[64];
+      snprintf(label, sizeof(label), "Popup item %02d.%02d", i, n);
+      AddMenuItem(menu, -1, label, 5000 + n);
+    }
+    const int idx = (int)((iter + i) % 16);
+    EnableMenuItem(menu, idx, (i & 1) ? 1 : 0);
+    CheckMenuItem(menu, idx, i & 1);
+    SetMenuItemText(menu, idx, 0, "Popup renamed");
+    MENUITEMINFO mi = {0};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_STATE | MIIM_TYPE;
+    GetMenuItemInfo(menu, idx, TRUE, &mi);
+    HMENU dup = SWELL_DuplicateMenu(menu);
+    if (dup)
+    {
+      DeleteMenu(dup, 0, MF_BYPOSITION);
+      DestroyMenu(dup);
+    }
+    SetMenu(s.main, menu);
+    DrawMenuBar(s.main);
+    SetMenu(s.main, NULL);
+    DestroyMenu(menu);
+  }
+  pump_messages();
+}
+
+static void bench_font_churn(WindowBenchState &, int, int, uint64_t iter)
+{
+  HDC hdc = SWELL_CreateMemContext(NULL, 640, 240);
+  if (!hdc) return;
+
+  for (int i = 0; i < 64; ++i)
+  {
+    LOGFONT lf = {0};
+    lf.lfHeight = -10 - (int)((iter + i) % 18);
+    lf.lfWeight = (i & 1) ? 700 : 400;
+    lf.lfItalic = (i & 2) ? 1 : 0;
+    lstrcpyn(lf.lfFaceName, (i & 4) ? "Arial" : "Sans", 32);
+    HFONT font = CreateFontIndirect(&lf);
+    HGDIOBJ old_font = font ? SelectObject(hdc, (HGDIOBJ)font) : NULL;
+    TEXTMETRIC tm = {0};
+    GetTextMetrics(hdc, &tm);
+    RECT r = {8, 8 + (i % 12) * 18, 620, 32 + (i % 12) * 18};
+    DrawText(hdc, "font churn benchmark", -1, &r, DT_LEFT | DT_SINGLELINE | DT_NOCLIP);
+    if (old_font) SelectObject(hdc, old_font);
+    if (font) DeleteObject((HGDIOBJ)font);
+  }
+  SWELL_DeleteGfxContext(hdc);
+}
+
+static void bench_bitmap_lifecycle(WindowBenchState &, int, int, uint64_t iter)
+{
+  HDC hdc = SWELL_CreateMemContext(NULL, 320, 240);
+  if (!hdc) return;
+
+  unsigned char pixels[32 * 32 * 4];
+  for (int p = 0; p < 32 * 32; ++p)
+  {
+    pixels[p * 4 + 0] = (unsigned char)((p + iter) & 255);
+    pixels[p * 4 + 1] = (unsigned char)((p * 3) & 255);
+    pixels[p * 4 + 2] = (unsigned char)((p * 7) & 255);
+    pixels[p * 4 + 3] = 255;
+  }
+
+  for (int i = 0; i < 64; ++i)
+  {
+    HBITMAP bm = CreateBitmap(32, 32, 1, 32, pixels);
+    ICONINFO info = {0};
+    info.hbmColor = bm;
+    HICON icon = CreateIconIndirect(&info);
+    if (icon)
+    {
+      RECT r = { (i % 8) * 40, (i / 8) * 28, (i % 8) * 40 + 32, (i / 8) * 28 + 24 };
+      DrawImageInRect(hdc, icon, &r);
+      DeleteObject((HGDIOBJ)icon);
+    }
+    if (bm) DeleteObject((HGDIOBJ)bm);
+  }
+  SWELL_DeleteGfxContext(hdc);
+}
+
+static void bench_timer_postmessage(WindowBenchState &s, int, int, uint64_t iter)
+{
+  const UINT msg = WM_USER + 150;
+  for (int i = 0; i < 128; ++i)
+    PostMessage(s.main, msg, (WPARAM)i, (LPARAM)iter);
+  SWELL_MessageQueue_Flush();
+
+  for (int i = 0; i < 16; ++i)
+    SetTimer(s.main, 1000 + i, 1, NULL);
+  pump_messages(2);
+  for (int i = 0; i < 16; ++i)
+    KillTimer(s.main, 1000 + i);
+}
+
+static void bench_window_tree_traversal(WindowBenchState &s, int, int, uint64_t iter)
+{
+  const int ids[] = {
+    IDC_EDIT, IDC_COMBO, IDC_LISTBOX, IDC_CHECK, IDC_SLIDER, IDC_PROGRESS,
+    IDC_LISTVIEW, IDC_TREEVIEW, IDC_TAB, IDC_PAINT, IDC_LONG_EDIT
+  };
+  const char *classes[] = {
+    "Edit", "ComboBox", "ListBox", "Button", "SysListView32",
+    "SysTreeView32", "SysTabControl32", "Static"
+  };
+
+  POINT pt = { 20 + (int)(iter % 80), 40 + (int)(iter % 60) };
+  ClientToScreen(s.main, &pt);
+  for (int i = 0; i < 96; ++i)
+  {
+    HWND h = GetDlgItem(s.main, ids[i % (int)(sizeof(ids) / sizeof(ids[0]))]);
+    if (h)
+    {
+      IsChild(s.main, h);
+      GetParent(h);
+      GetWindow(h, GW_HWNDNEXT);
+    }
+    FindWindowEx(s.main, NULL, classes[i % (int)(sizeof(classes) / sizeof(classes[0]))], NULL);
+    WindowFromPoint(pt);
+  }
+}
+
+static void bench_theme_syscolor(WindowBenchState &, int, int, uint64_t iter)
+{
+  HDC hdc = SWELL_CreateMemContext(NULL, 420, 260);
+  if (!hdc) return;
+  for (int i = 0; i < 96; ++i)
+  {
+    int color = GetSysColor(i % 31);
+    HBRUSH br = CreateSolidBrush(color);
+    RECT r = { (i % 12) * 35, (i / 12) * 28, (i % 12) * 35 + 32, (i / 12) * 28 + 24 };
+    FillRect(hdc, &r, br);
+    DeleteObject((HGDIOBJ)br);
+    RECT bg = {0, 0, 420, 260};
+    SWELL_FillDialogBackground(hdc, &bg, (int)((iter + i) % 3));
+  }
+  SWELL_DeleteGfxContext(hdc);
+}
+
 static void bench_listview_churn(WindowBenchState &s, int, int, uint64_t iter)
 {
   if (!s.listview) return;
@@ -515,8 +836,10 @@ static void bench_mixed_window(WindowBenchState &s, int w, int h, uint64_t iter)
   bench_resize_window(s, w, h, iter);
   bench_control_layout(s, w, h, iter);
   bench_paint_update(s, w, h, iter);
+  bench_dirty_rect_coalesce(s, w, h, iter);
   bench_widget_messages(s, w, h, iter);
   bench_textedit_selection(s, w, h, iter);
+  bench_scrolling_lists(s, w, h, iter);
   bench_listview_churn(s, w, h, iter);
 }
 
@@ -524,13 +847,23 @@ static const Bench kBenches[] = {
   {"resize_window", "windowing", 48, bench_resize_window},
   {"control_layout", "windowing", 10, bench_control_layout},
   {"paint_update", "painting", 64, bench_paint_update},
+  {"text_layout_multiline", "text", 16, bench_text_layout_multiline},
+  {"clip_region_stack", "painting", 192, bench_clip_region_stack},
+  {"dirty_rect_coalesce", "painting", 193, bench_dirty_rect_coalesce},
   {"widget_messages", "widgets", 576, bench_widget_messages},
   {"textedit_selection", "widgets", 204, bench_textedit_selection},
+  {"scrolling_lists", "widgets", 576, bench_scrolling_lists},
+  {"menu_popup_navigation", "widgets", 1408, bench_menu_popup_navigation},
+  {"font_churn", "text", 256, bench_font_churn},
+  {"bitmap_lifecycle", "painting", 256, bench_bitmap_lifecycle},
+  {"timer_postmessage", "windowing", 176, bench_timer_postmessage},
+  {"window_tree_traversal", "windowing", 480, bench_window_tree_traversal},
+  {"theme_syscolor", "painting", 384, bench_theme_syscolor},
   {"listview_churn", "widgets", 288, bench_listview_churn},
   {"treeview_churn", "widgets", 120, bench_treeview_churn},
   {"tab_menu", "widgets", 480, bench_tab_menu},
   {"dialog_create_destroy", "windowing", 64, bench_dialog_create_destroy},
-  {"mixed_window", "mixed", 1190, bench_mixed_window},
+  {"mixed_window", "mixed", 1959, bench_mixed_window},
 };
 
 static bool has_bench(const Options &opt, const char *name)
