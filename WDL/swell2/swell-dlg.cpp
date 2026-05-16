@@ -345,8 +345,9 @@ void SWELL_GenerateDialogFromList(const void *list, int listsz)
     } else if (!strcmp(e->str1, "__SWELL_LISTBOX")) {
       SWELL_MakeListBox(e->p1, e->p2, e->p3, e->p4, e->p5, e->p6);
     } else if (!strcmp(e->str1, "__SWELL_ICON")) {
-      // str2=icon resid, p1=x, p2=y, p3=w, p4=h, p5=style, p6=exstyle
-      SWELL_MakeControl(e->str2, -1, "__SWELL_ICON",
+      // str2 is an icon resource ID cast to (const char*) via dlggen.h ICON macro
+      // — not a string pointer. Pass NULL for cname to avoid strlen crash.
+      SWELL_MakeControl(NULL, -1, "__SWELL_ICON",
                         e->p5, e->p1, e->p2, e->p3, e->p4, e->p6);
     } else {
       // CONTROL entry: str1=cname, flag1=idx, str2=classname, p1=style, p2..p6=x,y,w,h,exstyle
@@ -417,6 +418,7 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
     style |= WS_CHILD;
   }
 
+  style |= wflags & WS_CLIPSIBLINGS;
   // Scale to physical device pixels (matching original SWELL dlg-generic.cpp:295).
   // SDL3 backend does NOT use HIGH_PIXEL_DENSITY — SWELL owns DPI scaling itself.
   int dlg_w = SWELL_UI_SCALE(res ? res->width  : 400);
@@ -483,7 +485,8 @@ HWND SWELL_CreateDialog(struct SWELL_DialogResourceIndex *reshead,
     return NULL;
   }
 
-  if (initret && firstFocus) {
+  if (initret && firstFocus && firstFocus->m_hashaddestroy < 2 &&
+      firstFocus->m_wantfocus && firstFocus->m_visible && firstFocus->m_enabled) {
     SetFocus(firstFocus);
   }
   if (firstFocus) firstFocus->Release();
@@ -513,11 +516,17 @@ int SWELL_DialogBox(struct SWELL_DialogResourceIndex *reshead,
     }
     if (!r || (r->windowTypeFlags & SWELL_DLG_WS_CHILD)) return -1;
   }
+  else if (parent)
+  {
+    resid = (const char *)(INT_PTR)(0x400002); // force non-child, force no minimize box
+  }
 
   HWND dlg = SWELL_CreateDialog(reshead, resid, parent, dlgproc, param);
   if (!dlg) return s_last_dlgret;
 
   dlg->Retain(); // keep alive past EndDialog → DestroyWindow
+
+  ReleaseCapture(); // force end of any captures
 
   // Push modal state
   ModalDlgState ms;
