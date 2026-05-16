@@ -2568,7 +2568,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       RECT outer = cr;
       const int frame_r = th.corner_radius;
-      fill_bg(hwnd, hdc, WM_CTLCOLORLISTBOX, th.bg_window);
       SWELL_PushClipRegion(hdc);
       SWELL_SetClipRoundRect(hdc, outer.left, outer.top, outer.right, outer.bottom, frame_r);
 
@@ -3451,7 +3450,6 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       const swell_theme &th = g_swell_theme;
       RECT outer = cr;
       const int frame_r = th.corner_radius;
-      fill_bg(hwnd, hdc, WM_CTLCOLORLISTBOX, th.bg_window);
       SWELL_PushClipRegion(hdc);
       SWELL_SetClipRoundRect(hdc, outer.left, outer.top, outer.right, outer.bottom, frame_r);
       HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_input);
