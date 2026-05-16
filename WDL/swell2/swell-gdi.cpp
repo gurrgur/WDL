@@ -71,10 +71,11 @@ HDC__ *SWELL_GDP_CTX_NEW()
     p = g_hdc_free_list;
     g_hdc_free_list = p->_next;
     g_hdc_pool_count--;
+    p->~HDC__();
+    new(p) HDC__();
   } else {
     p = new HDC__();
   }
-  memset(p, 0, sizeof(HDC__));
   p->_infreelist = false;
   return p;
 }
@@ -84,6 +85,8 @@ void SWELL_GDP_CTX_DELETE(HDC__ *hdc)
   if (!hdc) return;
   std::lock_guard<std::mutex> lock(g_hdc_pool_mutex);
   if (g_hdc_pool_count < SWELL_MAX_HDC_POOL) {
+    hdc->~HDC__();
+    new(hdc) HDC__();
     hdc->_infreelist = true;
     hdc->_next = g_hdc_free_list;
     g_hdc_free_list = hdc;
@@ -1488,6 +1491,33 @@ static void swell_wordwrap_line(const SkFont &font, const char *txt, int tstart,
   }
 }
 
+// Process Win32 '&' accelerator prefixes when DT_NOPREFIX is not set.
+// '&x' → strip &, underline char x. '&&' → single '&'. Sets clean text
+// in outText and the byte offset of each char that needs an underline
+// (relative to outText) in underlineAt.
+static void swell_handle_prefix(const char *buf, int len,
+                                WDL_FastString &outText,
+                                WDL_TypedBuf<int> &underlineAt)
+{
+  outText.Set("");
+  underlineAt.Resize(0);
+  for (int i = 0; i < len; i++) {
+    if (buf[i] == '&') {
+      i++;
+      if (i >= len) break;
+      if (buf[i] == '&') {
+        underlineAt.Add(outText.GetLength());
+        outText.Append("&", 1);
+      } else {
+        underlineAt.Add(outText.GetLength());
+        outText.Append(buf + i, 1);
+      }
+    } else {
+      outText.Append(buf + i, 1);
+    }
+  }
+}
+
 int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 {
   if (!HDC_VALID(ctx) || !r) return 0;
@@ -1506,6 +1536,16 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   len = cleanbuf.GetLength();
   if (len <= 0) return 0;
 
+  // Win32 &-prefix handling: strip accelerators from display text.
+  WDL_FastString prefixStripped;
+  WDL_TypedBuf<int> prefixUnderlineAt;
+  if (!(align & DT_NOPREFIX)) {
+    swell_handle_prefix(buf, len, prefixStripped, prefixUnderlineAt);
+    buf = prefixStripped.Get();
+    len = prefixStripped.GetLength();
+    if (len <= 0) return 0;
+  }
+
   // Build SkFont from selected font or default
   const SkFont &font = swell_get_cached_skfont(ctx);
 
@@ -1516,6 +1556,14 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   float lineht  = ascent + descent;
   int rowH = (int)(lineht + 0.5f);
   if (rowH < 1) rowH = (int)(font.getSize() + 0.5f);
+
+  SkPaint underlinePaint;
+  bool haveUnderlines = prefixUnderlineAt.GetSize() > 0;
+  if (haveUnderlines) {
+    underlinePaint.setStyle(SkPaint::kFill_Style);
+    underlinePaint.setColor(ctx->cur_text_color_int);
+    underlinePaint.setAntiAlias(true);
+  }
 
   bool wordbreak = (align & DT_WORDBREAK) && !(align & DT_SINGLELINE);
   if (!wordbreak) {
@@ -1529,8 +1577,10 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
     int textH = rowH;
 
     if (align & DT_CALCRECT) {
-      r->right = r->left + textW;
-      r->bottom = r->top + textH;
+      r->left = 0;
+      r->top = 0;
+      r->right = textW;
+      r->bottom = textH;
       return textH;
     }
 
@@ -1568,6 +1618,20 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 
     ctx->canvas->drawSimpleText(buf, len, SkTextEncoding::kUTF8,
                                 x, y, font, textPaint);
+
+    // Draw underlines for &-prefix chars
+    if (haveUnderlines) {
+      const int ulH = 1;
+      const int ulOff = 2;
+      float ulY = y + descent + ulOff + 0.5f;
+      for (int ui = 0; ui < prefixUnderlineAt.GetSize(); ui++) {
+        int uIdx = prefixUnderlineAt.Get()[ui];
+        float uLeft = x + swell_text_width(font, buf, uIdx);
+        float uRight = uLeft + swell_text_width(font, buf + uIdx, 1);
+        ctx->canvas->drawRect(
+          SkRect::MakeLTRB(uLeft, ulY, uRight, ulY + ulH), underlinePaint);
+      }
+    }
 
     if (opaque) {
       swell_DirtyContext(ctx, r->left, r->top, r->right, r->bottom);
@@ -1632,8 +1696,10 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
       int lw = (int)(swell_text_width(font, buf + lStart, lEnd - lStart) + 0.5f);
       if (lw > maxLineW) maxLineW = lw;
     }
-    r->right = r->left + maxLineW;
-    r->bottom = r->top + totalH;
+    r->left = 0;
+    r->top = 0;
+    r->right = maxLineW;
+    r->bottom = totalH;
     return totalH;
   }
 
@@ -1846,8 +1912,7 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     forceref = true;
 
   if (forceref || hwnd->m_child_invalidated) {
-    swell_gdpLocalContext ctx_local;
-    memset(&ctx_local, 0, sizeof(ctx_local));
+    swell_gdpLocalContext ctx_local{};
     ctx_local.ctx.canvas = canvas;
     if (canvas)
       ctx_local.ctx.surface = sk_ref_sp(canvas->getSurface());
