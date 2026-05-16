@@ -35,6 +35,10 @@ void swell_oswindow_update_text(HWND hwnd)
 {
 }
 
+void swell_oswindow_maximize(HWND hwnd)
+{
+}
+
 void swell_oswindow_invalidate(HWND hwnd, const RECT *r)
 {
 }

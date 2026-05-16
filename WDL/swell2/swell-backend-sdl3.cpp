@@ -467,6 +467,23 @@ static int sdl_key_to_vk(SDL_Keycode key)
     case SDLK_RALT:       return VK_MENU;
     case SDLK_LGUI:       return VK_LWIN;
     case SDLK_RGUI:       return VK_RWIN;
+    case SDLK_KP_0:       return VK_NUMPAD0;
+    case SDLK_KP_1:       return VK_NUMPAD1;
+    case SDLK_KP_2:       return VK_NUMPAD2;
+    case SDLK_KP_3:       return VK_NUMPAD3;
+    case SDLK_KP_4:       return VK_NUMPAD4;
+    case SDLK_KP_5:       return VK_NUMPAD5;
+    case SDLK_KP_6:       return VK_NUMPAD6;
+    case SDLK_KP_7:       return VK_NUMPAD7;
+    case SDLK_KP_8:       return VK_NUMPAD8;
+    case SDLK_KP_9:       return VK_NUMPAD9;
+    case SDLK_KP_PERIOD:  return VK_DECIMAL;
+    case SDLK_KP_DIVIDE:  return VK_DIVIDE;
+    case SDLK_KP_MULTIPLY:return VK_MULTIPLY;
+    case SDLK_KP_MINUS:   return VK_SUBTRACT;
+    case SDLK_KP_PLUS:    return VK_ADD;
+    case SDLK_KP_ENTER:   return VK_RETURN;
+    case SDLK_NUMLOCKCLEAR: return VK_NUMLOCK;
     default: break;
   }
 
@@ -720,7 +737,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
         g_swell_focused_oswindow_hwnd = e->hwnd;
-        SendMessage(e->hwnd, WM_ACTIVATE, WA_ACTIVE, 0);
+        SendMessage(e->hwnd, WM_ACTIVATEAPP, TRUE, 0);
         HWND foc = GetFocus();
         if (foc) SendMessage(foc, WM_SETFOCUS, 0, 0);
       }
@@ -734,7 +751,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           g_swell_focused_oswindow_hwnd = NULL;
         HWND foc = GetFocus();
         if (foc) SendMessage(foc, WM_KILLFOCUS, 0, 0);
-        SendMessage(e->hwnd, WM_ACTIVATE, WA_INACTIVE, 0);
+        SendMessage(e->hwnd, WM_ACTIVATEAPP, FALSE, 0);
       }
       break;
     }
@@ -754,21 +771,24 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       int vk = sdl_key_to_vk(k);
       if (!vk && k < 0x80) vk = k; // ASCII printable
 
-      HWND foc = GetFocus();
-      if (!foc) break;
+      if (vk) {
+        HWND foc = GetFocus();
+        if (foc) {
 
-      // some extended keys get the extended bit
-      if (k & SDLK_EXTENDED_MASK) lp |= 0x1000000;
+          // some extended keys get the extended bit
+          if (k & SDLK_EXTENDED_MASK) lp |= 0x1000000;
 
-      // Alt/Ctrl/Shift/GUI keys send WM_SYSKEYDOWN (matching swell-experimental)
-      UINT kmsg = WM_KEYDOWN;
-      if (k == SDLK_LALT || k == SDLK_RALT ||
-          k == SDLK_LCTRL || k == SDLK_RCTRL ||
-          k == SDLK_LSHIFT || k == SDLK_RSHIFT ||
-          k == SDLK_LGUI || k == SDLK_RGUI)
-        kmsg = WM_SYSKEYDOWN;
+          // Alt/Ctrl/Shift/GUI keys send WM_SYSKEYDOWN (matching swell-experimental)
+          UINT kmsg = WM_KEYDOWN;
+          if (k == SDLK_LALT || k == SDLK_RALT ||
+              k == SDLK_LCTRL || k == SDLK_RCTRL ||
+              k == SDLK_LSHIFT || k == SDLK_RSHIFT ||
+              k == SDLK_LGUI || k == SDLK_RGUI)
+            kmsg = WM_SYSKEYDOWN;
 
-      SendMessage(foc, kmsg, vk, lp);
+          SendMessage(foc, kmsg, vk, lp);
+        }
+      }
       break;
     }
 
@@ -840,7 +860,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         float cy = my - nc_top;
 
         // NC area click (menu bar etc.) — use WM_NCHITTEST for proper HT code
-        if (down && (cy < 0 || cx < 0)) {
+        int client_w = e->hwnd->m_position.right - e->hwnd->m_position.left - nc_left;
+        int client_h = e->hwnd->m_position.bottom - e->hwnd->m_position.top - nc_top;
+        if (down && (cy < 0 || cx < 0 || cx >= client_w || cy >= client_h)) {
           LRESULT ht = SendMessage(e->hwnd, WM_NCHITTEST, 0, MAKELPARAM((int)mx, (int)my));
           if (ht == HTCLIENT) ht = HTNOWHERE; // clamp if client-area returned
           UINT ncmsg = 0;
