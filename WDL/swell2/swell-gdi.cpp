@@ -1527,8 +1527,8 @@ static int swell_valid_utf8_sequence_len(const unsigned char *s, int avail)
   return 0;
 }
 
-static const char *swell_text_for_skia(const char *buf, int len,
-                                       WDL_FastString &tmp, int *out_len)
+const char *swell_text_for_skia(const char *buf, int len,
+                                WDL_FastString &tmp, int *out_len)
 {
   // Single-pass: check for 8-bit chars AND validate UTF-8
   bool has_8bit = false;

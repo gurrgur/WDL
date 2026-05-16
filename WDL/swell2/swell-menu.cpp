@@ -647,7 +647,7 @@ static void menu_measure(MenuWindow *mw)
     const char *label = menu_strip_accel(raw, stripBuf);
     if (label && label[0]) {
       SkRect bounds;
-      mw->font.measureText(label, strlen(label), SkTextEncoding::kUTF8, &bounds);
+      swell_skfont_measure_utf8(mw->font, label, (int)strlen(label), &bounds);
       int tw = (int)(bounds.width() + 0.5f);
       if (tw > maxLabelW) maxLabelW = tw;
     }
@@ -655,7 +655,7 @@ static void menu_measure(MenuWindow *mw)
     const char *shortcut = menu_get_shortcut(raw);
     if (shortcut && shortcut[0]) {
       SkRect bounds;
-      mw->font.measureText(shortcut, strlen(shortcut), SkTextEncoding::kUTF8, &bounds);
+      swell_skfont_measure_utf8(mw->font, shortcut, (int)strlen(shortcut), &bounds);
       int tw = (int)(bounds.width() + 0.5f);
       if (tw > maxShortcutW) maxShortcutW = tw;
     }
@@ -817,8 +817,8 @@ static void menu_draw(MenuWindow *mw)
         mw->font.getMetrics(&fm);
         float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f;
 
-        c->drawSimpleText(txt, strlen(txt), SkTextEncoding::kUTF8,
-                          (float)menu_lpad(), ty, mw->font, tp);
+        swell_skcanvas_drawtext_utf8(c, txt, (int)strlen(txt),
+                                     (float)menu_lpad(), ty, mw->font, tp);
       }
 
       // Shortcut text (right-aligned, skip if submenu to avoid arrow overlap)
@@ -826,7 +826,7 @@ static void menu_draw(MenuWindow *mw)
         const char *shortcut = menu_get_shortcut(raw_txt);
         if (shortcut && shortcut[0]) {
           SkRect sb;
-          mw->font.measureText(shortcut, strlen(shortcut), SkTextEncoding::kUTF8, &sb);
+          swell_skfont_measure_utf8(mw->font, shortcut, (int)strlen(shortcut), &sb);
           float sw = sb.width();
           float sx = (float)(mw->w - g_swell_theme.padding_menu_item_h - sw);
 
@@ -838,8 +838,8 @@ static void menu_draw(MenuWindow *mw)
           mw->font.getMetrics(&fm);
           float ty = (float)iy + (float)ih / 2.0f - (fm.fAscent + fm.fDescent) / 2.0f;
 
-          c->drawSimpleText(shortcut, strlen(shortcut), SkTextEncoding::kUTF8,
-                            sx, ty, mw->font, sp);
+          swell_skcanvas_drawtext_utf8(c, shortcut, (int)strlen(shortcut),
+                                       sx, ty, mw->font, sp);
         }
       }
     }

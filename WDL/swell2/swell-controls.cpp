@@ -620,7 +620,7 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
       while (lo < hi) {
         int mid = (lo + hi + 1) / 2;
         SkRect bounds;
-        skfont.measureText(txt_orig, mid, SkTextEncoding::kUTF8, &bounds);
+        swell_skfont_measure_utf8(skfont, txt_orig, mid, &bounds);
         int textW = (int)(bounds.width() + 0.5f);
         if (tr.left + textW <= mx)
           lo = mid;
@@ -664,7 +664,7 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
         while (lo < hi) {
           int mid = (lo + hi + 1) / 2;
           SkRect bounds;
-          skfont.measureText(txt + d0, mid, SkTextEncoding::kUTF8, &bounds);
+          swell_skfont_measure_utf8(skfont, txt + d0, mid, &bounds);
           int textW = (int)(bounds.width() + 0.5f);
           if (tr.left + textW <= mx)
             lo = mid;
@@ -1395,7 +1395,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             while (pos < end_off) {
               int remain = end_off - pos;
               SkRect bounds;
-              skfont.measureText(txt + pos, remain, SkTextEncoding::kUTF8, &bounds);
+              swell_skfont_measure_utf8(skfont, txt + pos, remain, &bounds);
               int textW = (int)(bounds.width() + 0.5f);
               if (textW <= scrWidth) {
                st->ml_dline_starts.Add(pos);
@@ -1406,7 +1406,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
               int lo = pos + 1, hi = end_off;
               while (lo < hi) {
                 int mid = (lo + hi + 1) / 2;
-                skfont.measureText(txt + pos, mid - pos, SkTextEncoding::kUTF8, &bounds);
+                swell_skfont_measure_utf8(skfont, txt + pos, mid - pos, &bounds);
                 textW = (int)(bounds.width() + 0.5f);
                 if (textW <= scrWidth) lo = mid;
                 else hi = mid - 1;
@@ -1491,11 +1491,11 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             int ry = tr.top + di * rowH - scrollY;
 
             SkRect r1;
-            skfont.measureText(txt + d0, selLineStart - d0, SkTextEncoding::kUTF8, &r1);
+            swell_skfont_measure_utf8(skfont, txt + d0, selLineStart - d0, &r1);
             int preW = (int)(r1.width() + 0.5f);
 
             SkRect r2;
-            skfont.measureText(txt + selLineStart, selLineEnd - selLineStart, SkTextEncoding::kUTF8, &r2);
+            swell_skfont_measure_utf8(skfont, txt + selLineStart, selLineEnd - selLineStart, &r2);
             int selW = (int)(r2.width() + 0.5f);
 
             RECT selR = { tr.left + preW, ry, tr.left + preW + selW, ry + rowH };
@@ -1519,7 +1519,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             int clen = bpos - d0;
             if (clen < 0) clen = 0;
             SkRect cbr;
-            skfont.measureText(txt + d0, clen, SkTextEncoding::kUTF8, &cbr);
+            swell_skfont_measure_utf8(skfont, txt + d0, clen, &cbr);
             int cx = tr.left + (int)(cbr.width() + 0.5f);
             int cy = tr.top + cdline * rowH - scrollY;
             if (cy >= tr.top && cy + rowH <= tr.bottom) {
@@ -1561,7 +1561,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           if (bs2 > bs1)
           {
             SkRect mr;
-            skfont.measureText(txt, bs1, SkTextEncoding::kUTF8, &mr);
+            swell_skfont_measure_utf8(skfont, txt, bs1, &mr);
             RECT selR = tr;
             selR.left += (int)(mr.width() + 0.5f);
             SetBkMode(hdc, OPAQUE);
@@ -1577,7 +1577,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           if (cpos > tlen) cpos = tlen;
           int bpos = WDL_utf8_charpos_to_bytepos(txt, cpos);
           SkRect cbounds;
-          skfont.measureText(txt, bpos, SkTextEncoding::kUTF8, &cbounds);
+          swell_skfont_measure_utf8(skfont, txt, bpos, &cbounds);
           int cx = tr.left + (int)(cbounds.width() + 0.5f);
           if (cx > tr.right - 1) cx = tr.right - 1;
           HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);

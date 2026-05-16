@@ -578,6 +578,41 @@ void SWELL_SetClipRoundRect(HDC ctx, int l, int t, int r, int b, int radius);
 void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     int bmout_xpos, int bmout_ypos, bool forceref);
 
+// Sanitize possibly-invalid UTF-8 (interpret stray bytes as CP1252) so Skia's
+// kUTF8 decoder cannot trip on invalid sequences. Returns either buf (when
+// already valid) or a pointer into tmp; out_len receives the resulting length.
+const char *swell_text_for_skia(const char *buf, int len,
+                                WDL_FastString &tmp, int *out_len);
+
+// Safe wrappers around SkFont/SkCanvas text APIs that route through
+// swell_text_for_skia first. All other callsites should use these instead of
+// calling SkFont::measureText / SkCanvas::drawSimpleText directly with kUTF8.
+static inline void swell_skfont_measure_utf8(const SkFont &font,
+                                             const char *buf, int len,
+                                             SkRect *bounds)
+{
+  if (bounds) *bounds = SkRect::MakeEmpty();
+  if (len <= 0 || !buf) return;
+  WDL_FastString tmp;
+  int olen = len;
+  const char *p = swell_text_for_skia(buf, len, tmp, &olen);
+  if (olen > 0) font.measureText(p, olen, SkTextEncoding::kUTF8, bounds);
+}
+
+static inline void swell_skcanvas_drawtext_utf8(SkCanvas *canvas,
+                                                const char *buf, int len,
+                                                float x, float y,
+                                                const SkFont &font,
+                                                const SkPaint &paint)
+{
+  if (!canvas || len <= 0 || !buf) return;
+  WDL_FastString tmp;
+  int olen = len;
+  const char *p = swell_text_for_skia(buf, len, tmp, &olen);
+  if (olen > 0)
+    canvas->drawSimpleText(p, olen, SkTextEncoding::kUTF8, x, y, font, paint);
+}
+
 // swell-backend-headless.cpp
 void swell_oswindow_manage(HWND hwnd, bool wantFocus);
 void swell_oswindow_destroy(HWND hwnd);
