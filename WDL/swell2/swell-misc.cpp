@@ -1189,8 +1189,13 @@ HCURSOR SWELL_LoadCursor(const char *idx)
       match = (strcmp(e->id, idx) == 0);
     if (match) {
       if (!e->cursor) {
-        SDL_SystemCursor sc = idcname_to_sdl(idx);
-        e->cursor = SDL_CreateSystemCursor(sc);
+        if (e->name) {
+          e->cursor = (SDL_Cursor *)SWELL_LoadCursorFromFile(e->name);
+        }
+        if (!e->cursor) {
+          SDL_SystemCursor sc = idcname_to_sdl(idx);
+          e->cursor = SDL_CreateSystemCursor(sc);
+        }
       }
       return (HCURSOR)e;
     }
