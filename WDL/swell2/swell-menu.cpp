@@ -1259,6 +1259,7 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
         mw->hovered = newhov;
         menu_draw(mw);
         menu_present(mw);
+        if (newhov >= 0) menu_open_child(mw, newhov);
       }
       return true;
     }
@@ -1308,9 +1309,11 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
     case SDL_EVENT_WINDOW_MOUSE_LEAVE: {
       MenuWindow *mw = menu_find_by_window_id(root, evt->window.windowID);
       if (mw) {
-        mw->hovered = -1;
-        menu_draw(mw);
-        menu_present(mw);
+        if (!mw->child) {
+          mw->hovered = -1;
+          menu_draw(mw);
+          menu_present(mw);
+        }
         return true;
       }
       return false;
