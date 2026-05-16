@@ -372,7 +372,7 @@ int MessageBox(HWND hwndParent, const char *text, const char *caption, int type)
 
   RECT r = { dlg_x, dlg_y, dlg_x + dlg_w, dlg_y + dlg_h };
 
-  DWORD style = WS_CAPTION | WS_SYSMENU;
+  DWORD style = WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
   HWND hwndDlg = new HWND__(NULL, 0, &r,
                              caption ? caption : "",
                              false, SwellDialogDefaultWindowProc);
@@ -1183,8 +1183,8 @@ void GetCursorPos(POINT *pt)
 #ifdef SWELL_TARGET_SDL3
   float mx, my;
   SDL_GetGlobalMouseState(&mx, &my);
-  pt->x = (int)mx;
-  pt->y = (int)my;
+  pt->x = swell_log_to_phys((int)mx);
+  pt->y = swell_log_to_phys((int)my);
 #else
   pt->x = 0; pt->y = 0;
 #endif
@@ -1195,7 +1195,7 @@ DWORD GetMessagePos()
 #ifdef SWELL_TARGET_SDL3
   float mx, my;
   SDL_GetGlobalMouseState(&mx, &my);
-  return MAKELPARAM((int)mx, (int)my);
+  return MAKELPARAM(swell_log_to_phys((int)mx), swell_log_to_phys((int)my));
 #else
   return 0;
 #endif

@@ -984,7 +984,7 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
           int next = mw.hovered + 1;
           while (next < mw.n_items) {
             SWELL_MenuItem *it = mw.menu->m_items.Get(next);
-            if (it && !(it->m_flags & MF_SEPARATOR)) break;
+            if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) break;
             next++;
           }
           if (next < mw.n_items) {
@@ -995,7 +995,7 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
           int prev = (mw.hovered < 0 ? mw.n_items : mw.hovered) - 1;
           while (prev >= 0) {
             SWELL_MenuItem *it = mw.menu->m_items.Get(prev);
-            if (it && !(it->m_flags & MF_SEPARATOR)) break;
+            if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) break;
             prev--;
           }
           if (prev >= 0) {
@@ -1084,6 +1084,8 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
 {
   (void)resvd; (void)r;
   if (!hMenu) return 0;
+
+  ReleaseCapture();
 
   // Send WM_INITMENUPOPUP before showing
   if (hwnd) SendMessage(hwnd, WM_INITMENUPOPUP, (WPARAM)hMenu,
