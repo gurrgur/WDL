@@ -1287,9 +1287,7 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
         if (mw->hovered >= 0) menu_open_child(mw, mw->hovered);
       } else if (key == SDLK_LEFT) {
         if (mw->parent) {
-          MenuWindow *parent = mw->parent;
-          parent->child = NULL;
-          delete mw;
+          menu_close_child(mw->parent);
         }
       }
       return true;
