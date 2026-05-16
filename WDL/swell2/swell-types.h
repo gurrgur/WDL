@@ -918,6 +918,7 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define LVS_SORTDESCENDING      0x0020
 
 #define LBS_SORT           0x0002L
+#define LBS_MULTIPLESEL    0x0004L
 #define LBS_OWNERDRAWFIXED 0x0010L
 #define LBS_EXTENDEDSEL 0x0800L
 
@@ -927,6 +928,35 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define ES_MULTILINE 4
 #define ES_AUTOHSCROLL 0x80
 #define ES_NOHIDESEL 0x100
+
+// scrollbar styles
+#define SBS_HORZ             0x0000
+#define SBS_VERT             0x0001
+
+// scrollbar messages
+#define SBM_SETPOS           0x00E0
+#define SBM_GETPOS           0x00E1
+#define SBM_SETRANGE         0x00E2
+#define SBM_GETRANGE         0x00E3
+#define SBM_SETSCROLLINFO    0x00E9
+#define SBM_GETSCROLLINFO    0x00EA
+
+typedef struct {
+  UINT    cbSize;
+  UINT    fMask;
+  int     nMin;
+  int     nMax;
+  UINT    nPage;
+  int     nPos;
+  int     nTrackPos;
+} SCROLLINFO, *LPSCROLLINFO;
+
+#define SIF_RANGE           0x0001
+#define SIF_PAGE            0x0002
+#define SIF_POS             0x0004
+#define SIF_DISABLENOSCROLL 0x0008
+#define SIF_TRACKPOS        0x0010
+#define SIF_ALL             (SIF_RANGE | SIF_PAGE | SIF_POS | SIF_TRACKPOS)
 
 
 // note: these differ in values from their win32 counterparts, because we got them

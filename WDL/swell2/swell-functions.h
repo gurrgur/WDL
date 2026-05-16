@@ -363,6 +363,15 @@ SWELL_API_DEFINE(bool, IsWindow, (HWND hwnd))
 SWELL_API_DEFINE(UINT_PTR, SetTimer,(HWND hwnd, UINT_PTR timerid, UINT rate, TIMERPROC tProc))
 SWELL_API_DEFINE(BOOL, KillTimer,(HWND hwnd, UINT_PTR timerid))
 
+// Scrollbar API
+SWELL_API_DEFINE(int, SetScrollPos, (HWND hwnd, int nBar, int nPos, BOOL bRedraw))
+SWELL_API_DEFINE(int, GetScrollPos, (HWND hwnd, int nBar))
+SWELL_API_DEFINE(BOOL, SetScrollRange, (HWND hwnd, int nBar, int nMinPos, int nMaxPos, BOOL bRedraw))
+SWELL_API_DEFINE(BOOL, GetScrollRange, (HWND hwnd, int nBar, LPINT lpMinPos, LPINT lpMaxPos))
+SWELL_API_DEFINE(int, SetScrollInfo, (HWND hwnd, int fnBar, LPSCROLLINFO lpsi, BOOL fRedraw))
+SWELL_API_DEFINE(BOOL, GetScrollInfo, (HWND hwnd, int fnBar, LPSCROLLINFO lpsi))
+SWELL_API_DEFINE(BOOL, ShowScrollBar, (HWND hwnd, int nBar, BOOL bShow))
+
 #ifdef SWELL_TARGET_OSX
 /*
 ** SendMessage can/should now be used with CB_* etc.

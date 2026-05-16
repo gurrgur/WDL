@@ -1690,6 +1690,16 @@ void SWELL_SetClassName(HWND hwnd, const char *name)
 {
   if (!hwnd) return;
   hwnd->m_classname = name; // caller must pass static string
+  static const bool s_dbg_ncpaint = !!getenv("SWELL_DBG_NCPAINT");
+  if (s_dbg_ncpaint && name) {
+    const RECT &p = hwnd->m_position;
+    printf("[swell2 SetClassName] hwnd=%p class=%s id=%d pos=%d,%d-%d,%d (%dx%d) style=0x%08lx parent=%p\n",
+      (void*)hwnd, name, hwnd->m_id,
+      (int)p.left, (int)p.top, (int)p.right, (int)p.bottom,
+      (int)(p.right-p.left), (int)(p.bottom-p.top),
+      (unsigned long)hwnd->m_style, (void*)hwnd->m_parent);
+    fflush(stdout);
+  }
 }
 
 // ===========================================================================
@@ -1942,4 +1952,54 @@ void SWELL_RunMessageLoop()
   }
 
   fireTimers();
+}
+
+// ===========================================================================
+// Scrollbar API (stubs — no standalone scrollbar control implementation yet)
+// ===========================================================================
+
+int SetScrollPos(HWND hwnd, int nBar, int nPos, BOOL bRedraw)
+{
+  if (!hwnd) return 0;
+  // Delegate to window's internal scrollbar via SendMessage
+  UINT msg = (nBar == SB_VERT) ? SBM_SETPOS : SBM_SETPOS;
+  return (int)SendMessage(hwnd, msg, nPos, bRedraw);
+}
+
+int GetScrollPos(HWND hwnd, int nBar)
+{
+  if (!hwnd) return 0;
+  return (int)SendMessage(hwnd, SBM_GETPOS, nBar, 0);
+}
+
+BOOL SetScrollRange(HWND hwnd, int nBar, int nMinPos, int nMaxPos, BOOL bRedraw)
+{
+  if (!hwnd) return FALSE;
+  SendMessage(hwnd, SBM_SETRANGE, MAKEWPARAM(nMinPos, nMaxPos), bRedraw);
+  return TRUE;
+}
+
+BOOL GetScrollRange(HWND hwnd, int nBar, LPINT lpMinPos, LPINT lpMaxPos)
+{
+  if (!hwnd || !lpMinPos || !lpMaxPos) return FALSE;
+  LRESULT r = SendMessage(hwnd, SBM_GETRANGE, (WPARAM)lpMinPos, (LPARAM)lpMaxPos);
+  return r ? TRUE : FALSE;
+}
+
+int SetScrollInfo(HWND hwnd, int fnBar, LPSCROLLINFO lpsi, BOOL fRedraw)
+{
+  (void)hwnd; (void)fnBar; (void)lpsi; (void)fRedraw;
+  return 0;
+}
+
+BOOL GetScrollInfo(HWND hwnd, int fnBar, LPSCROLLINFO lpsi)
+{
+  (void)hwnd; (void)fnBar; (void)lpsi;
+  return FALSE;
+}
+
+BOOL ShowScrollBar(HWND hwnd, int nBar, BOOL bShow)
+{
+  (void)hwnd; (void)nBar; (void)bShow;
+  return FALSE;
 }
