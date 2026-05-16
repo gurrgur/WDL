@@ -56,6 +56,7 @@ enum
   IDC_TAB = 3108,
   IDC_PAINT = 3109,
   IDC_LABEL = 3110,
+  IDC_LONG_EDIT = 3111,
 
   IDC_TEMP_EDIT = 3200,
   IDC_TEMP_BUTTON = 3201,
@@ -100,6 +101,8 @@ struct WindowBenchState
   HWND treeview = NULL;
   HWND tab = NULL;
   HWND paint = NULL;
+  HWND long_edit = NULL;
+  int long_text_len = 0;
   uint64_t paint_count = 0;
   uint64_t size_count = 0;
   uint64_t command_count = 0;
@@ -115,6 +118,7 @@ struct Bench
 };
 
 static WindowBenchState g_state;
+static std::string g_long_text;
 
 static uint32_t lcg_next(uint32_t &state)
 {
@@ -131,6 +135,22 @@ static void pump_messages(int n = 1)
 {
   for (int i = 0; i < n; ++i)
     SWELL_RunMessageLoop();
+}
+
+static const std::string &long_edit_text()
+{
+  if (!g_long_text.empty()) return g_long_text;
+
+  g_long_text.reserve(64000);
+  for (int i = 0; i < 512; ++i)
+  {
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "Line %03d: SWELL edit benchmark text with selection ranges, wrapping-ish data, numbers %06d.\n",
+             i, i * 7919);
+    g_long_text += buf;
+  }
+  return g_long_text;
 }
 
 static LRESULT CALLBACK PaintProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -243,6 +263,14 @@ static void populate_static_widgets(WindowBenchState &s)
     col.pszText = (char *)"Value";
     ListView_InsertColumn(s.listview, 1, &col);
   }
+
+  if (s.long_edit)
+  {
+    const std::string &txt = long_edit_text();
+    s.long_text_len = (int)txt.size();
+    SetDlgItemText(s.main, IDC_LONG_EDIT, txt.c_str());
+    SendMessage(s.long_edit, EM_SETSEL, 0, 256);
+  }
 }
 
 static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -261,6 +289,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARA
       g_state.treeview = GetDlgItem(hwndDlg, IDC_TREEVIEW);
       g_state.tab = GetDlgItem(hwndDlg, IDC_TAB);
       g_state.paint = GetDlgItem(hwndDlg, IDC_PAINT);
+      g_state.long_edit = GetDlgItem(hwndDlg, IDC_LONG_EDIT);
       if (g_state.paint)
       {
         SetWindowLong(g_state.paint, GWL_WNDPROC, (LONG_PTR)PaintProc);
@@ -315,8 +344,8 @@ static void bench_resize_window(WindowBenchState &s, int w, int h, uint64_t iter
 static void bench_control_layout(WindowBenchState &s, int w, int h, uint64_t iter)
 {
   uint32_t state = (uint32_t)iter * 313u + 29u;
-  HWND controls[] = {s.edit, s.combo, s.listbox, s.check, s.slider, s.progress, s.listview, s.treeview, s.tab, s.paint};
-  for (int i = 0; i < 10; ++i)
+  HWND controls[] = {s.edit, s.combo, s.listbox, s.check, s.slider, s.progress, s.listview, s.treeview, s.tab, s.paint, s.long_edit};
+  for (int i = 0; i < 11; ++i)
   {
     HWND hwnd = controls[i];
     if (!hwnd) continue;
@@ -365,6 +394,30 @@ static void bench_widget_messages(WindowBenchState &s, int, int, uint64_t iter)
     CheckDlgButton(s.main, IDC_CHECK, i & 1);
     SendMessage(s.slider, TBM_SETPOS, 1, i % 101);
     SendMessage(s.progress, PBM_SETPOS, i % 101, 0);
+  }
+  pump_messages();
+}
+
+static void bench_textedit_selection(WindowBenchState &s, int, int, uint64_t iter)
+{
+  if (!s.long_edit || s.long_text_len <= 0) return;
+
+  uint32_t state = (uint32_t)iter * 3571u + 43u;
+  for (int i = 0; i < 96; ++i)
+  {
+    int start = rnd(state, std::max(1, s.long_text_len - 1024));
+    int end = std::min(s.long_text_len, start + 32 + rnd(state, 768));
+    SendMessage(s.long_edit, EM_SETSEL, start, end);
+
+    int got_start = 0;
+    int got_end = 0;
+    SendMessage(s.long_edit, EM_GETSEL, (WPARAM)&got_start, (LPARAM)&got_end);
+    if ((i & 7) == 0)
+    {
+      InvalidateRect(s.long_edit, NULL, 0);
+      UpdateWindow(s.long_edit);
+      SendMessage(s.long_edit, WM_PAINT, 0, 0);
+    }
   }
   pump_messages();
 }
@@ -463,6 +516,7 @@ static void bench_mixed_window(WindowBenchState &s, int w, int h, uint64_t iter)
   bench_control_layout(s, w, h, iter);
   bench_paint_update(s, w, h, iter);
   bench_widget_messages(s, w, h, iter);
+  bench_textedit_selection(s, w, h, iter);
   bench_listview_churn(s, w, h, iter);
 }
 
@@ -471,11 +525,12 @@ static const Bench kBenches[] = {
   {"control_layout", "windowing", 10, bench_control_layout},
   {"paint_update", "painting", 64, bench_paint_update},
   {"widget_messages", "widgets", 576, bench_widget_messages},
+  {"textedit_selection", "widgets", 204, bench_textedit_selection},
   {"listview_churn", "widgets", 288, bench_listview_churn},
   {"treeview_churn", "widgets", 120, bench_treeview_churn},
   {"tab_menu", "widgets", 480, bench_tab_menu},
   {"dialog_create_destroy", "windowing", 64, bench_dialog_create_destroy},
-  {"mixed_window", "mixed", 986, bench_mixed_window},
+  {"mixed_window", "mixed", 1190, bench_mixed_window},
 };
 
 static bool has_bench(const Options &opt, const char *name)
@@ -683,8 +738,9 @@ CHECKBOX "Check", IDC_CHECK, 240, 64, 120, 24, BS_AUTOCHECKBOX | WS_TABSTOP
 CONTROL "", IDC_SLIDER, "msctls_trackbar32", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 240, 96, 180, 28
 CONTROL "", IDC_PROGRESS, "msctls_progress32", WS_CHILD | WS_VISIBLE, 240, 136, 180, 20
 CONTROL "", IDC_TAB, "SysTabControl32", WS_CHILD | WS_VISIBLE, 440, 30, 300, 80
+EDITTEXT IDC_LONG_EDIT, 440, 116, 300, 76, ES_MULTILINE | ES_AUTOHSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
 CONTROL "", IDC_LISTVIEW, "SysListView32", WS_CHILD | WS_VISIBLE | LVS_REPORT | WS_TABSTOP, 10, 240, 350, 250
-CONTROL "", IDC_TREEVIEW, "SysTreeView32", WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS | WS_TABSTOP, 380, 130, 350, 180
+CONTROL "", IDC_TREEVIEW, "SysTreeView32", WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS | WS_TABSTOP, 380, 204, 350, 116
 CONTROL "", IDC_PAINT, "Static", WS_CHILD | WS_VISIBLE, 380, 330, 350, 160
 END
 SWELL_DEFINE_DIALOG_RESOURCE_END2(IDD_WINDOW_BENCH)

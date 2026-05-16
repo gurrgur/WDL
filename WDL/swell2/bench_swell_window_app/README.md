@@ -21,6 +21,7 @@ cmake -S WDL/swell2 -B WDL/swell2/build -DSWELL2_BUILD_BENCHMARKS=OFF
 ```sh
 WDL/swell2/build/bench_swell_window_app --duration-ms 1000 --pretty
 WDL/swell2/build/bench_swell_window_app --bench resize_window --bench paint_update --duration-ms 2000
+WDL/swell2/build/bench_swell_window_app --bench textedit_selection --duration-ms 2000
 ```
 
 JSON includes target duration, actual elapsed time, iteration count, operation
