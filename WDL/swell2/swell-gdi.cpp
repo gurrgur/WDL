@@ -779,17 +779,20 @@ void DeleteObject(HGDIOBJ obj)
 
   if (!HGDIOBJ_VALID(obj)) return;
 
-  obj->additional_refcnt--;
-  if (obj->additional_refcnt < 0) {
-    // Free typedata
-    if (obj->type == TYPE_FONT && obj->typedata) {
-      delete static_cast<LOGFONT *>(obj->typedata);
-      obj->typedata = nullptr;
-    } else if (obj->type == TYPE_BITMAP && obj->typedata) {
-      delete static_cast<SkBitmap *>(obj->typedata);
-      obj->typedata = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_hdc_pool_mutex);
+    obj->additional_refcnt--;
+    if (obj->additional_refcnt < 0) {
+      // Free typedata
+      if (obj->type == TYPE_FONT && obj->typedata) {
+        delete static_cast<LOGFONT *>(obj->typedata);
+        obj->typedata = nullptr;
+      } else if (obj->type == TYPE_BITMAP && obj->typedata) {
+        delete static_cast<SkBitmap *>(obj->typedata);
+        obj->typedata = nullptr;
+      }
+      GDP_OBJECT_DELETE(obj);
     }
-    GDP_OBJECT_DELETE(obj);
   }
 }
 
@@ -803,7 +806,10 @@ HGDIOBJ GetStockObject(int wh)
 HGDIOBJ SWELL_CloneGDIObject(HGDIOBJ a)
 {
   if (!a || !HGDIOBJ_VALID(a)) return nullptr;
-  a->additional_refcnt++;
+  {
+    std::lock_guard<std::mutex> lock(g_hdc_pool_mutex);
+    a->additional_refcnt++;
+  }
   return a;
 }
 
