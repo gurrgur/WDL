@@ -342,7 +342,7 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         if (wParam == VK_RETURN) {
           int defid = SWELL_GetDefaultButtonID(hwnd, true);
           if (defid) {
-            SendMessage(hwnd, WM_COMMAND, MAKEWPARAM(defid, BN_CLICKED), 0);
+            SendMessage(hwnd, WM_COMMAND, defid, 0);
           } else {
             SendMessage(hwnd, WM_COMMAND, IDOK, 0);
           }
