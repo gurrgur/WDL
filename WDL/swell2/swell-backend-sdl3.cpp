@@ -602,6 +602,14 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       break;
     }
 
+    case SDL_EVENT_WINDOW_MINIMIZED: {
+      SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
+      if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2)
+        SendMessage(e->hwnd, WM_SIZE, SIZE_MINIMIZED,
+                    MAKELPARAM(0, 0));
+      break;
+    }
+
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2 && IsWindowEnabled(e->hwnd)) {
@@ -853,6 +861,11 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         if (down)
           swell_oswindow_focus(e->hwnd);
 
+        if (down)
+          SDL_CaptureMouse(true);
+        else
+          SDL_CaptureMouse(false);
+
         // Translate SDL window coords to client coords (subtract NC inset)
         int nc_left = 0, nc_top = 0;
         get_nc_offsets(e->hwnd, &nc_left, &nc_top);
@@ -981,13 +994,19 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       }
       if (!target) break;
 
-      int delta = (int)(wy * 120.0f);  // WHEEL_DELTA = 120
+      static float s_scroll_accum_y = 0.0f;
+      static float s_scroll_accum_x = 0.0f;
+      s_scroll_accum_y += wy * 120.0f;
+      s_scroll_accum_x += wx * 120.0f;
+      int delta = (int)s_scroll_accum_y;
+      int hdelta = (int)s_scroll_accum_x;
+      s_scroll_accum_y -= (float)delta;
+      s_scroll_accum_x -= (float)hdelta;
       if (delta != 0) {
         SendMessage(target, WM_MOUSEWHEEL,
                     MAKEWPARAM(0, (WORD)delta),
                     MAKELPARAM(wmx, wmy));
       }
-      int hdelta = (int)(wx * 120.0f);
       if (hdelta != 0) {
         SendMessage(target, WM_MOUSEHWHEEL,
                     MAKEWPARAM(0, (WORD)hdelta),
