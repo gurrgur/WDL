@@ -1025,7 +1025,7 @@ static void *thread_thunk(void *arg)
 HANDLE CreateThread(void *TA, DWORD stackSize, DWORD (*ThreadProc)(LPVOID),
                     LPVOID parm, DWORD cf, DWORD *tidOut)
 {
-  (void)TA; (void)stackSize; (void)cf;
+  (void)TA; (void)cf;
   ThreadHandle *th = (ThreadHandle *)malloc(sizeof(ThreadHandle));
   if (!th) return NULL;
   th->magic = SWELL_HANDLE_MAGIC_THREAD;
@@ -1033,10 +1033,21 @@ HANDLE CreateThread(void *TA, DWORD stackSize, DWORD (*ThreadProc)(LPVOID),
   th->retv = 0;
   th->proc = ThreadProc;
   th->parm = parm;
-  if (pthread_create(&th->tid, NULL, thread_thunk, th) != 0) {
+
+  pthread_attr_t attr;
+  pthread_attr_t *pattr = NULL;
+  if (stackSize > 0) {
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, stackSize);
+    pattr = &attr;
+  }
+
+  if (pthread_create(&th->tid, pattr, thread_thunk, th) != 0) {
+    if (pattr) pthread_attr_destroy(&attr);
     free(th);
     return NULL;
   }
+  if (pattr) pthread_attr_destroy(&attr);
   if (tidOut) *tidOut = (DWORD)(uintptr_t)th->tid;
   return (HANDLE)th;
 }
