@@ -169,6 +169,10 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
       return 0;
 
+    case WM_CLOSE:
+      DestroyWindow(hwnd);
+      return 0;
+
     case WM_NCHITTEST:
       if (!hwnd->m_parent && hwnd->m_menu) {
         RECT r;
@@ -321,6 +325,10 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_PAINT:
       break; // already handled above
 
+    case WM_CLOSE:
+      EndDialog(hwnd, IDCANCEL);
+      return 0;
+
     case WM_KEYDOWN: {
       if (!hwnd->m_parent) {
         if (wParam == VK_ESCAPE) {
@@ -433,11 +441,12 @@ BOOL PostMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 void SWELL_MessageQueue_Flush()
 {
+  int max_amt = 0;
   g_pmq_mutex.Enter();
-  int n = g_pmq_count;
+  max_amt = g_pmq_count;
   g_pmq_mutex.Leave();
 
-  for (int i = 0; i < n; i++) {
+  for (int i = 0; i < max_amt; i++) {
     g_pmq_mutex.Enter();
     PMQ_rec *rec = g_pmq_head;
     if (rec) {
@@ -574,8 +583,9 @@ static void fireTimers()
 
   TimerInfoRec *rec = g_timer_list;
   while (rec) {
-    if ((int)(now - rec->lastFire) >= (int)rec->interval) {
-      rec->lastFire = now;
+    const DWORD nextFire = rec->lastFire + rec->interval;
+    if ((int)(now - nextFire) >= 0 && (int)(now - nextFire) < 100000) {
+      rec->lastFire = nextFire;
       rec->refcnt++;
       HWND hwnd = rec->hwnd;
       UINT_PTR timerid = rec->timerid;
