@@ -166,6 +166,11 @@ static inline int scaled_px(int px)
   return v > 0 ? v : 1;
 }
 
+static inline SkColor controls_to_sk(COLORREF c, uint8_t a = 255)
+{
+  return SkColorSetARGB(a, GetRValue(c), GetGValue(c), GetBValue(c));
+}
+
 // fill rect with background color from parent WM_CTLCOLOR* or default
 static void fill_bg(HWND hwnd, HDC hdc, UINT ctlmsg, int defcol)
 {
@@ -3766,6 +3771,8 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       RECT cr; GetClientRect(hwnd, &cr);
       bool focused = (GetFocus() == hwnd);
       int btnw = th.button_min_h;  // square dropdown affordance
+      int cw = cr.right - cr.left;
+      if (btnw > cw / 2) btnw = cw / 2;
 
       // Rounded card body
       COLORREF bordercol = focused ? (COLORREF)th.accent
@@ -3780,18 +3787,34 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       SelectObject(hdc, op); DeleteObject(pen);
       SelectObject(hdc, ob); DeleteObject(br);
 
-      // Chevron (no separator bar — flatter look)
-      int ax = cr.right - btnw/2 - 2;
-      int ay = (cr.top + cr.bottom) / 2;
-      {
-        HPEN ap = CreatePen(PS_SOLID,
-            (th.border_width * 2 > 2) ? th.border_width * 2 : 2,
-            (COLORREF)th.fg_text_dim);
-        HGDIOBJ oap = SelectObject(hdc, ap);
-        MoveToEx(hdc, ax-4, ay-2, NULL);
-        LineTo(hdc, ax, ay+3);
-        LineTo(hdc, ax+4, ay-2);
-        SelectObject(hdc, oap); DeleteObject(ap);
+      const int sep_x = cr.right - btnw;
+      if (hdc->canvas) {
+        const float vm = (float)scaled_px(6);
+        SkPaint sep;
+        sep.setAntiAlias(false);
+        sep.setColor(controls_to_sk((COLORREF)th.border, 150));
+        sep.setStrokeWidth((float)th.border_width);
+        const float sx = (float)sep_x + 0.5f;
+        hdc->canvas->drawLine(sx, (float)cr.top + vm,
+                              sx, (float)cr.bottom - vm, sep);
+
+        SkPaint arrow;
+        arrow.setAntiAlias(true);
+        arrow.setColor(controls_to_sk((COLORREF)th.fg_text_dim));
+        arrow.setStyle(SkPaint::kStroke_Style);
+        arrow.setStrokeCap(SkPaint::kRound_Cap);
+        arrow.setStrokeJoin(SkPaint::kRound_Join);
+        arrow.setStrokeWidth((float)scaled_px(2));
+
+        const float ax = (float)(sep_x + btnw / 2);
+        const float ay = ((float)cr.top + (float)cr.bottom) * 0.5f + 0.5f;
+        const float hw = (float)scaled_px(4);
+        const float dy = (float)scaled_px(3);
+        SkPath chevron;
+        chevron.moveTo(ax - hw, ay - dy * 0.5f);
+        chevron.lineTo(ax,      ay + dy);
+        chevron.lineTo(ax + hw, ay - dy * 0.5f);
+        hdc->canvas->drawPath(chevron, arrow);
       }
 
       // Text
@@ -3800,7 +3823,7 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       SetTextColor(hdc, (COLORREF)th.fg_text);
       SetBkMode(hdc, TRANSPARENT);
       RECT tr = { cr.left + th.padding_edit_h, cr.top,
-                  cr.right - btnw, cr.bottom };
+                  sep_x - scaled_px(4), cr.bottom };
       SWELL_DrawText(hdc, hwnd->m_title.Get(), -1, &tr,
                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
