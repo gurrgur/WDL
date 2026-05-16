@@ -862,8 +862,11 @@ static void menu_present(MenuWindow *mw)
     mw->texture = SDL_CreateTexture(mw->renderer,
         SDL_PIXELFORMAT_BGRA32, SDL_TEXTUREACCESS_STREAMING, pw, ph);
     if (!mw->texture) return;
-    SDL_SetTextureBlendMode(mw->texture, SDL_BLENDMODE_NONE);
+    SDL_SetTextureBlendMode(mw->texture, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
   }
+
+  SDL_SetRenderDrawColor(mw->renderer, 0, 0, 0, 0);
+  SDL_RenderClear(mw->renderer);
 
   SDL_Rect r = { 0, 0, pw, ph };
   SDL_UpdateTexture(mw->texture, &r, pm.addr(), (int)pm.rowBytes());
@@ -921,7 +924,8 @@ static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
   SDL_GetWindowPosition(parent_sdlwin, &px, &py);
   mw.sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
       l_sx - px, l_sy - py, l_w, l_h,
-      SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+      SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS |
+      SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_TRANSPARENT);
 
   if (!mw.sdlwin) return 0;
 
