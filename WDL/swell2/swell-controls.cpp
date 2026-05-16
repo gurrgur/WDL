@@ -149,6 +149,10 @@ static inline HBRUSH get_window_brush(HWND hwnd, HDC hdc, UINT ctlmsg)
   if (par) {
     LRESULT r = SendMessage(par, ctlmsg, (WPARAM)hdc, (LPARAM)hwnd);
     if (r && r != 1) return (HBRUSH)r;
+    if (ctlmsg != WM_CTLCOLORDLG) {
+      r = SendMessage(par, WM_CTLCOLORDLG, (WPARAM)hdc, (LPARAM)par);
+      if (r && r != 1) return (HBRUSH)r;
+    }
   }
   return NULL;
 }
@@ -326,9 +330,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (style & BS_GROUPBOX) {
         // Modern group box: subtle filled card with rounded corners and a
         // floating title that overlaps the top border.
-        HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_window);
-        FillRect(hdc, &cr, bg);
-        DeleteObject(bg);
+        fill_bg(hwnd, hdc, WM_CTLCOLORBTN, th.bg_window);
 
         HFONT fnt = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
         HGDIOBJ oldfont = SelectObject(hdc, fnt);
@@ -348,13 +350,19 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (hwnd->m_title.GetLength() > 0) {
           SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
                                     : (COLORREF)th.fg_text_disabled);
-          SetBkColor(hdc, (COLORREF)th.bg_window);
-          SetBkMode(hdc, OPAQUE);
           RECT tr = { cr.left + r + 4, cr.top,
                       cr.right - r - 4, cr.top + titlegap * 2 };
+          HBRUSH titleBg = get_window_brush(hwnd, hdc, WM_CTLCOLORBTN);
+          if (titleBg) {
+            FillRect(hdc, &tr, titleBg);
+          } else {
+            HBRUSH tb = CreateSolidBrush((COLORREF)th.bg_window);
+            FillRect(hdc, &tr, tb);
+            DeleteObject(tb);
+          }
+          SetBkMode(hdc, TRANSPARENT);
           SWELL_DrawText(hdc, hwnd->m_title.Get(), -1, &tr,
                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-          SetBkMode(hdc, TRANSPARENT);
         }
         SelectObject(hdc, oldfont);
         EndPaint(hwnd, &ps);
@@ -367,11 +375,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       bool is_radio = (bstyle == BS_AUTORADIOBUTTON || bstyle == BS_RADIOBUTTON);
 
       // Background — parent dialog color so the control blends in.
-      {
-        HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_window);
-        FillRect(hdc, &cr, bg);
-        DeleteObject(bg);
-      }
+      fill_bg(hwnd, hdc, WM_CTLCOLORBTN, th.bg_window);
 
       COLORREF fgcol = enabled ? (COLORREF)th.fg_text
                                : (COLORREF)th.fg_text_disabled;
@@ -637,7 +641,7 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
 
 static void calcScroll(int wh, int totalw, int scroll_x, int *thumbsz, int *thumbpos)
 {
-  if (totalw <= 0) { *thumbsz = wh; *thumbpos = 0; return; }
+  if (wh <= 0 || totalw <= 0) { *thumbsz = wh > 0 ? wh : 0; *thumbpos = 0; return; }
   const double isz = wh / (double) totalw;
   int sz = (int)(wh * isz + 0.5);
   if (sz < g_swell_theme.scrollbar_min_thumb_height)
@@ -658,20 +662,27 @@ static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int
   calcScroll(vieww, totalw, scroll_x, &thumbsz, &thumbpos);
 
   HBRUSH br  = CreateSolidBrush((COLORREF)th.scrollbar_thumb);
-  HBRUSH br2 = CreateSolidBrush((COLORREF)th.bg_scrollbar);
-  RECT fr = { cr.left, cr.bottom - th.scrollbar_width, cr.left + thumbpos, cr.bottom };
-  if (fr.right > fr.left) FillRect(hdc, &fr, br2);
-
-  fr.left = fr.right;
-  fr.right = fr.left + thumbsz;
-  if (fr.right > fr.left) FillRect(hdc, &fr, br);
-
-  fr.left = fr.right;
-  fr.right = cr.right;
-  if (fr.right > fr.left) FillRect(hdc, &fr, br2);
+  HPEN np = (HPEN)GetStockObject(NULL_PEN);
+  int margin = 3;
+  if (thumbsz < margin * 2 + 2) margin = thumbsz > 2 ? (thumbsz - 2) / 2 : 0;
+  if (th.scrollbar_width < margin * 2 + 2)
+    margin = th.scrollbar_width > 2 ? (th.scrollbar_width - 2) / 2 : 0;
+  RECT fr = { cr.left + thumbpos + margin,
+              cr.bottom - th.scrollbar_width + margin,
+              cr.left + thumbpos + thumbsz - margin,
+              cr.bottom - margin };
+  if (fr.right > fr.left && fr.bottom > fr.top) {
+    HGDIOBJ op = SelectObject(hdc, np);
+    HGDIOBJ ob = SelectObject(hdc, br);
+    int rr = (fr.bottom - fr.top) / 2;
+    if (rr > 4) rr = 4;
+    if (rr < 2) rr = 2;
+    RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr, rr);
+    SelectObject(hdc, op);
+    SelectObject(hdc, ob);
+  }
 
   DeleteObject(br);
-  DeleteObject(br2);
 }
 
 static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int scroll_y)
@@ -683,25 +694,27 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int s
   calcScroll(viewh, totalh, scroll_y, &thumbsz, &thumbpos);
 
   HBRUSH br  = CreateSolidBrush((COLORREF)th.scrollbar_thumb);
-  HBRUSH br2 = CreateSolidBrush((COLORREF)th.bg_scrollbar);
-  RECT fr = { cr.right - th.scrollbar_width, cr.top, cr.right, cr.top + thumbpos };
-  if (fr.bottom > fr.top) FillRect(hdc, &fr, br2);
-
-  fr.top = fr.bottom;
-  fr.bottom = fr.top + thumbsz;
-  if (fr.bottom > fr.top) FillRect(hdc, &fr, br);
-
-  fr.top = fr.bottom;
-  fr.bottom = cr.bottom;
-  if (fr.bottom > fr.top) {
-    FillRect(hdc, &fr, br2);
-
-    fr.top = fr.bottom - 1;
-    FillRect(hdc, &fr, br2);
+  HPEN np = (HPEN)GetStockObject(NULL_PEN);
+  int margin = 3;
+  if (thumbsz < margin * 2 + 2) margin = thumbsz > 2 ? (thumbsz - 2) / 2 : 0;
+  if (th.scrollbar_width < margin * 2 + 2)
+    margin = th.scrollbar_width > 2 ? (th.scrollbar_width - 2) / 2 : 0;
+  RECT fr = { cr.right - th.scrollbar_width + margin,
+              cr.top + thumbpos + margin,
+              cr.right - margin,
+              cr.top + thumbpos + thumbsz - margin };
+  if (fr.right > fr.left && fr.bottom > fr.top) {
+    HGDIOBJ op = SelectObject(hdc, np);
+    HGDIOBJ ob = SelectObject(hdc, br);
+    int rr = (fr.right - fr.left) / 2;
+    if (rr > 4) rr = 4;
+    if (rr < 2) rr = 2;
+    RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr, rr);
+    SelectObject(hdc, op);
+    SelectObject(hdc, ob);
   }
 
   DeleteObject(br);
-  DeleteObject(br2);
 }
 
 static int scrollFromThumbPos(int thumb_pos, int view, int total)
@@ -1184,11 +1197,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       bool is_pass = (hwnd->m_style & ES_PASSWORD) != 0;
 
       // Backfill outer area in window bg so rounded corners blend cleanly.
-      {
-        HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_window);
-        FillRect(hdc, &cr, bg);
-        DeleteObject(bg);
-      }
+      fill_bg(hwnd, hdc, WM_CTLCOLOREDIT, th.bg_window);
 
       // Rounded input field
       COLORREF fillcol = enabled ? (COLORREF)th.bg_input
@@ -1206,6 +1215,9 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       RoundRect(hdc, cr.left, cr.top, cr.right - 1, cr.bottom - 1, r*2, r*2);
       SelectObject(hdc, op); DeleteObject(pen);
       SelectObject(hdc, ob); DeleteObject(br);
+
+      SWELL_PushClipRegion(hdc);
+      SWELL_SetClipRoundRect(hdc, cr.left, cr.top, cr.right, cr.bottom, r);
 
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       SelectObject(hdc, f);
@@ -1229,24 +1241,6 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       if (multiline)
       {
-        // Build stripped text (remove \r, treat \r\n or \n as line break)
-        WDL_FastString stripped;
-        {
-          const char *s = txt;
-          int n = tlen;
-          for (int i = 0; i < n; i++) {
-            if (s[i] == '\r') {
-              if (i+1 < n && s[i+1] == '\n') { stripped.Append("\n"); i++; }
-              else { stripped.Append("\n"); }
-            } else {
-              char cbuf[2] = { s[i], 0 };
-              stripped.Append(cbuf);
-            }
-          }
-          txt = stripped.Get();
-          tlen = (int)stripped.GetLength();
-        }
-
         int scrWidth = tr.right - tr.left;
 
         // Recompute cached display lines if text or width changed
@@ -1305,6 +1299,17 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
               if (pos < end_off && txt[pos] == ' ') pos++;
             }
           }
+
+          // Rebuild char-to-display-line map
+          int nd = st->ml_dline_starts.GetSize();
+          st->ml_char2dline.Resize(tlen + 1, false);
+          if (nd > 0) {
+            int di = 0;
+            for (int ci = 0; ci <= tlen; ci++) {
+              while (di + 1 < nd && ci >= st->ml_dline_ends.Get()[di]) di++;
+              st->ml_char2dline.Get()[ci] = di;
+            }
+          }
         }
 
         int ndlines = st ? st->ml_dline_starts.GetSize() : 0;
@@ -1321,15 +1326,9 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         int scrollY = st ? st->scroll_y : 0;
 
-        // Char-to-display-line map
-        WDL_TypedBuf<int> char2dline; char2dline.Resize(tlen + 1, false);
-        if (st && ndlines > 0) {
-          int di = 0;
-          for (int ci = 0; ci <= tlen; ci++) {
-            while (di + 1 < ndlines && ci >= st->ml_dline_ends.Get()[di]) di++;
-            char2dline.Get()[ci] = di;
-          }
-        }
+        // Use cached char-to-display-line map
+        const int *char2dline = (st && st->ml_char2dline.GetSize() > 0)
+          ? st->ml_char2dline.Get() : nullptr;
 
         int sel1 = -1, sel2 = -1;
         if (st && st->sel1 >= 0 && st->sel1 != st->sel2) {
@@ -1354,9 +1353,9 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         // Selection highlight
-        if (sel2 > sel1 && sel1 >= 0 && ndlines > 0) {
-          int dl0 = char2dline.Get()[sel1];
-          int dl1 = char2dline.Get()[sel2];
+        if (char2dline && sel2 > sel1 && sel1 >= 0 && ndlines > 0) {
+          int dl0 = char2dline[sel1];
+          int dl1 = char2dline[sel2];
           for (int di = dl0; di <= dl1 && di < ndlines; di++) {
             int d0 = st->ml_dline_starts.Get()[di];
             int d1 = st->ml_dline_ends.Get()[di];
@@ -1364,14 +1363,16 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             int selLineEnd = (di == dl1) ? sel2 : d1;
             if (selLineStart >= selLineEnd) continue;
             int ry = tr.top + di * rowH - scrollY;
-            RECT preR = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt + d0, selLineStart - d0, &preR, DT_CALCRECT | DT_LEFT);
-            RECT lr = { tr.left, ry, tr.right, ry + rowH };
-            RECT selR = lr;
-            selR.left += preR.right;
-            RECT selwR = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt + selLineStart, selLineEnd - selLineStart, &selwR, DT_CALCRECT | DT_LEFT);
-            selR.right = selR.left + (selwR.right - selwR.left);
+
+            SkRect r1;
+            skfont.measureText(txt + d0, selLineStart - d0, SkTextEncoding::kUTF8, &r1);
+            int preW = (int)(r1.width() + 0.5f);
+
+            SkRect r2;
+            skfont.measureText(txt + selLineStart, selLineEnd - selLineStart, SkTextEncoding::kUTF8, &r2);
+            int selW = (int)(r2.width() + 0.5f);
+
+            RECT selR = { tr.left + preW, ry, tr.left + preW + selW, ry + rowH };
             SetBkMode(hdc, OPAQUE);
             SetBkColor(hdc, (COLORREF)th.accent);
             SetTextColor(hdc, (COLORREF)th.fg_on_accent);
@@ -1385,12 +1386,12 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (st && st->cursor_state && focused && ndlines > 0) {
           int cpos = st->cursor_pos;
           if (cpos > tlen) cpos = tlen;
-          int cdline = char2dline.Get()[cpos];
+          int cdline = char2dline ? char2dline[cpos] : 0;
           if (cdline >= 0 && cdline < ndlines) {
             int d0 = st->ml_dline_starts.Get()[cdline];
-            RECT preR = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt + d0, cpos - d0, &preR, DT_CALCRECT | DT_LEFT);
-            int cx = tr.left + (preR.right - preR.left);
+            SkRect cbr;
+            skfont.measureText(txt + d0, cpos - d0, SkTextEncoding::kUTF8, &cbr);
+            int cx = tr.left + (int)(cbr.width() + 0.5f);
             int cy = tr.top + cdline * rowH - scrollY;
             if (cy >= tr.top && cy + rowH <= tr.bottom) {
               HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
@@ -1428,10 +1429,10 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
           if (s2 > s1)
           {
-            RECT measR = { 0, 0, 0, 0 };
-            SWELL_DrawText(hdc, txt, s1, &measR, DT_CALCRECT | DT_LEFT | DT_SINGLELINE);
+            SkRect mr;
+            skfont.measureText(txt, s1, SkTextEncoding::kUTF8, &mr);
             RECT selR = tr;
-            selR.left += measR.right;
+            selR.left += (int)(mr.width() + 0.5f);
             SetBkMode(hdc, OPAQUE);
             SetBkColor(hdc, (COLORREF)th.accent);
             SetTextColor(hdc, (COLORREF)th.fg_on_accent);
@@ -1455,6 +1456,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
       }
 
+      SWELL_PopClipRegion(hdc);
       EndPaint(hwnd, &ps);
       return 0;
     }
@@ -2039,26 +2041,44 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st || !lParam) return FALSE;
       int cnt = (int)wParam;
       int *arr = (int *)lParam;
-      if (!arr) return FALSE;
-      // Reorder m_cols physical order to match arr (logical indices)
-      // O(N^2) but column count is small
-      WDL_TypedBuf<SWELL_ListView_Col> tmp;
+      if (!arr || cnt < 0) return FALSE;
+      int ncols = st->m_cols.GetSize();
+
+      // Build new physical order from arr (logical col_index values).
+      // Use an index array to reorder in-place via swap to avoid
+      // use-after-free (SWELL_ListView_Col owns 'name' raw ptr freed in dtor).
+      WDL_TypedBuf<int> newIdx;
       for (int x = 0; x < cnt; x++) {
-        // find column by logical col_index
-        int found = -1;
-        for (int i = 0; i < st->m_cols.GetSize(); i++) {
-          if (st->m_cols.Get()[i].col_index == arr[x]) { found = i; break; }
+        for (int i = 0; i < ncols; i++) {
+          if (st->m_cols.Get()[i].col_index == arr[x]) {
+            newIdx.Add(i);
+            break;
+          }
         }
-        if (found < 0) continue;
-        tmp.Add(st->m_cols.Get()[found]);
-        st->m_cols.Delete(found);
       }
-      // add remaining columns (if any, beyond cnt) preserving order
-      for (int i = 0; i < st->m_cols.GetSize(); i++)
-        tmp.Add(st->m_cols.Get()[i]);
-      st->m_cols.Resize(0, false);
-      for (int x = 0; x < tmp.GetSize(); x++)
-        st->m_cols.Add(tmp.Get() + x, 1);
+      for (int i = 0; i < ncols; i++) {
+        bool used = false;
+        for (int x = 0; x < newIdx.GetSize(); x++) {
+          if (newIdx.Get()[x] == i) { used = true; break; }
+        }
+        if (!used) newIdx.Add(i);
+      }
+
+      // Swap elements into place (in-place reorder).
+      // For each target position, swap the desired element into it.
+      for (int pos = 0; pos < ncols; pos++) {
+        int src = newIdx.Get()[pos];
+        if (src != pos) {
+          SWELL_ListView_Col tmp = st->m_cols.Get()[pos];
+          st->m_cols.Get()[pos] = st->m_cols.Get()[src];
+          st->m_cols.Get()[src] = tmp;
+          tmp.name = NULL;  // ownership transferred, prevent stack dtor double-free
+          // Update newIdx so we can find the element we just displaced
+          for (int k = pos + 1; k < ncols; k++) {
+            if (newIdx.Get()[k] == pos) { newIdx.Get()[k] = src; break; }
+          }
+        }
+      }
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
     }
@@ -2378,9 +2398,14 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       const swell_theme &th = g_swell_theme;
 
-      // Background
+      RECT outer = cr;
+      const int frame_r = th.corner_radius;
+      fill_bg(hwnd, hdc, WM_CTLCOLORLISTBOX, th.bg_window);
+      SWELL_PushClipRegion(hdc);
+      SWELL_SetClipRoundRect(hdc, outer.left, outer.top, outer.right, outer.bottom, frame_r);
+
       HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_input);
-      FillRect(hdc, &cr, bg);
+      FillRect(hdc, &outer, bg);
       DeleteObject(bg);
 
       bool focused = (GetFocus() == hwnd);
@@ -2543,6 +2568,16 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         RECT sb_cr = cr; sb_cr.right = cr_right_orig; sb_cr.bottom = cr_bottom_orig;
         drawHorizontalScrollbar(hdc, sb_cr, sb_cr.right - sb_cr.left, totalW, st->m_scroll_x);
       }
+
+      SWELL_PopClipRegion(hdc);
+
+      HPEN fp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.border_strong);
+      HGDIOBJ ofp = SelectObject(hdc, fp);
+      HGDIOBJ ofb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+      RoundRect(hdc, outer.left, outer.top, outer.right - 1, outer.bottom - 1,
+                frame_r * 2, frame_r * 2);
+      SelectObject(hdc, ofp); DeleteObject(fp);
+      SelectObject(hdc, ofb);
 
       EndPaint(hwnd, &ps);
       return 0;
@@ -3157,8 +3192,13 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
 
       const swell_theme &th = g_swell_theme;
+      RECT outer = cr;
+      const int frame_r = th.corner_radius;
+      fill_bg(hwnd, hdc, WM_CTLCOLORLISTBOX, th.bg_window);
+      SWELL_PushClipRegion(hdc);
+      SWELL_SetClipRoundRect(hdc, outer.left, outer.top, outer.right, outer.bottom, frame_r);
       HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_input);
-      FillRect(hdc, &cr, bg);
+      FillRect(hdc, &outer, bg);
       DeleteObject(bg);
 
       SetBkMode(hdc, TRANSPARENT);
@@ -3232,6 +3272,16 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         RECT sb_cr = cr; sb_cr.right = cr_right_orig;
         drawVerticalScrollbar(hdc, sb_cr, sb_cr.bottom - sb_cr.top, items.GetSize() * rh, st->m_scroll_y);
       }
+
+      SWELL_PopClipRegion(hdc);
+
+      HPEN fp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.border_strong);
+      HGDIOBJ ofp = SelectObject(hdc, fp);
+      HGDIOBJ ofb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+      RoundRect(hdc, outer.left, outer.top, outer.right - 1, outer.bottom - 1,
+                frame_r * 2, frame_r * 2);
+      SelectObject(hdc, ofp); DeleteObject(fp);
+      SelectObject(hdc, ofb);
 
       EndPaint(hwnd, &ps);
       return 0;
@@ -3515,11 +3565,7 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int btnw = th.button_min_h;  // square dropdown affordance
 
       // Backfill window bg so rounded corners blend.
-      {
-        HBRUSH wb = CreateSolidBrush((COLORREF)th.bg_window);
-        FillRect(hdc, &cr, wb);
-        DeleteObject(wb);
-      }
+      fill_bg(hwnd, hdc, WM_CTLCOLOREDIT, th.bg_window);
 
       // Rounded card body
       COLORREF bordercol = focused ? (COLORREF)th.accent
@@ -3702,9 +3748,7 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int tabH = thm.tab_height;
 
       // Bar background
-      HBRUSH bg = CreateSolidBrush((COLORREF)thm.bg_window);
-      FillRect(hdc, &cr, bg);
-      DeleteObject(bg);
+      fill_bg(hwnd, hdc, WM_CTLCOLORSTATIC, thm.bg_window);
 
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       SelectObject(hdc, f);
@@ -3716,6 +3760,17 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       const int bw = thm.border_width > 0 ? thm.border_width : 1;
       // Baseline where tab strip meets content area.
       const int by = cr.top + tabH;
+      if (cr.bottom > by + 1) {
+        HBRUSH pageBr = CreateSolidBrush((COLORREF)thm.bg_tab_active);
+        HPEN np = (HPEN)GetStockObject(NULL_PEN);
+        HGDIOBJ op = SelectObject(hdc, np);
+        HGDIOBJ ob = SelectObject(hdc, pageBr);
+        SWELL_DrawRoundRectEx(hdc, cr.left, by, cr.right - 1, cr.bottom - 1,
+                              0, 0, r, r);
+        SelectObject(hdc, op);
+        SelectObject(hdc, ob); DeleteObject(pageBr);
+      }
+
       int x = cr.left + thm.padding_button_h;
       RECT selR = { 0, 0, 0, 0 };
       for (int i = 0; i < st->m_tabs.GetSize(); i++) {
@@ -3728,24 +3783,15 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         HBRUSH fillBr = CreateSolidBrush(sel ? (COLORREF)thm.bg_tab_active
                                               : (COLORREF)thm.bg_tab);
-        HPEN borderPen = CreatePen(PS_SOLID, bw,
-                                   sel ? (COLORREF)thm.border_strong
-                                       : (COLORREF)thm.border);
+        HPEN borderPen = sel ? (HPEN)GetStockObject(NULL_PEN)
+                             : CreatePen(PS_SOLID, bw, (COLORREF)thm.border);
         HGDIOBJ ob = SelectObject(hdc, fillBr);
         HGDIOBJ op = SelectObject(hdc, borderPen);
         SWELL_DrawRoundRectEx(hdc, tr.left, tr.top, tr.right, by,
                               r, r, 0, 0);
-        SelectObject(hdc, op); DeleteObject(borderPen);
+        SelectObject(hdc, op);
+        if (!sel) DeleteObject(borderPen);
         SelectObject(hdc, ob); DeleteObject(fillBr);
-
-        // Erase bottom border on selected tab so it visually connects
-        // to the content area.
-        if (sel) {
-          HBRUSH eraser = CreateSolidBrush((COLORREF)thm.bg_tab_active);
-          RECT eb = { tr.left, by - bw, tr.right, by + bw };
-          FillRect(hdc, &eb, eraser);
-          DeleteObject(eraser);
-        }
 
         SetTextColor(hdc, sel ? (COLORREF)thm.fg_text
                                : (COLORREF)thm.fg_text_dim);
@@ -3755,15 +3801,40 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         x += tw + 2;
       }
 
-      // Bottom border under the tab strip, skipping active tab so it
-      // visually connects to the content area below.
-      HPEN bp = CreatePen(PS_SOLID, bw, (COLORREF)thm.border);
+      HPEN bp = CreatePen(PS_SOLID, bw, (COLORREF)thm.border_strong);
       HGDIOBJ obp = SelectObject(hdc, bp);
       if (selR.left < selR.right) {
-        MoveToEx(hdc, cr.left, by, NULL);
-        LineTo(hdc, selR.left, by);
-        MoveToEx(hdc, selR.right, by, NULL);
-        LineTo(hdc, cr.right, by);
+        const int ir = r > 3 ? r / 2 : 2;
+
+        if (cr.bottom > by + r) {
+          MoveToEx(hdc, cr.left + r, cr.bottom - 1, NULL);
+          LineTo(hdc, cr.right - r - 1, cr.bottom - 1);
+          SWELL_DrawArc(hdc, cr.right - 2*r - 1, cr.bottom - 2*r - 1,
+                        cr.right - 1, cr.bottom - 1, 90.0f, -90.0f);
+          LineTo(hdc, cr.right - 1, by);
+        } else {
+          MoveToEx(hdc, cr.right - 1, by, NULL);
+        }
+
+        LineTo(hdc, selR.right + ir, by);
+        SWELL_DrawArc(hdc, selR.right, by - 2*ir,
+                      selR.right + 2*ir, by, 90.0f, 90.0f);
+        LineTo(hdc, selR.right, selR.top + r);
+        SWELL_DrawArc(hdc, selR.right - 2*r, selR.top,
+                      selR.right, selR.top + 2*r, 0.0f, -90.0f);
+        LineTo(hdc, selR.left + r, selR.top);
+        SWELL_DrawArc(hdc, selR.left, selR.top,
+                      selR.left + 2*r, selR.top + 2*r, 270.0f, -90.0f);
+        LineTo(hdc, selR.left, by - ir);
+        SWELL_DrawArc(hdc, selR.left - 2*ir, by - 2*ir,
+                      selR.left, by, 0.0f, 90.0f);
+        LineTo(hdc, cr.left, by);
+
+        if (cr.bottom > by + r) {
+          LineTo(hdc, cr.left, cr.bottom - r - 1);
+          SWELL_DrawArc(hdc, cr.left, cr.bottom - 2*r - 1,
+                        cr.left + 2*r, cr.bottom - 1, 180.0f, -90.0f);
+        }
       } else {
         MoveToEx(hdc, cr.left, by, NULL);
         LineTo(hdc, cr.right, by);
@@ -3883,9 +3954,7 @@ LRESULT trackbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
 
-      HBRUSH bg = CreateSolidBrush((COLORREF)th.bg_window);
-      FillRect(hdc, &cr, bg);
-      DeleteObject(bg);
+      fill_bg(hwnd, hdc, WM_CTLCOLORSTATIC, th.bg_window);
 
       int cy = (cr.top + cr.bottom) / 2;
 
@@ -4001,11 +4070,7 @@ LRESULT progressWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       RECT cr; GetClientRect(hwnd, &cr);
 
       // Window backfill behind rounded track
-      {
-        HBRUSH wb = CreateSolidBrush((COLORREF)th.bg_window);
-        FillRect(hdc, &cr, wb);
-        DeleteObject(wb);
-      }
+      fill_bg(hwnd, hdc, WM_CTLCOLORSTATIC, th.bg_window);
 
       const int r = (cr.bottom - cr.top) / 2;
 
