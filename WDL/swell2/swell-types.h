@@ -941,16 +941,6 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define SBM_SETSCROLLINFO    0x00E9
 #define SBM_GETSCROLLINFO    0x00EA
 
-typedef struct {
-  UINT    cbSize;
-  UINT    fMask;
-  int     nMin;
-  int     nMax;
-  UINT    nPage;
-  int     nPos;
-  int     nTrackPos;
-} SCROLLINFO, *LPSCROLLINFO;
-
 #define SIF_RANGE           0x0001
 #define SIF_PAGE            0x0002
 #define SIF_POS             0x0004
