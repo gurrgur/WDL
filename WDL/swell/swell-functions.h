@@ -318,6 +318,14 @@ SWELL_API_DEFINE(LONG_PTR, SetWindowLong,(HWND hwnd, int idx, LONG_PTR val))
 
 SWELL_API_DEFINE(BOOL, ScrollWindow, (HWND hwnd, int xamt, int yamt, const RECT *lpRect, const RECT *lpClipRect))
 
+SWELL_API_DEFINE(int, SetScrollPos, (HWND hwnd, int nBar, int nPos, BOOL bRedraw))
+SWELL_API_DEFINE(int, GetScrollPos, (HWND hwnd, int nBar))
+SWELL_API_DEFINE(BOOL, SetScrollRange, (HWND hwnd, int nBar, int nMinPos, int nMaxPos, BOOL bRedraw))
+SWELL_API_DEFINE(BOOL, GetScrollRange, (HWND hwnd, int nBar, LPINT lpMinPos, LPINT lpMaxPos))
+SWELL_API_DEFINE(int, SetScrollInfo, (HWND hwnd, int fnBar, LPSCROLLINFO lpsi, BOOL fRedraw))
+SWELL_API_DEFINE(BOOL, GetScrollInfo, (HWND hwnd, int fnBar, LPSCROLLINFO lpsi))
+SWELL_API_DEFINE(BOOL, ShowScrollBar, (HWND hwnd, int nBar, BOOL bShow))
+
 /* 
 ** GetProp() SetProp() RemoveProp() EnumPropsEx()
 ** Free your props otherwise they will leak.

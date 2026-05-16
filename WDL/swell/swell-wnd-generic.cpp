@@ -158,8 +158,12 @@ HWND__::HWND__(HWND par, int wID, const RECT *wndr, const char *label, bool visi
 
 static HWND s_last_rbuttondown;
 
+static void swell_free_win_scrollinfo(HWND hwnd);
+
 HWND__::~HWND__()
 {
+  swell_free_win_scrollinfo(this);
+
   if (m_wndproc)
     m_wndproc(this,WM_NCDESTROY,0,0);
 
@@ -9029,6 +9033,163 @@ LRESULT SWELL_SendMouseMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
   }
 
   return ret;
+}
+
+static SCROLLINFO *swell_get_win_scrollinfo(HWND hwnd, int fnBar, bool create)
+{
+  if (!hwnd) return NULL;
+  char propname[32];
+  snprintf(propname, 32, "SWELL_si_%d", fnBar);
+  SCROLLINFO *si = (SCROLLINFO *)GetProp(hwnd, propname);
+  if (!si && create)
+  {
+    si = (SCROLLINFO *)calloc(1, sizeof(SCROLLINFO));
+    if (!si) return NULL;
+    si->cbSize = sizeof(SCROLLINFO);
+    si->nMin = 0;
+    si->nMax = 100;
+    si->nPage = 10;
+    si->nPos = 0;
+    SetProp(hwnd, propname, (HANDLE)si);
+  }
+  return si;
+}
+
+static void swell_free_win_scrollinfo(HWND hwnd)
+{
+  if (!hwnd) return;
+  for (int bar = 0; bar < 2; bar++)
+  {
+    char propname[32];
+    snprintf(propname, 32, "SWELL_si_%d", bar);
+    HANDLE h = RemoveProp(hwnd, propname);
+    if (h) free(h);
+  }
+}
+
+static void swell_update_scrollbar_child(HWND hwnd, int fnBar, SCROLLINFO *si, BOOL redraw)
+{
+  if (!hwnd) return;
+  const char *cn = (fnBar == SB_VERT) ? "ScrollBar" : "ScrollBar";
+  HWND child = hwnd->m_children;
+  while (child)
+  {
+    if (child->m_classname && !strcmp(child->m_classname, cn) &&
+        ((fnBar == SB_VERT && (child->m_style & SBS_VERT)) ||
+         (fnBar == SB_HORZ && !(child->m_style & SBS_VERT))))
+    {
+      SendMessage(child, SBM_SETSCROLLINFO, (WPARAM)redraw, (LPARAM)si);
+      return;
+    }
+    child = child->m_next;
+  }
+}
+
+int SetScrollPos(HWND hwnd, int nBar, int nPos, BOOL bRedraw)
+{
+  SCROLLINFO *si = swell_get_win_scrollinfo(hwnd, nBar, true);
+  if (!si) return 0;
+  int oldPos = si->nPos;
+  int maxPos = si->nMax - wdl_max((int)si->nPage - 1, 0);
+  si->nPos = nPos;
+  if (si->nPos < si->nMin) si->nPos = si->nMin;
+  if (si->nPos > maxPos) si->nPos = maxPos;
+  si->nTrackPos = si->nPos;
+  swell_update_scrollbar_child(hwnd, nBar, si, bRedraw);
+  return oldPos;
+}
+
+int GetScrollPos(HWND hwnd, int nBar)
+{
+  SCROLLINFO *si = swell_get_win_scrollinfo(hwnd, nBar, false);
+  return si ? si->nPos : 0;
+}
+
+BOOL SetScrollRange(HWND hwnd, int nBar, int nMinPos, int nMaxPos, BOOL bRedraw)
+{
+  SCROLLINFO *si = swell_get_win_scrollinfo(hwnd, nBar, true);
+  if (!si) return FALSE;
+  if (si->nPos < nMinPos) si->nPos = nMinPos;
+  if (si->nPos > nMaxPos) si->nPos = nMaxPos;
+  si->nMin = nMinPos;
+  si->nMax = nMaxPos;
+  swell_update_scrollbar_child(hwnd, nBar, si, bRedraw);
+  return TRUE;
+}
+
+BOOL GetScrollRange(HWND hwnd, int nBar, LPINT lpMinPos, LPINT lpMaxPos)
+{
+  SCROLLINFO *si = swell_get_win_scrollinfo(hwnd, nBar, false);
+  if (!si)
+  {
+    if (lpMinPos) *lpMinPos = 0;
+    if (lpMaxPos) *lpMaxPos = 0;
+    return FALSE;
+  }
+  if (lpMinPos) *lpMinPos = si->nMin;
+  if (lpMaxPos) *lpMaxPos = si->nMax;
+  return TRUE;
+}
+
+int SetScrollInfo(HWND hwnd, int fnBar, LPSCROLLINFO lpsi, BOOL fRedraw)
+{
+  if (!hwnd || !lpsi) return 0;
+  SCROLLINFO *si = swell_get_win_scrollinfo(hwnd, fnBar, true);
+  if (!si) return 0;
+  int oldPos = si->nPos;
+  if (lpsi->fMask & SIF_RANGE)  { si->nMin = lpsi->nMin; si->nMax = lpsi->nMax; }
+  if (lpsi->fMask & SIF_PAGE)   si->nPage = lpsi->nPage;
+  if (lpsi->fMask & SIF_POS)    si->nPos = lpsi->nPos;
+  int maxPos = si->nMax - wdl_max((int)si->nPage - 1, 0);
+  if (si->nPos < si->nMin) si->nPos = si->nMin;
+  if (si->nPos > maxPos) si->nPos = maxPos;
+  if (si->nPage < 1) si->nPage = 1;
+  if (lpsi->fMask & SIF_TRACKPOS) si->nTrackPos = lpsi->nTrackPos;
+  swell_update_scrollbar_child(hwnd, fnBar, si, fRedraw);
+  return oldPos;
+}
+
+BOOL GetScrollInfo(HWND hwnd, int fnBar, LPSCROLLINFO lpsi)
+{
+  if (!hwnd || !lpsi) return FALSE;
+  SCROLLINFO *si = swell_get_win_scrollinfo(hwnd, fnBar, false);
+  if (!si)
+  {
+    memset(lpsi, 0, sizeof(SCROLLINFO));
+    lpsi->cbSize = sizeof(SCROLLINFO);
+    return FALSE;
+  }
+  if (lpsi->fMask & SIF_RANGE)  { lpsi->nMin = si->nMin; lpsi->nMax = si->nMax; }
+  if (lpsi->fMask & SIF_PAGE)   lpsi->nPage = si->nPage;
+  if (lpsi->fMask & SIF_POS)    lpsi->nPos = si->nPos;
+  if (lpsi->fMask & SIF_TRACKPOS) lpsi->nTrackPos = si->nTrackPos;
+  return TRUE;
+}
+
+BOOL ShowScrollBar(HWND hwnd, int nBar, BOOL bShow)
+{
+  if (!hwnd) return FALSE;
+  HWND child = hwnd->m_children;
+  while (child)
+  {
+    if (child->m_classname && !strcmp(child->m_classname, "ScrollBar") &&
+        ((nBar == SB_VERT && (child->m_style & SBS_VERT)) ||
+         (nBar == SB_HORZ && !(child->m_style & SBS_VERT))))
+    {
+      ShowWindow(child, bShow ? SW_SHOW : SW_HIDE);
+      return TRUE;
+    }
+    if (nBar == SB_BOTH)
+    {
+      if (child->m_classname && !strcmp(child->m_classname, "ScrollBar"))
+      {
+        ShowWindow(child, bShow ? SW_SHOW : SW_HIDE);
+      }
+    }
+    child = child->m_next;
+  }
+  if (nBar == SB_BOTH) return TRUE;
+  return FALSE;
 }
 
 #endif

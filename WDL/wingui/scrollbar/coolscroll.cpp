@@ -3313,43 +3313,6 @@ void CoolSB_OnColorThemeChange()
 
 
 
-#ifndef _WIN32 // SWELL does not yet emulate these, so we have some default behaviors here
-
-static BOOL GetScrollInfo(HWND hwnd, int sb, SCROLLINFO *si)
-{
-  si->nMin=0; si->nMax=1000; si->nPage=1000; si->nPos=si->nTrackPos=0;
-  return FALSE;
-}
-static int GetScrollPos(HWND hwnd, int sb)
-{
-  return 0;
-}
-
-static BOOL GetScrollRange(HWND hwnd, int sb, int *minpos, int *maxpos)
-{
-  if (minpos) *minpos=0;
-  if (maxpos) *maxpos=1000;
-  return 0;
-}
-static BOOL SetScrollInfo(HWND hwnd, int sb, SCROLLINFO *si, BOOL redraw)
-{
-  return 0;
-}
-static BOOL SetScrollRange(HWND hwnd, int nBar, int minv, int maxv, BOOL fRedraw)
-{
-return 0;
-}
-static int SetScrollPos(HWND hwnd, int nBar, int nPos, BOOL fRedraw)
-{
-  return 0;
-}
-static BOOL ShowScrollBar(HWND hwnd, int nBar, BOOL vis)
-{
-  return 0;
-}
-
-
-#endif
 
 static const char *szPropStr = "CoolSBSubclassPtr";
 
