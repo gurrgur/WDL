@@ -985,6 +985,53 @@ static bool menu_outside_down_is_same_menubar_item(MenuWindow *root,
   return idx >= 0 && GetSubMenu(owner->m_menu, idx) == root->menu;
 }
 
+static int menu_menubar_hittest_from_event(MenuWindow *root,
+                                           const SDL_Event *evt,
+                                           RECT *item_sr)
+{
+  if (!root || !evt) return -1;
+  HWND owner = root->owner_hwnd;
+  if (!owner || !owner->m_menu || owner->m_parent) return -1;
+
+  SDL_WindowID window_id = 0;
+  float ex = 0.0f, ey = 0.0f;
+  if (evt->type == SDL_EVENT_MOUSE_MOTION) {
+    window_id = evt->motion.windowID;
+    ex = evt->motion.x;
+    ey = evt->motion.y;
+  } else if (evt->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+             evt->type == SDL_EVENT_MOUSE_BUTTON_UP) {
+    window_id = evt->button.windowID;
+    ex = evt->button.x;
+    ey = evt->button.y;
+  } else {
+    return -1;
+  }
+
+  SDL_Window *owner_win = (SDL_Window *)owner->m_oswindow;
+  if (!owner_win || window_id != SDL_GetWindowID(owner_win)) return -1;
+
+  const int wx = (int)(swell_log_to_phys(ex) + 0.5f);
+  const int wy = (int)(swell_log_to_phys(ey) + 0.5f);
+  const int sx = owner->m_position.left + wx;
+  const int sy = owner->m_position.top + wy;
+  if (SendMessage(owner, WM_NCHITTEST, 0, MAKELPARAM(sx, sy)) != HTMENU)
+    return -1;
+
+  return swell_menubar_hittest(owner, wx, item_sr);
+}
+
+static bool menu_is_owner_menubar_submenu(MenuWindow *root)
+{
+  if (!root || !root->owner_hwnd || !root->owner_hwnd->m_menu) return false;
+  HMENU bar = root->owner_hwnd->m_menu;
+  const int n = GetMenuItemCount(bar);
+  for (int i = 0; i < n; i++) {
+    if (GetSubMenu(bar, i) == root->menu) return true;
+  }
+  return false;
+}
+
 static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
                                       HWND owner_hwnd, int flags,
                                       MenuWindow *parent)
@@ -1062,6 +1109,35 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
   menu_present(mw);
   SDL_ShowWindow(mw->sdlwin);
   return mw;
+}
+
+static bool menu_switch_to_menubar_item(MenuWindow *root, const SDL_Event *evt)
+{
+  if (!root || !menu_is_owner_menubar_submenu(root)) return false;
+
+  RECT item_sr = {};
+  const int idx = menu_menubar_hittest_from_event(root, evt, &item_sr);
+  if (idx < 0) return false;
+
+  HWND owner = root->owner_hwnd;
+  HMENU sub = GetSubMenu(owner->m_menu, idx);
+  if (!sub) return false;
+  if (sub == root->menu) return true;
+
+  const int flags = root->flags;
+  const bool ignore_up = root->ignore_initial_button_up;
+  owner->Retain();
+  menu_finish(root, 0);
+
+  SendMessage(owner, WM_INITMENUPOPUP, (WPARAM)sub, MAKELPARAM(idx, FALSE));
+  MenuWindow *nw = menu_create_window(sub, item_sr.left, item_sr.bottom,
+                                      owner, flags, NULL);
+  if (nw) {
+    nw->ignore_initial_button_up = ignore_up;
+    g_active_menu = nw;
+  }
+  owner->Release();
+  return true;
 }
 
 static bool menu_open_child(MenuWindow *mw, int idx)
@@ -1175,7 +1251,7 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
 
     case SDL_EVENT_MOUSE_MOTION: {
       MenuWindow *mw = menu_find_by_window_id(root, evt->motion.windowID);
-      if (!mw) return false;
+      if (!mw) return menu_switch_to_menubar_item(root, evt);
       int newhov = -1;
       menu_local_point_to_item(mw, evt->motion.x, evt->motion.y, &newhov);
       if (newhov != mw->hovered) {
