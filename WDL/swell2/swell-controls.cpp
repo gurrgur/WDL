@@ -8,6 +8,7 @@
 #define NOMINMAX
 #endif
 #include "swell-internal.h"
+#include "../wdlutf8.h"
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
@@ -636,6 +637,8 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
   }
 
   ReleaseDC(hwnd, hdc);
+  // result is a byte offset into the UTF-8 string; convert to character position
+  result = WDL_utf8_bytepos_to_charpos(txt_orig, result);
   return result;
 }
 
@@ -824,8 +827,15 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return hwnd->m_title.GetLength();
 
     case EM_GETSEL: {
-      int s1 = st ? (st->sel1 < 0 ? st->cursor_pos : (st->sel1 < st->sel2 ? st->sel1 : st->sel2)) : 0;
-      int s2 = st ? (st->sel1 < 0 ? st->cursor_pos : (st->sel1 < st->sel2 ? st->sel2 : st->sel1)) : 0;
+      if (!st) { if (wParam) *(int *)wParam = 0; if (lParam) *(int *)lParam = 0; return 0; }
+      if (st->sel1 < 0) {
+        // No active selection — Win32 returns -1 in both words
+        if (wParam) *(int *)wParam = st->cursor_pos;
+        if (lParam) *(int *)lParam = st->cursor_pos;
+        return (LRESULT)-1;
+      }
+      int s1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
+      int s2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
       if (wParam) *(int *)wParam = s1;
       if (lParam) *(int *)lParam = s2;
       return MAKELPARAM(s1, s2);
@@ -835,8 +845,8 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (st) {
         st->sel1 = (int)wParam;
         st->sel2 = (int)lParam;
-        if (st->sel2 < 0) st->sel2 = hwnd->m_title.GetLength();
-        st->cursor_pos = st->sel2;
+        if (st->sel1 == 0 && st->sel2 < 0) st->sel2 = WDL_utf8_get_charlen(hwnd->m_title.Get());
+        st->cursor_pos = st->sel2 < 0 ? st->sel1 : st->sel2;
         InvalidateRect(hwnd, NULL, FALSE);
       }
       return 0;
@@ -845,17 +855,20 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       const char *newtext = (const char *)lParam;
       if (!st || !newtext) return 0;
       const char *t = hwnd->m_title.Get();
-      int len = (int)strlen(t);
+      int tlen_chars = WDL_utf8_get_charlen(t);
       int s1 = st->sel1 < 0 ? st->cursor_pos : (st->sel1 < st->sel2 ? st->sel1 : st->sel2);
       int s2 = st->sel1 < 0 ? st->cursor_pos : (st->sel1 < st->sel2 ? st->sel2 : st->sel1);
-      if (s1 < 0) s1 = 0; if (s1 > len) s1 = len;
-      if (s2 < s1) s2 = s1; if (s2 > len) s2 = len;
+      if (s1 < 0) s1 = 0; if (s1 > tlen_chars) s1 = tlen_chars;
+      if (s2 < s1) s2 = s1; if (s2 > tlen_chars) s2 = tlen_chars;
+      int bs1 = WDL_utf8_charpos_to_bytepos(t, s1);
+      int bs2 = WDL_utf8_charpos_to_bytepos(t, s2);
       WDL_FastString ns;
-      ns.Set(t, s1);
+      ns.Set(t, bs1);
       ns.Append(newtext);
-      ns.Append(t + s2);
+      ns.Append(t + bs2);
       hwnd->m_title.Set(ns.Get());
-      st->cursor_pos = s1 + (int)strlen(newtext);
+      int newtext_chars = WDL_utf8_get_charlen(newtext);
+      st->cursor_pos = s1 + newtext_chars;
       st->sel1 = st->sel2 = -1;
       InvalidateRect(hwnd, NULL, FALSE);
       notify_parent(hwnd, EN_CHANGE);
@@ -943,15 +956,17 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                    wParam == 'V' || wParam == 'v')) {
         if (wParam == 'C' || wParam == 'c' || wParam == 'X' || wParam == 'x') {
           if (st->sel1 >= 0 && st->sel1 != st->sel2) {
-            int s1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
-            int s2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
-            if (s2 <= len) {
-              int slen = s2 - s1;
-              HANDLE h = GlobalAlloc(GMEM_MOVEABLE, slen + 1);
+            int cs1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
+            int cs2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
+            int bs1 = WDL_utf8_charpos_to_bytepos(t, cs1);
+            int bs2 = WDL_utf8_charpos_to_bytepos(t, cs2);
+            if (bs2 <= len) {
+              int blen = bs2 - bs1;
+              HANDLE h = GlobalAlloc(GMEM_MOVEABLE, blen + 1);
               if (h) {
                 char *dst = (char *)GlobalLock(h);
-                memcpy(dst, t + s1, slen);
-                dst[slen] = 0;
+                memcpy(dst, t + bs1, blen);
+                dst[blen] = 0;
                 GlobalUnlock(h);
                 if (OpenClipboard(hwnd)) {
                   EmptyClipboard();
@@ -1354,13 +1369,15 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         // Selection highlight
         if (char2dline && sel2 > sel1 && sel1 >= 0 && ndlines > 0) {
-          int dl0 = char2dline[sel1];
-          int dl1 = char2dline[sel2];
+          int bs1 = WDL_utf8_charpos_to_bytepos(txt, sel1);
+          int bs2 = WDL_utf8_charpos_to_bytepos(txt, sel2);
+          int dl0 = char2dline[bs1];
+          int dl1 = char2dline[bs2];
           for (int di = dl0; di <= dl1 && di < ndlines; di++) {
             int d0 = st->ml_dline_starts.Get()[di];
             int d1 = st->ml_dline_ends.Get()[di];
-            int selLineStart = (di == dl0) ? sel1 : d0;
-            int selLineEnd = (di == dl1) ? sel2 : d1;
+            int selLineStart = (di == dl0) ? bs1 : d0;
+            int selLineEnd = (di == dl1) ? bs2 : d1;
             if (selLineStart >= selLineEnd) continue;
             int ry = tr.top + di * rowH - scrollY;
 
@@ -1386,11 +1403,12 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (st && st->cursor_state && focused && ndlines > 0) {
           int cpos = st->cursor_pos;
           if (cpos > tlen) cpos = tlen;
-          int cdline = char2dline ? char2dline[cpos] : 0;
+          int bpos = WDL_utf8_charpos_to_bytepos(txt, cpos);
+          int cdline = char2dline ? char2dline[bpos] : 0;
           if (cdline >= 0 && cdline < ndlines) {
             int d0 = st->ml_dline_starts.Get()[cdline];
             SkRect cbr;
-            skfont.measureText(txt + d0, cpos - d0, SkTextEncoding::kUTF8, &cbr);
+            skfont.measureText(txt + d0, bpos - d0, SkTextEncoding::kUTF8, &cbr);
             int cx = tr.left + (int)(cbr.width() + 0.5f);
             int cy = tr.top + cdline * rowH - scrollY;
             if (cy >= tr.top && cy + rowH <= tr.bottom) {
@@ -1421,22 +1439,24 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           int s2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
           if (s1 > tlen) s1 = tlen;
           if (s2 > tlen) s2 = tlen;
+          int bs1 = WDL_utf8_charpos_to_bytepos(txt, s1);
+          int bs2 = WDL_utf8_charpos_to_bytepos(txt, s2);
 
           SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
                                     : (COLORREF)th.fg_text_disabled);
           SetBkMode(hdc, TRANSPARENT);
           SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-          if (s2 > s1)
+          if (bs2 > bs1)
           {
             SkRect mr;
-            skfont.measureText(txt, s1, SkTextEncoding::kUTF8, &mr);
+            skfont.measureText(txt, bs1, SkTextEncoding::kUTF8, &mr);
             RECT selR = tr;
             selR.left += (int)(mr.width() + 0.5f);
             SetBkMode(hdc, OPAQUE);
             SetBkColor(hdc, (COLORREF)th.accent);
             SetTextColor(hdc, (COLORREF)th.fg_on_accent);
-            SWELL_DrawText(hdc, txt + s1, s2 - s1, &selR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            SWELL_DrawText(hdc, txt + bs1, bs2 - bs1, &selR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
           }
         }
 
@@ -1444,8 +1464,9 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (st && st->cursor_state && focused) {
           int cpos = st->cursor_pos;
           if (cpos > tlen) cpos = tlen;
+          int bpos = WDL_utf8_charpos_to_bytepos(txt, cpos);
           SkRect cbounds;
-          skfont.measureText(txt, cpos, SkTextEncoding::kUTF8, &cbounds);
+          skfont.measureText(txt, bpos, SkTextEncoding::kUTF8, &cbounds);
           int cx = tr.left + (int)(cbounds.width() + 0.5f);
           if (cx > tr.right - 1) cx = tr.right - 1;
           HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
