@@ -61,13 +61,26 @@ static uint32_t crc32_calc(const void *data, int len)
 
 static std::string resolve_ini_path(const char *fn)
 {
-  if (!fn || !fn[0]) {
+  char fntemp[512];
+  if (!fn || !fn[0] || !strstr(fn, "/")) {
     if (g_swell_defini && g_swell_defini[0])
-      return std::string(g_swell_defini);
-    const char *home = getenv("HOME");
-    if (!home || !home[0])
-      home = "/tmp";
-    return std::string(home) + "/.libSwell.ini";
+      snprintf(fntemp, sizeof(fntemp), "%s", g_swell_defini);
+    else {
+      const char *home = getenv("HOME");
+      if (!home || !home[0])
+        home = "/tmp";
+      snprintf(fntemp, sizeof(fntemp), "%s/.libSwell.ini", home);
+    }
+    if (fn && fn[0]) {
+      // strip extension from base, append _name with original extension or .ini
+      char *dot = strrchr(fntemp, '.');
+      int baselen = dot ? (int)(dot - fntemp) : (int)strlen(fntemp);
+      const char *fnext = strrchr(fn, '.');
+      if (!fnext) fnext = ".ini";
+      snprintf(fntemp + baselen, sizeof(fntemp) - baselen, "_%s%s", fn,
+               strcasecmp(fnext, ".ini") ? ".ini" : fnext);
+    }
+    return std::string(fntemp);
   }
   return fn;
 }
@@ -218,12 +231,23 @@ static void ctx_flush(IniCtx *ctx)
   flock(fileno(fp), LOCK_UN);
   fclose(fp);
 
-  if (rename(tmppath, ctx->path.c_str()) == 0) {
+  // Resolve symlink before rename so we update the target, not the link
+  const char *target = ctx->path.c_str();
+  char *rp = NULL;
+  {
+    struct stat st2;
+    if (!stat(target, &st2) && S_ISLNK(st2.st_mode)) {
+      rp = realpath(target, NULL);
+      if (rp) target = rp;
+    }
+  }
+  if (rename(tmppath, target) == 0) {
     ctx->dirty = false;
     ctx->mtime = file_info(ctx->path.c_str(), &ctx->fsize);
   } else {
     unlink(tmppath);
   }
+  free(rp);
 }
 
 // ---- Trim quotes and whitespace (mimics Win32 trimming) ----
