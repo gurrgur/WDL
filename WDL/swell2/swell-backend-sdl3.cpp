@@ -583,6 +583,38 @@ static void sdl_window_point_to_client(HWND hwnd, float *x, float *y)
 // swell_sdlEventHandler: SDL event -> SWELL message translation
 // ---------------------------------------------------------------------------
 
+static HWND s_last_mousemove_hwnd = NULL;
+static UINT s_last_mousemove_msg = 0;
+static int s_last_mousemove_x = 0;
+static int s_last_mousemove_y = 0;
+static Uint32 s_last_mousemove_state = 0;
+static bool s_last_mousemove_valid = false;
+
+static void swell_sdlResetLastMouseMove()
+{
+  s_last_mousemove_valid = false;
+}
+
+static bool swell_sdlShouldSendMouseMove(HWND hwnd, UINT msg,
+                                         int x, int y, Uint32 state)
+{
+  if (s_last_mousemove_valid &&
+      s_last_mousemove_hwnd == hwnd &&
+      s_last_mousemove_msg == msg &&
+      s_last_mousemove_x == x &&
+      s_last_mousemove_y == y &&
+      s_last_mousemove_state == state)
+    return false;
+
+  s_last_mousemove_hwnd = hwnd;
+  s_last_mousemove_msg = msg;
+  s_last_mousemove_x = x;
+  s_last_mousemove_y = y;
+  s_last_mousemove_state = state;
+  s_last_mousemove_valid = true;
+  return true;
+}
+
 static void swell_sdlEventHandler(SDL_Event *evt)
 {
   switch (evt->type) {
@@ -928,6 +960,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       }
 
       if (msg) {
+        swell_sdlResetLastMouseMove();
         SendMessage(target, msg, 0, MAKELPARAM((int)mx, (int)my));
       }
       break;
@@ -965,12 +998,17 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         sdl_window_point_to_client(cap, &mx, &my);
       }
       if (target) {
+        const int ix = (int)mx;
+        const int iy = (int)my;
         // NC area mouse move
         if (in_nc) {
-          SendMessage(target, WM_NCMOUSEMOVE, 0, MAKELPARAM((int)mx, (int)my));
+          if (swell_sdlShouldSendMouseMove(target, WM_NCMOUSEMOVE, ix, iy, evt->motion.state))
+            SendMessage(target, WM_NCMOUSEMOVE, 0, MAKELPARAM(ix, iy));
         } else {
-          SendMessage(target, WM_MOUSEMOVE, 0, MAKELPARAM((int)mx, (int)my));
-          SendMessage(target, WM_SETCURSOR, (WPARAM)target, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+          if (swell_sdlShouldSendMouseMove(target, WM_MOUSEMOVE, ix, iy, evt->motion.state)) {
+            SendMessage(target, WM_MOUSEMOVE, 0, MAKELPARAM(ix, iy));
+            SendMessage(target, WM_SETCURSOR, (WPARAM)target, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+          }
         }
       }
       break;
@@ -994,6 +1032,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         if (child) target = child;
       }
       if (!target) break;
+      swell_sdlResetLastMouseMove();
 
       static float s_scroll_accum_y = 0.0f;
       static float s_scroll_accum_x = 0.0f;
