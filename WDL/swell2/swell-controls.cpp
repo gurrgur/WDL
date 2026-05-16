@@ -2259,7 +2259,22 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case LB_INSERTSTRING: {
       if (!st) return LB_ERR;
       const char *s = (const char *)lParam;
-      int pos = (msg == LB_INSERTSTRING) ? (int)wParam : st->m_data.GetSize();
+      int pos;
+      if (msg == LB_INSERTSTRING) {
+        pos = (int)wParam;
+      } else if (hwnd->m_style & LBS_SORT) {
+        // Find sorted insertion position (case-insensitive)
+        pos = 0;
+        const char *ns = s ? s : "";
+        while (pos < st->m_data.GetSize()) {
+          const char *es = st->m_data.Get(pos)->m_cols.GetSize() > 0 ?
+                           st->m_data.Get(pos)->m_cols.Get()[0].txt : "";
+          if (strcasecmp(es, ns) > 0) break;
+          pos++;
+        }
+      } else {
+        pos = st->m_data.GetSize();
+      }
       if (pos < 0 || pos > st->m_data.GetSize()) pos = st->m_data.GetSize();
       SWELL_ListView_Row *row = new SWELL_ListView_Row();
       row->m_cols.Resize(1, false);
