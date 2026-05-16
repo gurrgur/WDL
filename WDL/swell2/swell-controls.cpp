@@ -1118,27 +1118,39 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 1;
       }
       if (wParam == VK_HOME) {
+        int old_pos = st->cursor_pos;
         st->cursor_pos = 0;
         if (!shift) { st->sel1 = st->sel2 = -1; }
+        else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
         InvalidateRect(hwnd, NULL, FALSE);
         return 1;
       }
       if (wParam == VK_END) {
+        int old_pos = st->cursor_pos;
         st->cursor_pos = nch;
         if (!shift) { st->sel1 = st->sel2 = -1; }
+        else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
         InvalidateRect(hwnd, NULL, FALSE);
         return 1;
       }
       if (wParam == VK_LEFT) {
-        if (st->cursor_pos > 0) st->cursor_pos--;
-        if (!shift) { st->sel1 = st->sel2 = -1; }
-        InvalidateRect(hwnd, NULL, FALSE);
+        if (st->cursor_pos > 0) {
+          int old_pos = st->cursor_pos;
+          st->cursor_pos--;
+          if (!shift) { st->sel1 = st->sel2 = -1; }
+          else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
+          InvalidateRect(hwnd, NULL, FALSE);
+        }
         return 1;
       }
       if (wParam == VK_RIGHT) {
-        if (st->cursor_pos < nch) st->cursor_pos++;
-        if (!shift) { st->sel1 = st->sel2 = -1; }
-        InvalidateRect(hwnd, NULL, FALSE);
+        if (st->cursor_pos < nch) {
+          int old_pos = st->cursor_pos;
+          st->cursor_pos++;
+          if (!shift) { st->sel1 = st->sel2 = -1; }
+          else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
+          InvalidateRect(hwnd, NULL, FALSE);
+        }
         return 1;
       }
       if (hwnd->m_style & ES_MULTILINE) {
@@ -1164,8 +1176,10 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (colChars > prevChars) colChars = prevChars;
             int newBpos = lineStarts.Get()[curLine-1] +
                           WDL_utf8_charpos_to_bytepos(t + lineStarts.Get()[curLine-1], colChars);
+            int old_pos = st->cursor_pos;
             st->cursor_pos = WDL_utf8_bytepos_to_charpos(t, newBpos);
             if (!shift) { st->sel1 = st->sel2 = -1; }
+            else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
             InvalidateRect(hwnd, NULL, FALSE);
           }
           return 1;
@@ -1180,8 +1194,10 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (colChars > nextChars) colChars = nextChars;
             int newBpos = lineStarts.Get()[curLine+1] +
                           WDL_utf8_charpos_to_bytepos(t + lineStarts.Get()[curLine+1], colChars);
+            int old_pos = st->cursor_pos;
             st->cursor_pos = WDL_utf8_bytepos_to_charpos(t, newBpos);
             if (!shift) { st->sel1 = st->sel2 = -1; }
+            else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
             InvalidateRect(hwnd, NULL, FALSE);
           }
           return 1;
@@ -1198,8 +1214,10 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           int col = st->cursor_pos - lineStarts.Get()[curLine];
           int targLen = lineEnds.Get()[targetLine] - lineStarts.Get()[targetLine];
           if (col > targLen) col = targLen;
+          int old_pos = st->cursor_pos;
           st->cursor_pos = lineStarts.Get()[targetLine] + col;
           if (!shift) { st->sel1 = st->sel2 = -1; }
+          else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
           InvalidateRect(hwnd, NULL, FALSE);
           return 1;
         }
