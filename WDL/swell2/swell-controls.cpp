@@ -3336,16 +3336,27 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       if (wParam == VK_LEFT) {
         HTREEITEM sel = st->m_sel;
-        if (sel) {
-          if (sel->m_state & TVIS_EXPANDED) {
+        if (sel && (sel->m_state & TVIS_EXPANDED)) {
+          NMTREEVIEW nmtv;
+          memset(&nmtv, 0, sizeof(nmtv));
+          nmtv.hdr.hwndFrom = hwnd;
+          nmtv.hdr.idFrom = hwnd->m_id;
+          nmtv.hdr.code = TVN_ITEMEXPANDING;
+          nmtv.action = TVE_COLLAPSE;
+          nmtv.itemNew.hItem = sel;
+          nmtv.itemNew.mask = TVIF_STATE;
+          nmtv.itemNew.state = sel->m_state & ~TVIS_EXPANDED;
+          nmtv.itemNew.stateMask = TVIS_EXPANDED;
+          HWND par = GetParent(hwnd);
+          if (!par || !SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nmtv)) {
             sel->m_state &= ~TVIS_EXPANDED;
             InvalidateRect(hwnd, NULL, FALSE);
-          } else {
-            int dummy = -1;
-            HTREEITEM par = tv_find_parent(st->m_root, sel, &dummy);
-            if (par && par != st->m_root)
-              SendMessage(hwnd, TVM_SELECTITEM, 0, (LPARAM)par);
           }
+        } else if (sel) {
+          int dummy = -1;
+          HTREEITEM par = tv_find_parent(st->m_root, sel, &dummy);
+          if (par && par != st->m_root)
+            SendMessage(hwnd, TVM_SELECTITEM, 0, (LPARAM)par);
         }
         return 0;
       }
@@ -3353,8 +3364,21 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HTREEITEM sel = st->m_sel;
         if (sel) {
           if (!(sel->m_state & TVIS_EXPANDED) && (sel->m_children.GetSize() > 0 || sel->m_haschildren)) {
-            sel->m_state |= TVIS_EXPANDED;
-            InvalidateRect(hwnd, NULL, FALSE);
+            NMTREEVIEW nmtv;
+            memset(&nmtv, 0, sizeof(nmtv));
+            nmtv.hdr.hwndFrom = hwnd;
+            nmtv.hdr.idFrom = hwnd->m_id;
+            nmtv.hdr.code = TVN_ITEMEXPANDING;
+            nmtv.action = TVE_EXPAND;
+            nmtv.itemNew.hItem = sel;
+            nmtv.itemNew.mask = TVIF_STATE;
+            nmtv.itemNew.state = sel->m_state | TVIS_EXPANDED;
+            nmtv.itemNew.stateMask = TVIS_EXPANDED;
+            HWND par = GetParent(hwnd);
+            if (!par || !SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nmtv)) {
+              sel->m_state |= TVIS_EXPANDED;
+              InvalidateRect(hwnd, NULL, FALSE);
+            }
           } else if (sel->m_children.GetSize() > 0) {
             SendMessage(hwnd, TVM_SELECTITEM, 0, (LPARAM)sel->m_children.Get(0));
           }
