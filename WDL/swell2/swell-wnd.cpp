@@ -861,7 +861,7 @@ HWND GetFocus()
   while (w && w->m_focused_child) {
     w = (HWND)w->m_focused_child;
   }
-  while (w && !w->m_visible)
+  while (w && (!w->m_visible || GetProp(w, "SWELL_MenuOwner")))
     w = (HWND)w->m_parent;
   g_swell_focus = w;
   return g_swell_focus;
@@ -1191,6 +1191,19 @@ BOOL SetProp(HWND hwnd, const char *name, HANDLE data)
 {
   if (!hwnd || !name) return FALSE;
   hwnd->m_props.Insert(name, (void *)data);
+  static const bool s_dbg_ncpaint = !!getenv("SWELL_DBG_NCPAINT");
+  if (s_dbg_ncpaint && data && !strcmp(name, "CoolSBSubclassPtr")) {
+    const RECT &p = hwnd->m_position;
+    printf("[swell2 CoolSB-init] hwnd=%p class=%s id=%d title='%s' pos=%d,%d-%d,%d (%dx%d) style=0x%08lx parent=%p\n",
+      (void*)hwnd,
+      hwnd->m_classname ? hwnd->m_classname : "(null)",
+      hwnd->m_id,
+      hwnd->m_title.Get() ? hwnd->m_title.Get() : "",
+      (int)p.left, (int)p.top, (int)p.right, (int)p.bottom,
+      (int)(p.right-p.left), (int)(p.bottom-p.top),
+      (unsigned long)hwnd->m_style, (void*)hwnd->m_parent);
+    fflush(stdout);
+  }
   return TRUE;
 }
 

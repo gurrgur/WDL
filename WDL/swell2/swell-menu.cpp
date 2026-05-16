@@ -579,6 +579,8 @@ struct MenuWindow {
     parent(NULL), child(NULL) {}
   ~MenuWindow() {
     if (child) delete child;
+    if (!parent && owner_hwnd)
+      RemoveProp(owner_hwnd, "SWELL_MenuOwner");
     free(item_y);
     if (texture) SDL_DestroyTexture(texture);
     if (renderer) SDL_DestroyRenderer(renderer);
@@ -1151,6 +1153,7 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
   menu_draw(mw);
   menu_present(mw);
   SDL_ShowWindow(mw->sdlwin);
+  if (!mw->parent) SetProp(mw->owner_hwnd, "SWELL_MenuOwner", (HANDLE)1);
   return mw;
 }
 
