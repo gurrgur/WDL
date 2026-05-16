@@ -342,7 +342,14 @@ HDC GetDC(HWND hwnd)
     ctx->clip_save_count = 0;
     ctx->getdc_savecount = ctx->canvas->save();
 
-    SkRect clipr = SkRect::MakeXYWH((float)ltrim, (float)ttrim,
+    // Reset matrix: when GetDC is called from inside a WM_PAINT cycle
+    // the canvas already has ancestor translates accumulated. Without
+    // reset, our translate(xoffs,yoffs) stacks on top → double offset.
+    // xoffs/yoffs are absolute surface-pixel coords, so identity is correct.
+    ctx->canvas->resetMatrix();
+
+    // Clip is in surface coords (matrix is identity now).
+    SkRect clipr = SkRect::MakeXYWH((float)(xoffs + ltrim), (float)(yoffs + ttrim),
         (float)(wndw - ltrim - rtrim), (float)(wndh - ttrim - btrim));
     if (clipr.width() > 0.0f && clipr.height() > 0.0f)
       ctx->canvas->clipRect(clipr);
@@ -350,10 +357,6 @@ HDC GetDC(HWND hwnd)
     ctx->canvas->translate((float)xoffs, (float)yoffs);
   }
 
-  // surface_offs converts from drawing coords to surface pixel coords.
-  // Canvas is translated by +xoffs, so drawing at client (0,0)
-  // hits surface pixel (xoffs, yoffs).  surface_offs must be +xoffs
-  // so that dirty_rect + surface_offs = surface pixels.
   ctx->surface_offs.x = xoffs;
   ctx->surface_offs.y = yoffs;
   ctx->dirty_rect_valid = false;
@@ -376,24 +379,6 @@ HDC GetDC(HWND hwnd)
 HDC GetWindowDC(HWND hwnd)
 {
   if (!hwnd) return nullptr;
-
-  {
-    static const bool s_dbg_ncpaint = !!getenv("SWELL_DBG_NCPAINT");
-    if (s_dbg_ncpaint) {
-      void *coolsb = hwnd->m_props.Get("CoolSBSubclassPtr");
-      if (coolsb) {
-        const RECT &p = hwnd->m_position;
-        printf("[swell2 GetWindowDC] hwnd=%p class=%s id=%d pos=%d,%d-%d,%d coolsb=%p paintctx=%p backing=%d\n",
-          (void*)hwnd,
-          hwnd->m_classname ? hwnd->m_classname : "(null)",
-          hwnd->m_id,
-          (int)p.left, (int)p.top, (int)p.right, (int)p.bottom,
-          coolsb, (void*)hwnd->m_paintctx,
-          hwnd->m_backingstore ? 1 : 0);
-        fflush(stdout);
-      }
-    }
-  }
 
   // Walk up to find ancestor with backing store, but do NOT
   // apply NCCALCSIZE on the starting window — give full window area.
@@ -456,7 +441,11 @@ HDC GetWindowDC(HWND hwnd)
     ctx->clip_save_count = 0;
     ctx->getdc_savecount = ctx->canvas->save();
 
-    SkRect clipr = SkRect::MakeXYWH((float)ltrim, (float)ttrim,
+    // See GetDC: reset matrix to identity so our absolute-coord translate
+    // does not stack on top of any paint-pipeline accumulated translate.
+    ctx->canvas->resetMatrix();
+
+    SkRect clipr = SkRect::MakeXYWH((float)(xoffs + ltrim), (float)(yoffs + ttrim),
         (float)(wndw - ltrim - rtrim), (float)(wndh - ttrim - btrim));
     if (clipr.width() > 0.0f && clipr.height() > 0.0f)
       ctx->canvas->clipRect(clipr);
@@ -2335,24 +2324,6 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     int nc_top  = ncr.top;
 
     if (forceref) {
-      static const bool s_dbg_ncpaint = !!getenv("SWELL_DBG_NCPAINT");
-      if (s_dbg_ncpaint) {
-        void *coolsb = hwnd->m_props.Get("CoolSBSubclassPtr");
-        bool wantscroll = (hwnd->m_style & (WS_HSCROLL|WS_VSCROLL)) != 0;
-        if (coolsb || wantscroll) {
-          const RECT &p = hwnd->m_position;
-          printf("[swell2 NCPAINT] hwnd=%p class=%s id=%d title='%s' pos=%d,%d-%d,%d (%dx%d) style=0x%08lx exstyle=0x%08lx coolsb=%p parent=%p\n",
-            (void*)hwnd,
-            hwnd->m_classname ? hwnd->m_classname : "(null)",
-            hwnd->m_id,
-            hwnd->m_title.Get() ? hwnd->m_title.Get() : "",
-            (int)p.left, (int)p.top, (int)p.right, (int)p.bottom,
-            (int)(p.right-p.left), (int)(p.bottom-p.top),
-            (unsigned long)hwnd->m_style, (unsigned long)hwnd->m_exstyle,
-            coolsb, (void*)hwnd->m_parent);
-          fflush(stdout);
-        }
-      }
       SendMessage(hwnd, WM_NCPAINT, 1, 0);
     }
 
