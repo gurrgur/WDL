@@ -227,10 +227,14 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       hwnd->m_private_data = 0;
       return 0;
 
-    case BM_SETCHECK:
-      if (st) st->state = (int)wParam;
+    case BM_SETCHECK: {
+      if (st) {
+        int chk = ((int)wParam) & 3;
+        st->state = (chk > 2 || chk < 0) ? BST_UNCHECKED : chk;
+      }
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
+    }
 
     case BM_GETCHECK:
       return st ? st->state : 0;
@@ -296,9 +300,10 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_KEYDOWN:
       if ((wParam == VK_SPACE || wParam == VK_RETURN) && st) {
         DWORD style = hwnd->m_style & 0xFF;
-        if (style == BS_AUTOCHECKBOX || style == BS_AUTO3STATE) {
+        if (style == BS_AUTOCHECKBOX) {
+          st->state = (st->state == BST_CHECKED) ? BST_UNCHECKED : BST_CHECKED;
+        } else if (style == BS_AUTO3STATE) {
           st->state = (st->state + 1) % 3;
-          InvalidateRect(hwnd, NULL, FALSE);
         } else if (style == BS_AUTORADIOBUTTON) {
           st->state = BST_CHECKED;
           uncheck_radio_group(hwnd);
@@ -3187,8 +3192,18 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return DefWindowProc(hwnd, msg, wParam, lParam);
       if (!st) return 0;
       int delta = (short)HIWORD(wParam);
-      st->m_scroll_y -= delta / 40 * (st->m_last_row_height > 0 ? st->m_last_row_height : 16);
+      int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+      st->m_scroll_y -= delta / 40 * rh;
       if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+
+      // Clamp to bottom — don't scroll past last item
+      int totalH = (int)st->items.GetSize() * rh;
+      RECT cr; GetClientRect(hwnd, &cr);
+      int viewH = cr.bottom - cr.top;
+      int vmax = totalH - viewH;
+      if (vmax < 0) vmax = 0;
+      if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
     }
@@ -3489,8 +3504,8 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int idx = (start + 1 + i) % n;
         const char *d = st->items.Get(idx)->desc;
         if (!d) continue;
-        bool match = (msg == CB_FINDSTRINGEXACT) ? !strcasecmp(d, s)
-                                                 : !strncasecmp(d, s, strlen(s));
+        bool match = (msg == CB_FINDSTRINGEXACT) ? !strcmp(d, s)
+                                                  : !strncasecmp(d, s, strlen(s));
         if (match) return idx;
       }
       return CB_ERR;
