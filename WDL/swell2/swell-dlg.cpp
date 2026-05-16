@@ -21,7 +21,7 @@ static float  g_dlg_xscale  = 1.9f;
 static float  g_dlg_yscale  = 1.9f;
 static float  g_dlg_xtrans  = 0.0f;
 static float  g_dlg_ytrans  = 0.0f;
-static HWND   g_dlg_parent  = NULL;
+HWND   g_dlg_parent  = NULL;
 
 static inline int scx(int x) { return (int)(x * g_dlg_xscale + g_dlg_xtrans + 0.5f); }
 static inline int scy(int y) { return (int)(y * g_dlg_yscale + g_dlg_ytrans + 0.5f); }

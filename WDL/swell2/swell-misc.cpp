@@ -384,7 +384,11 @@ int MessageBox(HWND hwndParent, const char *text, const char *caption, int type)
     owner->m_owned.Add(hwndDlg);
   }
 
+  // Save and restore g_dlg_parent around WM_CREATE — if the dialog
+  // is destroyed during creation, g_dlg_parent would dangle
+  HWND saved_dlg_parent = g_dlg_parent;
   swellMessageBoxProc(hwndDlg, WM_CREATE, 0, (LPARAM)&p);
+  g_dlg_parent = saved_dlg_parent;
   if (hwndDlg->m_hashaddestroy >= 2)
     return p.default_id;
 
@@ -608,15 +612,48 @@ BOOL ShellExecute(HWND hwndDlg, const char *action,
                   const char *content1, const char *content2,
                   const char *content3, int blah)
 {
-  (void)hwndDlg; (void)action; (void)content2; (void)content3; (void)blah;
+  (void)hwndDlg; (void)action; (void)blah;
   if (!content1) return FALSE;
-  // Try xdg-open for "open" action, direct exec otherwise
+
+  // Auto-reap zombies: avoid accumulating defunct child processes
+  signal(SIGCHLD, SIG_IGN);
+
   pid_t pid = fork();
   if (pid == 0) {
-    const char *argv[] = { "xdg-open", content1, NULL };
-    execvp("xdg-open", (char *const *)argv);
-    // Fallback: try direct
-    execl(content1, content1, (char *)NULL);
+    if (content3 && content3[0]) chdir(content3);
+
+    const char *args[16];
+    int argc = 0;
+    args[argc++] = content1;
+
+    // Tokenize content2 (parameters) by spaces
+    if (content2 && content2[0]) {
+      WDL_FastString tok;
+      for (const char *p = content2; *p && argc < 15; ) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        const char *s = p;
+        int in_quote = 0;
+        while (*p && (in_quote || (*p != ' ' && *p != '\t'))) {
+          if (*p == '"') in_quote = !in_quote;
+          p++;
+        }
+        tok.Set(s, (int)(p - s));
+        // Strip surrounding quotes
+        const char *ts = tok.Get();
+        if (ts[0] == '"' && ts[tok.GetLength()-1] == '"') {
+          WDL_FastString unq;
+          unq.Set(ts + 1, tok.GetLength() - 2);
+          args[argc] = strdup(unq.Get());
+        } else {
+          args[argc] = strdup(ts);
+        }
+        argc++;
+      }
+    }
+    args[argc] = NULL;
+
+    execvp(content1, (char *const *)args);
     _exit(1);
   }
   return pid > 0 ? TRUE : FALSE;
@@ -667,13 +704,13 @@ HANDLE GetClipboardData(UINT type)
   if (type != CF_TEXT) return NULL;
 #ifdef SWELL_TARGET_SDL3
   if (!SDL_HasClipboardText()) return NULL;
-  free(g_clipboard_last_buf);
-  g_clipboard_last_buf = NULL;
   const char *txt = SDL_GetClipboardText();
   if (!txt) return NULL;
-  g_clipboard_last_buf = strdup(txt);
+  int len = (int)strlen(txt) + 1;
+  HANDLE h = GlobalAlloc(0, len);
+  if (h) memcpy(GlobalLock(h), txt, len);
   SDL_free((void*)txt);
-  return (HANDLE)g_clipboard_last_buf;
+  return h;
 #else
   return NULL;
 #endif
@@ -1429,6 +1466,14 @@ int ImageList_Add(HIMAGELIST list, HBITMAP image, HBITMAP mask)
 
 void ImageList_Destroy(HIMAGELIST list)
 {
+  if (!list) return;
+  for (int i = list->m_entries.GetSize() - 1; i >= 0; i--) {
+    HIMAGELIST__::Entry *e = list->m_entries.Get(i);
+    if (e) {
+      if (e->image) { DeleteObject((HGDIOBJ)e->image); e->image = NULL; }
+      if (e->mask)  { DeleteObject((HGDIOBJ)e->mask);  e->mask  = NULL; }
+    }
+  }
   delete list;
 }
 

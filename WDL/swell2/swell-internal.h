@@ -49,6 +49,8 @@ class buttonWindowState;
 struct __SWELL_editControlState;
 
 bool IsModalDialogBox(HWND hwnd);
+
+extern HWND g_dlg_parent;
 struct listViewState;
 class SWELL_ListView_Row;
 struct SWELL_ListView_Rec;
