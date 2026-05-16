@@ -3937,12 +3937,85 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
 
-    case WM_KEYDOWN:
+    case WM_KEYDOWN: {
+      bool editable = (st && (hwnd->m_style & 0x0F) != CBS_DROPDOWNLIST);
+      bool ctrl = (lParam & FCONTROL) != 0;
+      const char *title = hwnd->m_title.Get();
+      int len = title ? (int)strlen(title) : 0;
+
+      if (ctrl && (wParam == 'C' || wParam == 'c') && len > 0) {
+        if (OpenClipboard(hwnd)) {
+          HANDLE h = GlobalAlloc(GMEM_MOVEABLE, len + 1);
+          if (h) {
+            char *dst = (char *)GlobalLock(h);
+            memcpy(dst, title, len + 1);
+            GlobalUnlock(h);
+            EmptyClipboard();
+            SetClipboardData(CF_TEXT, h);
+          }
+          CloseClipboard();
+        }
+        return 0;
+      }
+      if (ctrl && (wParam == 'V' || wParam == 'v') && editable) {
+        if (OpenClipboard(hwnd)) {
+          HANDLE h = GetClipboardData(CF_TEXT);
+          if (h) {
+            const char *src = (const char *)GlobalLock(h);
+            if (src) { hwnd->m_title.Append(src); GlobalUnlock(h); }
+          }
+          CloseClipboard();
+        }
+        st->selidx = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+        notify_parent(hwnd, CBN_EDITCHANGE);
+        return 0;
+      }
+      if (ctrl && (wParam == 'X' || wParam == 'x') && editable && len > 0) {
+        if (OpenClipboard(hwnd)) {
+          HANDLE h = GlobalAlloc(GMEM_MOVEABLE, len + 1);
+          if (h) {
+            char *dst = (char *)GlobalLock(h);
+            memcpy(dst, title, len + 1);
+            GlobalUnlock(h);
+            EmptyClipboard();
+            SetClipboardData(CF_TEXT, h);
+          }
+          CloseClipboard();
+        }
+        hwnd->m_title.Set("");
+        st->selidx = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+        notify_parent(hwnd, CBN_EDITCHANGE);
+        return 0;
+      }
+      if (ctrl && (wParam == 'A' || wParam == 'a') && editable) {
+        return 0; // select all (no-op without cursor tracking)
+      }
+
+      if (editable) {
+        if (wParam == VK_BACK && len > 0) {
+          hwnd->m_title.SetLen(len - 1);
+          st->selidx = -1;
+          InvalidateRect(hwnd, NULL, FALSE);
+          notify_parent(hwnd, CBN_EDITCHANGE);
+          return 0;
+        }
+        if (wParam == VK_DELETE && len > 0) {
+          hwnd->m_title.SetLen(len - 1);
+          st->selidx = -1;
+          InvalidateRect(hwnd, NULL, FALSE);
+          notify_parent(hwnd, CBN_EDITCHANGE);
+          return 0;
+        }
+      }
+
       if (wParam == VK_DOWN || wParam == VK_SPACE) {
         combo_show_dropdown(hwnd, st);
         return 0;
       }
       return 0;
+    }
 
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
