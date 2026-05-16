@@ -216,6 +216,7 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
 
     case WM_NCLBUTTONDOWN:
+    case WM_NCLBUTTONDBLCLK:
       if (wParam == HTMENU && hwnd->m_menu) {
         // lParam is in screen coords per Win32; convert to window-x
         int win_x = (int)(short)LOWORD(lParam) - hwnd->m_position.left;
