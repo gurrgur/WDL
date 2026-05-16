@@ -3790,6 +3790,45 @@ static void draw_active_tab_outline(HDC hdc, const RECT &cr,
   swell_DirtyContext(hdc, cr.left, cr.top, cr.right, cr.bottom);
 }
 
+static void draw_inactive_tab_outline(HDC hdc, const RECT &tr,
+                                      int by, int radius,
+                                      int stroke_width, COLORREF color)
+{
+  if (!hdc || !hdc->canvas || tr.left >= tr.right) return;
+
+  const float sw = (float)(stroke_width > 0 ? stroke_width : 1);
+  const float hs = sw * 0.5f;
+  const float l = (float)tr.left + hs;
+  const float rr = (float)tr.right - hs;
+  const float t = (float)tr.top + hs;
+  const float b = (float)by + hs;
+  float r = (float)radius;
+  if (r < 0.0f) r = 0.0f;
+  const float w = rr - l;
+  const float h = b - t;
+  if (w <= 0.0f || h <= 0.0f) return;
+  if (r > w * 0.5f) r = w * 0.5f;
+  if (r > h) r = h;
+
+  SkPath p;
+  p.moveTo(l, b);
+  p.lineTo(l, t + r);
+  if (r > 0.0f) p.quadTo(l, t, l + r, t);
+  p.lineTo(rr - r, t);
+  if (r > 0.0f) p.quadTo(rr, t, rr, t + r);
+  p.lineTo(rr, b);
+
+  SkPaint paint;
+  paint.setStyle(SkPaint::kStroke_Style);
+  paint.setStrokeWidth(sw);
+  paint.setStrokeJoin(SkPaint::kRound_Join);
+  paint.setStrokeCap(SkPaint::kButt_Cap);
+  paint.setAntiAlias(true);
+  paint.setColor(SWELL_TO_SKCOLOR(color, 255));
+  hdc->canvas->drawPath(p, paint);
+  swell_DirtyContext(hdc, tr.left, tr.top, tr.right, by);
+}
+
 LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   tabControlState *st = (tabControlState *)(void *)hwnd->m_private_data;
@@ -3960,15 +3999,17 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         HBRUSH fillBr = CreateSolidBrush(sel ? (COLORREF)thm.bg_tab_active
                                               : (COLORREF)thm.bg_tab);
-        HPEN borderPen = sel ? (HPEN)GetStockObject(NULL_PEN)
-                             : CreatePen(PS_SOLID, bw, (COLORREF)thm.border);
+        HPEN borderPen = (HPEN)GetStockObject(NULL_PEN);
         HGDIOBJ ob = SelectObject(hdc, fillBr);
         HGDIOBJ op = SelectObject(hdc, borderPen);
         SWELL_DrawRoundRectEx(hdc, tr.left, tr.top, tr.right, by,
                               r, r, 0, 0);
         SelectObject(hdc, op);
-        if (!sel) DeleteObject(borderPen);
         SelectObject(hdc, ob); DeleteObject(fillBr);
+
+        if (!sel)
+          draw_inactive_tab_outline(hdc, tr, by, r, bw,
+                                    (COLORREF)thm.border);
 
         SetTextColor(hdc, sel ? (COLORREF)thm.fg_text
                                : (COLORREF)thm.fg_text_dim);
