@@ -506,7 +506,7 @@ static sk_sp<SkTypeface> menu_get_typeface()
                         SkFontStyle::kNormal_Width,
                         SkFontStyle::kUpright_Slant);
       // Try modern system fonts in order
-      const char *faces[] = { "Roboto", "Noto Sans", "Segoe UI",
+      const char *faces[] = { "Arial", "Noto Sans", "Segoe UI",
                                "DejaVu Sans", "Liberation Sans",
                                "FreeSans", "Arial", nullptr };
       for (int i = 0; faces[i]; i++) {
@@ -797,9 +797,9 @@ static void menu_draw(MenuWindow *mw)
       const float l = ((float)item_pad + (float)menu_lpad()) * 0.5f - s * 0.5f;
       const float t = (float)iy + ((float)ih - s) * 0.5f;
       SkPath ck;
-      ck.moveTo(l + s * 0.22f, t + s * 0.53f);
-      ck.lineTo(l + s * 0.41f, t + s * 0.70f);
-      ck.lineTo(l + s * 0.78f, t + s * 0.31f);
+      ck.moveTo(l + s * 0.28f, t + s * 0.53f);
+      ck.lineTo(l + s * 0.45f, t + s * 0.70f);
+      ck.lineTo(l + s * 0.72f, t + s * 0.31f);
       c->drawPath(ck, cp);
     }
 

@@ -189,9 +189,9 @@ static void draw_check_mark(HDC hdc, const RECT &box, COLORREF color)
   const float l = (float)box.left;
   const float t = (float)box.top;
   SkPath ck;
-  ck.moveTo(l + w * 0.25f, t + h * 0.53f);
-  ck.lineTo(l + w * 0.43f, t + h * 0.69f);
-  ck.lineTo(l + w * 0.76f, t + h * 0.32f);
+  ck.moveTo(l + w * 0.28f, t + h * 0.53f);
+  ck.lineTo(l + w * 0.45f, t + h * 0.69f);
+  ck.lineTo(l + w * 0.72f, t + h * 0.32f);
   hdc->canvas->drawPath(ck, paint);
 }
 
@@ -459,6 +459,25 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int cstate = st ? st->state : 0;
         bool checked = (cstate != BST_UNCHECKED);
 
+        // Clip canvas to the space this control actually occupies
+        // (indicator + label), so the focus ring and check mark don't
+        // bleed into empty right-side margin.
+        TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+        int text_w = 0;
+        if (hwnd->m_title.GetLength() > 0)
+          text_w = tm.tmAveCharWidth * hwnd->m_title.GetLength();
+        int used_right = box.right + 6 + text_w + 6;
+        if (used_right > cr.right) used_right = cr.right;
+        int used_top = cr.top;
+        int used_bot = cr.bottom;
+        if (hdc->canvas) {
+          hdc->canvas->save();
+          hdc->canvas->clipRect(SkRect::MakeLTRB(
+            (float)cr.left, (float)used_top,
+            (float)used_right, (float)used_bot));
+        }
+        int clip_save = hdc->canvas ? 1 : 0;
+
         // Indicator fill: accent when checked, input bg otherwise.
         COLORREF ind_bg = checked && enabled
             ? (COLORREF)th.accent
@@ -478,7 +497,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (is_radio) {
           Ellipse(hdc, box.left, box.top, box.right, box.bottom);
         } else {
-          int rr = th.corner_radius / 2; if (rr < 2) rr = 2;
+          int rr = th.corner_radius;
           RoundRect(hdc, box.left, box.top, box.right, box.bottom, rr*2, rr*2);
         }
         SelectObject(hdc, oldpen); DeleteObject(pen);
@@ -513,22 +532,28 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         if (focused) {
-          // Focus ring around the indicator
+          // Focus ring drawn on the box border itself (overlay), not offset
+          // outside. Uses the box rect directly so the ring sits inside/on
+          // the border edge rather than floating disconnected in the margin.
           HPEN fp = CreatePen(PS_SOLID, th.focus_ring_width,
                               (COLORREF)th.focus_ring);
           HGDIOBJ op = SelectObject(hdc, fp);
           HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
           HGDIOBJ ob = SelectObject(hdc, nb);
-          int o = th.focus_ring_offset;
           if (is_radio)
-            Ellipse(hdc, box.left-o, box.top-o, box.right+o, box.bottom+o);
+            Ellipse(hdc, box.left, box.top, box.right, box.bottom);
           else {
-            int rr = th.corner_radius / 2; if (rr < 2) rr = 2;
-            RoundRect(hdc, box.left-o, box.top-o, box.right+o, box.bottom+o,
-                      (rr+o)*2, (rr+o)*2);
+            int rr = th.corner_radius;
+            RoundRect(hdc, box.left, box.top, box.right, box.bottom,
+                      rr*2, rr*2);
           }
           SelectObject(hdc, op); DeleteObject(fp);
           SelectObject(hdc, ob);
+        }
+
+        // Restore canvas clip
+        if (clip_save) {
+          hdc->canvas->restore();
         }
       } else {
         // Push button
@@ -2825,7 +2850,7 @@ static inline int tv_indent_width(int row_h)
 
 static inline int tv_expander_width(int row_h)
 {
-  int w = scaled_px(14);
+  int w = scaled_px(8);
   if (w > row_h) w = row_h;
   return w > 1 ? w : 1;
 }
@@ -2854,9 +2879,9 @@ static void tv_draw_expander(HDC hdc, int cx, int cy, bool expanded, COLORREF co
   } else {
     const float hw = (float)scaled_px(2);
     const float hh = (float)scaled_px(3);
-    p.moveTo(x - hw * 0.5f, y - hh);
-    p.lineTo(x + hw,        y);
-    p.lineTo(x - hw * 0.5f, y + hh);
+    p.moveTo(x - hw, y - hh);
+    p.lineTo(x + hw, y);
+    p.lineTo(x - hw, y + hh);
   }
   hdc->canvas->drawPath(p, arrow);
 }
@@ -3845,7 +3870,7 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
       bool focused = (GetFocus() == hwnd);
-      int btnw = th.button_min_h;  // square dropdown affordance
+      int btnw = scaled_px(22);  // compact dropdown affordance
       int cw = cr.right - cr.left;
       if (btnw > cw / 2) btnw = cw / 2;
 
