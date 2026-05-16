@@ -171,6 +171,49 @@ static inline SkColor controls_to_sk(COLORREF c, uint8_t a = 255)
   return SkColorSetARGB(a, GetRValue(c), GetGValue(c), GetBValue(c));
 }
 
+static void draw_check_mark(HDC hdc, const RECT &box, COLORREF color)
+{
+  if (!hdc || !hdc->canvas) return;
+  const float w = (float)(box.right - box.left);
+  const float h = (float)(box.bottom - box.top);
+  if (w <= 0.0f || h <= 0.0f) return;
+
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  paint.setColor(controls_to_sk(color));
+  paint.setStyle(SkPaint::kStroke_Style);
+  paint.setStrokeCap(SkPaint::kRound_Cap);
+  paint.setStrokeJoin(SkPaint::kRound_Join);
+  paint.setStrokeWidth((float)scaled_px(2));
+
+  const float l = (float)box.left;
+  const float t = (float)box.top;
+  SkPath ck;
+  ck.moveTo(l + w * 0.25f, t + h * 0.53f);
+  ck.lineTo(l + w * 0.43f, t + h * 0.69f);
+  ck.lineTo(l + w * 0.76f, t + h * 0.32f);
+  hdc->canvas->drawPath(ck, paint);
+}
+
+static void draw_mixed_mark(HDC hdc, const RECT &box, COLORREF color)
+{
+  if (!hdc || !hdc->canvas) return;
+  const float w = (float)(box.right - box.left);
+  const float h = (float)(box.bottom - box.top);
+  if (w <= 0.0f || h <= 0.0f) return;
+
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  paint.setColor(controls_to_sk(color));
+  paint.setStyle(SkPaint::kStroke_Style);
+  paint.setStrokeCap(SkPaint::kRound_Cap);
+  paint.setStrokeWidth((float)scaled_px(2));
+
+  const float y = ((float)box.top + (float)box.bottom) * 0.5f;
+  hdc->canvas->drawLine((float)box.left + w * 0.28f, y,
+                        (float)box.right - w * 0.28f, y, paint);
+}
+
 // fill rect with background color from parent WM_CTLCOLOR* or default
 static void fill_bg(HWND hwnd, HDC hdc, UINT ctlmsg, int defcol)
 {
@@ -454,22 +497,9 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SelectObject(hdc, ob); DeleteObject(fb);
             SelectObject(hdc, op);
           } else if (cstate == BST_INDETERMINATE) {
-            HBRUSH fb = CreateSolidBrush(mark);
-            int m = box_size / 4;
-            RECT ir = { box.left+m, box.top+box_size/2 - 1,
-                        box.right-m, box.top+box_size/2 + 1 };
-            FillRect(hdc, &ir, fb);
-            DeleteObject(fb);
+            draw_mixed_mark(hdc, box, mark);
           } else {
-            int pw = th.border_width * 2; if (pw < 2) pw = 2;
-            HPEN cpen = CreatePen(PS_SOLID, pw, mark);
-            HGDIOBJ op = SelectObject(hdc, cpen);
-            int pad = box_size / 5;
-            MoveToEx(hdc, box.left + pad, box.top + box_size / 2, NULL);
-            LineTo(hdc, box.left + box_size * 2 / 5,
-                        box.bottom - pad - 1);
-            LineTo(hdc, box.right - pad, box.top + pad);
-            SelectObject(hdc, op); DeleteObject(cpen);
+            draw_check_mark(hdc, box, mark);
           }
         }
 

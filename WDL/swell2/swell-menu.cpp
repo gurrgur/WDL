@@ -532,6 +532,12 @@ static inline int menu_min_w()   { return SWELL_UI_SCALE(160); }
 static inline int menu_font_sz() { return g_swell_theme.default_font_size; }
 static inline int menu_corner_r(){ return g_swell_theme.corner_radius_large; }
 
+static inline int menu_scaled_px(int px)
+{
+  int v = SWELL_UI_SCALE(px);
+  return v > 0 ? v : 1;
+}
+
 // Convert native SWELL RGB color to SkColor (premul alpha)
 static SkColor swell_to_sk(int c, uint8_t a = 255)
 {
@@ -782,16 +788,17 @@ static void menu_draw(MenuWindow *mw)
       SkPaint cp;
       cp.setAntiAlias(true);
       cp.setColor(textCol);
-      cp.setStrokeWidth(2.0f);
+      cp.setStrokeWidth((float)menu_scaled_px(2));
       cp.setStyle(SkPaint::kStroke_Style);
       cp.setStrokeCap(SkPaint::kRound_Cap);
       cp.setStrokeJoin(SkPaint::kRound_Join);
-      float cy = (float)(iy + ih / 2);
-      float cx = (float)(item_pad + th.checkbox_size / 2);
+      const float s = (float)th.checkbox_size;
+      const float l = (float)item_pad + s * 0.05f;
+      const float t = (float)iy + ((float)ih - s) * 0.5f;
       SkPath ck;
-      ck.moveTo(cx - 5.0f, cy);
-      ck.lineTo(cx - 1.0f, cy + 4.0f);
-      ck.lineTo(cx + 5.0f, cy - 5.0f);
+      ck.moveTo(l + s * 0.22f, t + s * 0.53f);
+      ck.lineTo(l + s * 0.41f, t + s * 0.70f);
+      ck.lineTo(l + s * 0.78f, t + s * 0.31f);
       c->drawPath(ck, cp);
     }
 
