@@ -1032,6 +1032,12 @@ static bool menu_is_owner_menubar_submenu(MenuWindow *root)
   return false;
 }
 
+static int menu_phys_to_log_i(int phys)
+{
+  const float v = swell_phys_to_log((float)phys);
+  return (int)(v + (v >= 0.0f ? 0.5f : -0.5f));
+}
+
 static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
                                       HWND owner_hwnd, int flags,
                                       MenuWindow *parent)
@@ -1060,26 +1066,35 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
   mw->sx = sx;
   mw->sy = sy;
 
-  const int l_sx = (int)(swell_phys_to_log((float)sx) + 0.5f);
-  const int l_sy = (int)(swell_phys_to_log((float)sy) + 0.5f);
-  int l_w = (int)(swell_phys_to_log((float)mw->w) + 0.5f);
-  int l_h = (int)(swell_phys_to_log((float)mw->h) + 0.5f);
+  int l_w = menu_phys_to_log_i(mw->w);
+  int l_h = menu_phys_to_log_i(mw->h);
   if (l_w < 1) l_w = 1;
   if (l_h < 1) l_h = 1;
 
-  HWND__ *osw = owner_hwnd;
-  while (osw && !osw->m_oswindow)
-    osw = osw->m_owner ? osw->m_owner : (HWND__*)osw->m_parent;
-  SDL_Window *parent_sdlwin = osw ? (SDL_Window *)osw->m_oswindow : NULL;
+  SDL_Window *parent_sdlwin = parent ? parent->sdlwin : NULL;
+  int rel_lx = 0, rel_ly = 0;
+  if (parent_sdlwin) {
+    rel_lx = menu_phys_to_log_i(sx - parent->sx);
+    rel_ly = menu_phys_to_log_i(sy - parent->sy);
+  } else {
+    HWND__ *osw = owner_hwnd;
+    while (osw && !osw->m_oswindow)
+      osw = osw->m_owner ? osw->m_owner : (HWND__*)osw->m_parent;
+    parent_sdlwin = osw ? (SDL_Window *)osw->m_oswindow : NULL;
+    if (parent_sdlwin) {
+      int px = 0, py = 0;
+      SDL_GetWindowPosition(parent_sdlwin, &px, &py);
+      rel_lx = menu_phys_to_log_i(sx) - px;
+      rel_ly = menu_phys_to_log_i(sy) - py;
+    }
+  }
   if (!parent_sdlwin) {
     delete mw;
     return NULL;
   }
 
-  int px = 0, py = 0;
-  SDL_GetWindowPosition(parent_sdlwin, &px, &py);
   mw->sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
-      l_sx - px, l_sy - py, l_w, l_h,
+      rel_lx, rel_ly, l_w, l_h,
       SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS |
       SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_TRANSPARENT);
   if (!mw->sdlwin) {
