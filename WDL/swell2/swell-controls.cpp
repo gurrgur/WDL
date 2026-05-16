@@ -1245,6 +1245,8 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         // Scroll
         int totalH = ndlines * rowH;
         int viewH = tr.bottom - tr.top;
+        if (totalH > viewH)
+          tr.right -= th.scrollbar_width;
         if (st) {
           if (st->scroll_y > totalH - viewH) st->scroll_y = totalH - viewH;
           if (st->scroll_y < 0) st->scroll_y = 0;
@@ -2364,8 +2366,20 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (hmax < 0) hmax = 0;
       if (st->m_scroll_x > hmax) st->m_scroll_x = hmax;
       if (st->m_scroll_x < 0) st->m_scroll_x = 0;
+
+      // Reserve space for visible scrollbars
+      int cr_right_orig = cr.right;
+      int cr_bottom_orig = cr.bottom;
+      int totalH = n * rh;
+      int totalW_calc = totalW;
+      int viewH = cr.bottom - cr.top;
+      int viewW = cr.right - cr.left;
+      if (totalH > viewH) cr.right -= th.scrollbar_width;
+      if (totalW_calc > viewW) cr.bottom -= th.scrollbar_width;
+      if (cr.right < cr.left + 1) cr.right = cr.left + 1;
+      if (cr.bottom < cr.top + hdr + 1) cr.bottom = cr.top + hdr + 1;
+
       int top_row = st->m_scroll_y / rh;
-      RECT client_vis = { cr.left, cr.top + hdr, cr.right, cr.bottom };
 
       for (int i = top_row; i < n; i++) {
         int ry = cr.top + hdr + i * rh - st->m_scroll_y;
@@ -2449,11 +2463,15 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
 
       // Vertical scrollbar
-      drawVerticalScrollbar(hdc, cr, cr.bottom - cr.top, n * rh, st->m_scroll_y);
+      {
+        RECT sb_cr = cr; sb_cr.right = cr_right_orig; sb_cr.bottom = cr_bottom_orig;
+        drawVerticalScrollbar(hdc, sb_cr, sb_cr.bottom - sb_cr.top, n * rh, st->m_scroll_y);
+      }
 
       // Horizontal scrollbar
       if (totalW > 0) {
-        drawHorizontalScrollbar(hdc, cr, cr.right - cr.left, totalW, st->m_scroll_x);
+        RECT sb_cr = cr; sb_cr.right = cr_right_orig; sb_cr.bottom = cr_bottom_orig;
+        drawHorizontalScrollbar(hdc, sb_cr, sb_cr.right - sb_cr.left, totalW, st->m_scroll_x);
       }
 
       EndPaint(hwnd, &ps);
@@ -3083,6 +3101,13 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
       if (st->m_scroll_y < 0) st->m_scroll_y = 0;
 
+      // Reserve space for vertical scrollbar
+      int cr_right_orig = cr.right;
+      int totalH = items.GetSize() * rh;
+      if (totalH > cr.bottom - cr.top)
+        cr.right -= th.scrollbar_width;
+      if (cr.right < cr.left + 1) cr.right = cr.left + 1;
+
       int indent = rh;
       int expw = (rh / 4) * 2 + 3;
       for (int i = 0; i < items.GetSize(); i++) {
@@ -3131,7 +3156,10 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
       }
 
-      drawVerticalScrollbar(hdc, cr, cr.bottom - cr.top, items.GetSize() * rh, st->m_scroll_y);
+      {
+        RECT sb_cr = cr; sb_cr.right = cr_right_orig;
+        drawVerticalScrollbar(hdc, sb_cr, sb_cr.bottom - sb_cr.top, items.GetSize() * rh, st->m_scroll_y);
+      }
 
       EndPaint(hwnd, &ps);
       return 0;
