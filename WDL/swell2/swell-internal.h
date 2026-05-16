@@ -47,6 +47,8 @@
 class SWELL_MenuItem;
 class buttonWindowState;
 struct __SWELL_editControlState;
+
+bool IsModalDialogBox(HWND hwnd);
 struct listViewState;
 class SWELL_ListView_Row;
 struct SWELL_ListView_Rec;
@@ -90,6 +92,12 @@ struct HDC__ {
   HGDIOBJ__ *curfont;
   SkFont cached_skfont;
   const HGDIOBJ__ *cached_font_ptr;
+
+  bool cached_fm_valid;
+  float cached_fm_ascent;
+  float cached_fm_descent;
+  float cached_fm_rowH;
+  float cached_fm_leading;
 
   int cur_text_color_int;
   int curbkcol;
@@ -249,6 +257,7 @@ struct __SWELL_editControlState {
   WDL_FastString ml_cached_text;
   WDL_TypedBuf<int> ml_dline_starts;
   WDL_TypedBuf<int> ml_dline_ends;
+  WDL_TypedBuf<int> ml_char2dline;
   int ml_cached_w;
 
   __SWELL_editControlState() : cursor_pos(0), sel1(-1), sel2(-1),
@@ -556,6 +565,9 @@ void swell_theme_rescale();        // apply g_swell_ui_scale to metrics
 // swell-gdi.cpp internal
 void swell_DirtyContext(HDC__ *ctx, int l, int t, int r, int b);
 SkFont swell_make_skfont_from_hdc(HDC hdc);
+void SWELL_DrawArc(HDC ctx, int l, int t, int r, int b,
+                   float start_deg, float sweep_deg);
+void SWELL_SetClipRoundRect(HDC ctx, int l, int t, int r, int b, int radius);
 void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     int bmout_xpos, int bmout_ypos, bool forceref);
 

@@ -139,10 +139,10 @@ LRESULT SendMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       SendMessage(child, WM_DESTROY, 0, 0);
       child = next;
     }
-    // destroy owned windows
+    // destroy owned windows (skip modal dialog boxes)
     for (int i = hwnd->m_owned.GetSize() - 1; i >= 0; i--) {
       HWND ow = hwnd->m_owned.Get(i);
-      if (ow) SendMessage(ow, WM_DESTROY, 0, 0);
+      if (ow && !IsModalDialogBox(ow)) SendMessage(ow, WM_DESTROY, 0, 0);
     }
     // clear focus if this window was focused
     if (g_swell_focused_oswindow_hwnd == hwnd) {
@@ -1045,7 +1045,10 @@ BOOL EnumChildWindows(HWND hwnd, BOOL (*proc)(HWND, LPARAM), LPARAM lParam)
   int n = hwnd->m_children.GetSize();
   for (int i = 0; i < n; i++) {
     HWND ch = hwnd->m_children.Get(i);
-    if (ch && !proc(ch, lParam)) return FALSE;
+    if (ch) {
+      if (!proc(ch, lParam)) return FALSE;
+      if (!EnumChildWindows(ch, proc, lParam)) return FALSE;
+    }
   }
   return TRUE;
 }
@@ -1228,11 +1231,31 @@ BOOL SetDlgItemInt(HWND hwnd, int idx, int val, int issigned)
 int GetDlgItemInt(HWND hwnd, int idx, BOOL *translated, int issigned)
 {
   char buf[256] = "";
-  GetDlgItemText(hwnd, idx, buf, sizeof(buf));
-  if (translated) *translated = TRUE;
+  BOOL ok = GetDlgItemText(hwnd, idx, buf, sizeof(buf));
+  if (!ok) {
+    if (translated) *translated = FALSE;
+    return 0;
+  }
+  // Skip leading whitespace (matching original)
+  const char *p = buf;
+  while (*p == ' ' || *p == '\t') p++;
 
-  if (issigned) return atoi(buf);
-  else return (int)strtoul(buf, NULL, 10);
+  if (issigned) {
+    char *end = nullptr;
+    long v = strtol(p, &end, 10);
+    if (translated) *translated = (end != p && *end == '\0') ? TRUE : FALSE;
+    return (int)v;
+  } else {
+    // Unsigned: reject negative values per Win32 spec
+    if (*p == '-') {
+      if (translated) *translated = FALSE;
+      return 0;
+    }
+    char *end = nullptr;
+    unsigned long v = strtoul(p, &end, 10);
+    if (translated) *translated = (end != p && *end == '\0') ? TRUE : FALSE;
+    return (int)v;
+  }
 }
 
 BOOL GetDlgItemText(HWND hwnd, int idx, char *text, int textlen)

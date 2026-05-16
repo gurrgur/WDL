@@ -584,9 +584,14 @@ void EndDialog(HWND hwnd, int result)
   DestroyWindow(hwnd);
 }
 
-// ---------------------------------------------------------------------------
-// SWELL_CloseWindow
-// ---------------------------------------------------------------------------
+bool IsModalDialogBox(HWND hwnd)
+{
+  if (!hwnd) return false;
+  for (const ModalDlgState *ms = g_modal_stack; ms; ms = ms->prev) {
+    if (ms->hwnd == hwnd) return true;
+  }
+  return false;
+}
 
 void SWELL_CloseWindow(HWND hwnd)
 {
