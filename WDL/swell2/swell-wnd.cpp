@@ -217,7 +217,8 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_NCLBUTTONDOWN:
       if (wParam == HTMENU && hwnd->m_menu) {
-        int win_x = (int)(short)LOWORD(lParam);
+        // lParam is in screen coords per Win32; convert to window-x
+        int win_x = (int)(short)LOWORD(lParam) - hwnd->m_position.left;
         RECT item_sr = {};
         int idx = swell_menubar_hittest(hwnd, win_x, &item_sr);
         if (idx >= 0) {

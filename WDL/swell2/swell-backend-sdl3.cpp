@@ -27,6 +27,7 @@ struct SDL_WindowEntry {
 
 static SDL_WindowEntry *g_sdl_windows = NULL;
 static SDL_Surface *s_program_icon_surface = NULL;
+int g_swell_sdl_current_event_type = 0;
 
 static SDL_WindowEntry *find_entry_by_window(SDL_Window *w)
 {
@@ -905,11 +906,16 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         float cx = mx - nc_left;
         float cy = my - nc_top;
 
-        // NC area click (menu bar etc.) — use WM_NCHITTEST for proper HT code
+        // NC area click (menu bar etc.) — use WM_NCHITTEST for proper HT code.
+        // Per Win32 convention, WM_NCHITTEST / WM_NC*BUTTON* lParam carries
+        // SCREEN coords, so translate window-relative mx/my by the window's
+        // screen origin (m_position is screen-absolute for top-level windows).
         int client_w = e->hwnd->m_position.right - e->hwnd->m_position.left - nc_left;
         int client_h = e->hwnd->m_position.bottom - e->hwnd->m_position.top - nc_top;
         if (down && (cy < 0 || cx < 0 || cx >= client_w || cy >= client_h)) {
-          LRESULT ht = SendMessage(e->hwnd, WM_NCHITTEST, 0, MAKELPARAM((int)mx, (int)my));
+          const int sx = (int)mx + e->hwnd->m_position.left;
+          const int sy = (int)my + e->hwnd->m_position.top;
+          LRESULT ht = SendMessage(e->hwnd, WM_NCHITTEST, 0, MAKELPARAM(sx, sy));
           if (ht == HTCLIENT) ht = HTNOWHERE; // clamp if client-area returned
           UINT ncmsg = 0;
           if (btn == SDL_BUTTON_LEFT) {
@@ -919,7 +925,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           } else if (btn == SDL_BUTTON_MIDDLE) {
             ncmsg = (clicks >= 2) ? WM_NCMBUTTONDBLCLK : WM_NCMBUTTONDOWN;
           }
-          if (ncmsg) SendMessage(e->hwnd, ncmsg, (WPARAM)ht, MAKELPARAM((int)mx, (int)my));
+          if (ncmsg) SendMessage(e->hwnd, ncmsg, (WPARAM)ht, MAKELPARAM(sx, sy));
           break;
         }
 
@@ -1063,7 +1069,11 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 static void swell_sdlDispatchEvent(SDL_Event *evt)
 {
   g_swell_event_dispatch_depth++;
-  swell_sdlEventHandler(evt);
+  const int old_event_type = g_swell_sdl_current_event_type;
+  g_swell_sdl_current_event_type = evt ? (int)evt->type : 0;
+  if (!swell_menu_sdl_handle_event(evt))
+    swell_sdlEventHandler(evt);
+  g_swell_sdl_current_event_type = old_event_type;
   g_swell_event_dispatch_depth--;
 }
 

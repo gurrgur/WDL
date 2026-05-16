@@ -544,6 +544,9 @@ static SkColor swell_to_sk(int c, uint8_t a = 255)
 
 struct MenuWindow {
   HMENU          menu;
+  HWND           owner_hwnd;
+  int            flags;
+  int            sx, sy;     // screen position, physical pixels
   SDL_Window    *sdlwin;
   SDL_Renderer  *renderer;
   SDL_Texture   *texture;
@@ -554,22 +557,30 @@ struct MenuWindow {
   int            n_items;
   int           *item_y;    // top Y of each item (size n_items)
   bool           done;
+  bool           sync_waiting;
+  bool           ignore_initial_button_up;
   int            result;    // selected item ID, 0 = cancelled
+  SDL_WindowID   window_id;
+  MenuWindow    *parent;
+  MenuWindow    *child;
 
-  MenuWindow() : menu(NULL), sdlwin(NULL), renderer(NULL), texture(NULL),
+  MenuWindow() : menu(NULL), owner_hwnd(NULL), flags(0), sx(0), sy(0),
+    sdlwin(NULL), renderer(NULL), texture(NULL),
     hovered(-1), done(false), result(0), w(0), h(0),
-    n_items(0), item_y(NULL) {}
+    n_items(0), item_y(NULL), sync_waiting(false),
+    ignore_initial_button_up(false), window_id(0),
+    parent(NULL), child(NULL) {}
   ~MenuWindow() {
+    if (child) delete child;
     free(item_y);
     if (texture) SDL_DestroyTexture(texture);
     if (renderer) SDL_DestroyRenderer(renderer);
     if (sdlwin) SDL_DestroyWindow(sdlwin);
+    if (owner_hwnd) owner_hwnd->Release();
   }
 };
 
-// Forward declaration for submenu
-static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
-                           MenuWindow *parent_mw, int parent_item_y);
+static MenuWindow *g_active_menu = NULL;
 
 // ---------------------------------------------------------------------------
 // Strip Win32 & accelerator prefix for display, stopping at \t shortcut sep.
@@ -876,262 +887,405 @@ static void menu_present(MenuWindow *mw)
 }
 
 // ---------------------------------------------------------------------------
-// run_menu_window: synchronous menu loop
-// Returns selected item ID or 0 if cancelled.
+// Active menu tree: SDL events are offered by SWELL_RunEvents before normal
+// HWND dispatch. This keeps menubar popups out of a nested SDL wait loop.
 // ---------------------------------------------------------------------------
 
-static int run_menu_window(HMENU hMenu, int sx, int sy, HWND owner_hwnd,
-                           MenuWindow *parent_mw, int parent_item_y)
+static MenuWindow *menu_root(MenuWindow *mw)
 {
-  (void)parent_mw; (void)parent_item_y;
-  if (!hMenu) return 0;
+  while (mw && mw->parent) mw = mw->parent;
+  return mw;
+}
 
-  MenuWindow mw;
-  mw.menu = hMenu;
+static MenuWindow *menu_leaf(MenuWindow *mw)
+{
+  while (mw && mw->child) mw = mw->child;
+  return mw;
+}
 
-  // Build font
-  mw.font.setTypeface(menu_get_typeface());
-  mw.font.setSize((float)menu_font_sz());
-  mw.font.setEdging(SkFont::Edging::kAntiAlias);
+static void menu_hide_tree(MenuWindow *mw)
+{
+  if (!mw) return;
+  if (mw->child) menu_hide_tree(mw->child);
+  if (mw->sdlwin) SDL_HideWindow(mw->sdlwin);
+}
 
-  menu_measure(&mw);
+static void menu_close_child(MenuWindow *mw)
+{
+  if (mw && mw->child) {
+    delete mw->child;
+    mw->child = NULL;
+  }
+}
 
-  // Clamp to screen (physical pixels)
+static void menu_finish(MenuWindow *mw, int result)
+{
+  MenuWindow *root = menu_root(mw);
+  if (!root || root->done) return;
+  root->result = result;
+  root->done = true;
+  menu_hide_tree(root);
+  if (g_active_menu == root) g_active_menu = NULL;
+
+  if (!root->sync_waiting) {
+    HWND owner = root->owner_hwnd;
+    const int flags = root->flags;
+    if (owner) owner->Retain();
+    if (result && !(flags & TPM_RETURNCMD) && !(flags & TPM_NONOTIFY))
+      SendMessage(owner, WM_COMMAND, (WPARAM)result, 0);
+    if (owner) owner->Release();
+    delete root;
+  }
+}
+
+static MenuWindow *menu_find_by_window_id(MenuWindow *mw, SDL_WindowID id)
+{
+  if (!mw) return NULL;
+  if (mw->window_id == id) return mw;
+  return menu_find_by_window_id(mw->child, id);
+}
+
+static bool menu_local_point_to_item(MenuWindow *mw, float logical_x,
+                                     float logical_y, int *idx)
+{
+  if (!mw || !idx) return false;
+  int x = (int)(swell_log_to_phys(logical_x) + 0.5f);
+  int y = (int)(swell_log_to_phys(logical_y) + 0.5f);
+  if (x < 0 || x >= mw->w || y < 0 || y >= mw->h) {
+    *idx = -1;
+    return false;
+  }
+  *idx = menu_hittest(mw, y);
+  return true;
+}
+
+static bool menu_outside_down_is_same_menubar_item(MenuWindow *root,
+                                                   const SDL_Event *evt)
+{
+  if (!root || !evt || evt->type != SDL_EVENT_MOUSE_BUTTON_DOWN ||
+      evt->button.button != SDL_BUTTON_LEFT)
+    return false;
+
+  HWND owner = root->owner_hwnd;
+  if (!owner || !owner->m_menu || owner->m_parent) return false;
+
+  SDL_Window *owner_win = (SDL_Window *)owner->m_oswindow;
+  if (!owner_win || evt->button.windowID != SDL_GetWindowID(owner_win))
+    return false;
+
+  const int wx = (int)(swell_log_to_phys(evt->button.x) + 0.5f);
+  const int wy = (int)(swell_log_to_phys(evt->button.y) + 0.5f);
+  const int sx = owner->m_position.left + wx;
+  const int sy = owner->m_position.top + wy;
+  if (SendMessage(owner, WM_NCHITTEST, 0, MAKELPARAM(sx, sy)) != HTMENU)
+    return false;
+
+  RECT item_sr = {};
+  const int idx = swell_menubar_hittest(owner, wx, &item_sr);
+  return idx >= 0 && GetSubMenu(owner->m_menu, idx) == root->menu;
+}
+
+static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
+                                      HWND owner_hwnd, int flags,
+                                      MenuWindow *parent)
+{
+  if (!hMenu || !owner_hwnd) return NULL;
+
+  MenuWindow *mw = new MenuWindow;
+  mw->menu = hMenu;
+  mw->owner_hwnd = owner_hwnd;
+  mw->owner_hwnd->Retain();
+  mw->flags = flags;
+  mw->parent = parent;
+
+  mw->font.setTypeface(menu_get_typeface());
+  mw->font.setSize((float)menu_font_sz());
+  mw->font.setEdging(SkFont::Edging::kAntiAlias);
+
+  menu_measure(mw);
+
   RECT screen;
   SWELL_GetViewPort(&screen, NULL, true);
-  if (sx + mw.w > screen.right)  sx = screen.right - mw.w;
-  if (sy + mw.h > screen.bottom) sy = screen.bottom - mw.h;
-  if (sx < screen.left)          sx = screen.left;
-  if (sy < screen.top)           sy = screen.top;
+  if (sx + mw->w > screen.right)  sx = screen.right - mw->w;
+  if (sy + mw->h > screen.bottom) sy = screen.bottom - mw->h;
+  if (sx < screen.left)           sx = screen.left;
+  if (sy < screen.top)            sy = screen.top;
+  mw->sx = sx;
+  mw->sy = sy;
 
-  // Convert physical → logical for SDL3
-  int l_sx = swell_phys_to_log(sx);
-  int l_sy = swell_phys_to_log(sy);
-  int l_w  = swell_phys_to_log(mw.w);
-  int l_h  = swell_phys_to_log(mw.h);
+  const int l_sx = (int)(swell_phys_to_log((float)sx) + 0.5f);
+  const int l_sy = (int)(swell_phys_to_log((float)sy) + 0.5f);
+  int l_w = (int)(swell_phys_to_log((float)mw->w) + 0.5f);
+  int l_h = (int)(swell_phys_to_log((float)mw->h) + 0.5f);
   if (l_w < 1) l_w = 1;
   if (l_h < 1) l_h = 1;
 
-  // Walk owner_hwnd up via m_owner / m_parent to find the SDL OS window.
-  // owner_hwnd may be a child HWND with no m_oswindow of its own.
   HWND__ *osw = owner_hwnd;
   while (osw && !osw->m_oswindow)
     osw = osw->m_owner ? osw->m_owner : (HWND__*)osw->m_parent;
   SDL_Window *parent_sdlwin = osw ? (SDL_Window *)osw->m_oswindow : NULL;
-  if (!parent_sdlwin) return 0;
+  if (!parent_sdlwin) {
+    delete mw;
+    return NULL;
+  }
 
-  int px, py;
+  int px = 0, py = 0;
   SDL_GetWindowPosition(parent_sdlwin, &px, &py);
-  mw.sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
+  mw->sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
       l_sx - px, l_sy - py, l_w, l_h,
       SDL_WINDOW_POPUP_MENU | SDL_WINDOW_BORDERLESS |
       SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_TRANSPARENT);
-
-  if (!mw.sdlwin) return 0;
-
-  SDL_WindowID mw_id = SDL_GetWindowID(mw.sdlwin);
-  mw.renderer = SDL_CreateRenderer(mw.sdlwin, NULL);
-  if (!mw.renderer) return 0;
-
-  // Skia surface: use physical pixel dimensions for HiDPI
-  int pix_w = mw.w, pix_h = mw.h;
-  SDL_GetWindowSizeInPixels(mw.sdlwin, &pix_w, &pix_h);
-  if (pix_w < 1) pix_w = mw.w;
-  if (pix_h < 1) pix_h = mw.h;
-  mw.surface = SkSurfaces::Raster(
-      SkImageInfo::Make(pix_w, pix_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
-  if (!mw.surface) return 0;
-
-  // Initial render
-  menu_draw(&mw);
-  menu_present(&mw);
-  SDL_ShowWindow(mw.sdlwin);
-
-  // ---- Synchronous event loop ----
-  int submenu_open = -1;  // index of currently open submenu item
-
-  while (!mw.done) {
-    SDL_Event evt;
-    // Wait briefly then check timers
-    if (!SDL_WaitEventTimeout(&evt, 16)) {
-      continue;
-    }
-
-    switch (evt.type) {
-      case SDL_EVENT_QUIT:
-        mw.done = true;
-        mw.result = 0;
-        break;
-
-      case SDL_EVENT_KEY_DOWN: {
-        SDL_Keycode key = evt.key.key;
-        if (key == SDLK_ESCAPE) {
-          mw.done = true; mw.result = 0;
-        } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-          if (mw.hovered >= 0) {
-            SWELL_MenuItem *it = mw.menu->m_items.Get(mw.hovered);
-            if (it && !(it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR))) {
-              if ((it->m_flags & MF_POPUP) && it->m_submenu) {
-                int item_sx = swell_phys_to_log(sx + mw.w);
-                int item_sy = swell_phys_to_log(sy + mw.item_y[mw.hovered]);
-                SendMessage(owner_hwnd, WM_INITMENUPOPUP,
-                            (WPARAM)it->m_submenu,
-                            MAKELPARAM(mw.hovered, FALSE));
-                int r = run_menu_window(it->m_submenu, item_sx, item_sy,
-                                        owner_hwnd, &mw,
-                                        mw.item_y[mw.hovered]);
-                if (r != 0) { mw.done = true; mw.result = r; }
-              } else {
-                mw.done = true;
-                mw.result = it->m_id;
-              }
-            }
-          }
-        } else if (key == SDLK_DOWN) {
-          int next = mw.hovered + 1;
-          while (next < mw.n_items) {
-            SWELL_MenuItem *it = mw.menu->m_items.Get(next);
-            if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) break;
-            next++;
-          }
-          if (next < mw.n_items) {
-            mw.hovered = next;
-            menu_draw(&mw); menu_present(&mw);
-          }
-        } else if (key == SDLK_UP) {
-          int prev = (mw.hovered < 0 ? mw.n_items : mw.hovered) - 1;
-          while (prev >= 0) {
-            SWELL_MenuItem *it = mw.menu->m_items.Get(prev);
-            if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) break;
-            prev--;
-          }
-          if (prev >= 0) {
-            mw.hovered = prev;
-            menu_draw(&mw); menu_present(&mw);
-          }
-        } else if (key == SDLK_HOME) {
-          int first = 0;
-          while (first < mw.n_items) {
-            SWELL_MenuItem *it = mw.menu->m_items.Get(first);
-            if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) break;
-            first++;
-          }
-          if (first < mw.n_items) {
-            mw.hovered = first;
-            menu_draw(&mw); menu_present(&mw);
-          }
-        } else if (key == SDLK_END) {
-          int last = mw.n_items - 1;
-          while (last >= 0) {
-            SWELL_MenuItem *it = mw.menu->m_items.Get(last);
-            if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) break;
-            last--;
-          }
-          if (last >= 0) {
-            mw.hovered = last;
-            menu_draw(&mw); menu_present(&mw);
-          }
-        }
-        break;
-      }
-
-      case SDL_EVENT_MOUSE_MOTION: {
-        if (evt.motion.windowID == mw_id) {
-          // SDL3 mouse y is logical; menu_hittest expects physical
-          int newhov = menu_hittest(&mw, swell_log_to_phys((int)evt.motion.y));
-          if (newhov != mw.hovered) {
-            submenu_open = -1;
-            mw.hovered = newhov;
-            menu_draw(&mw); menu_present(&mw);
-          }
-        } else {
-          // Mouse moved outside menu window — dismiss
-          // (But allow moving into parent — handled by checking coordinates)
-          // For now only dismiss on click outside
-        }
-        break;
-      }
-
-      case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-        if (evt.button.windowID != mw_id) {
-          // Click outside menu — dismiss
-          mw.done = true;
-          mw.result = 0;
-        }
-        break;
-      }
-
-      case SDL_EVENT_MOUSE_BUTTON_UP: {
-        if (evt.button.windowID == mw_id) {
-          // SDL3 mouse y is logical; menu_hittest expects physical
-          int idx = menu_hittest(&mw, swell_log_to_phys((int)evt.button.y));
-          if (idx >= 0) {
-            SWELL_MenuItem *it = mw.menu->m_items.Get(idx);
-            if (it && !(it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR))) {
-              if ((it->m_flags & MF_POPUP) && it->m_submenu) {
-                if (submenu_open != idx) {
-                  submenu_open = idx;
-                  int item_sx = swell_phys_to_log(sx + mw.w);
-                  int item_sy = swell_phys_to_log(sy + mw.item_y[idx]);
-                  SendMessage(owner_hwnd, WM_INITMENUPOPUP,
-                              (WPARAM)it->m_submenu,
-                              MAKELPARAM(idx, FALSE));
-                  int r = run_menu_window(it->m_submenu, item_sx, item_sy,
-                                          owner_hwnd, &mw,
-                                          mw.item_y[idx]);
-                  submenu_open = -1;
-                  if (r != 0) { mw.done = true; mw.result = r; }
-                }
-              } else {
-                mw.done = true;
-                mw.result = it->m_id;
-              }
-            }
-          }
-        }
-        break;
-      }
-
-      case SDL_EVENT_WINDOW_MOUSE_LEAVE: {
-        if (evt.window.windowID == mw_id) {
-          mw.hovered = -1;
-          menu_draw(&mw); menu_present(&mw);
-        }
-        break;
-      }
-
-      default:
-        break;
-    }
+  if (!mw->sdlwin) {
+    delete mw;
+    return NULL;
   }
 
-  // Hide the popup before destruction so SDL3 re-evaluates which
-  // window is under the cursor. Without this, SDL3 still routes
-  // mouse events to the now-destroyed popup window until the user
-  // moves the mouse, causing the next menubar click to be dropped.
-  if (mw.sdlwin) SDL_HideWindow(mw.sdlwin);
+  mw->window_id = SDL_GetWindowID(mw->sdlwin);
+  mw->renderer = SDL_CreateRenderer(mw->sdlwin, NULL);
+  if (!mw->renderer) {
+    delete mw;
+    return NULL;
+  }
 
-  return mw.result;
+  int pix_w = mw->w, pix_h = mw->h;
+  SDL_GetWindowSizeInPixels(mw->sdlwin, &pix_w, &pix_h);
+  if (pix_w < 1) pix_w = mw->w;
+  if (pix_h < 1) pix_h = mw->h;
+  mw->surface = SkSurfaces::Raster(
+      SkImageInfo::Make(pix_w, pix_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+  if (!mw->surface) {
+    delete mw;
+    return NULL;
+  }
+
+  menu_draw(mw);
+  menu_present(mw);
+  SDL_ShowWindow(mw->sdlwin);
+  return mw;
+}
+
+static bool menu_open_child(MenuWindow *mw, int idx)
+{
+  if (!mw || idx < 0) return false;
+  SWELL_MenuItem *it = mw->menu->m_items.Get(idx);
+  if (!it || !(it->m_flags & MF_POPUP) || !it->m_submenu) return false;
+  if (it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR)) return false;
+
+  menu_close_child(mw);
+  SendMessage(mw->owner_hwnd, WM_INITMENUPOPUP, (WPARAM)it->m_submenu,
+              MAKELPARAM(idx, FALSE));
+  mw->child = menu_create_window(it->m_submenu, mw->sx + mw->w,
+                                 mw->sy + mw->item_y[idx],
+                                 mw->owner_hwnd, mw->flags, mw);
+  return mw->child != NULL;
+}
+
+static void menu_activate_item(MenuWindow *mw, int idx)
+{
+  if (!mw || idx < 0) return;
+  SWELL_MenuItem *it = mw->menu->m_items.Get(idx);
+  if (!it || (it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR))) return;
+
+  mw->hovered = idx;
+  menu_draw(mw);
+  menu_present(mw);
+
+  if ((it->m_flags & MF_POPUP) && it->m_submenu) {
+    menu_open_child(mw, idx);
+  } else {
+    menu_finish(mw, it->m_id);
+  }
+}
+
+static void menu_select_delta(MenuWindow *mw, int dir)
+{
+  if (!mw || mw->n_items <= 0) return;
+  int i = mw->hovered;
+  for (int step = 0; step < mw->n_items; step++) {
+    i += dir;
+    if (i < 0) i = mw->n_items - 1;
+    else if (i >= mw->n_items) i = 0;
+    SWELL_MenuItem *it = mw->menu->m_items.Get(i);
+    if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) {
+      if (i != mw->hovered) {
+        menu_close_child(mw);
+        mw->hovered = i;
+        menu_draw(mw);
+        menu_present(mw);
+      }
+      return;
+    }
+  }
+}
+
+static void menu_select_edge(MenuWindow *mw, int dir)
+{
+  if (!mw) return;
+  int i = dir > 0 ? 0 : mw->n_items - 1;
+  while (i >= 0 && i < mw->n_items) {
+    SWELL_MenuItem *it = mw->menu->m_items.Get(i);
+    if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) {
+      menu_close_child(mw);
+      mw->hovered = i;
+      menu_draw(mw);
+      menu_present(mw);
+      return;
+    }
+    i += dir;
+  }
+}
+
+bool swell_menu_sdl_handle_event(SDL_Event *evt)
+{
+  if (!evt || !g_active_menu) return false;
+
+  MenuWindow *root = g_active_menu;
+  switch (evt->type) {
+    case SDL_EVENT_QUIT:
+      menu_finish(root, 0);
+      return false;
+
+    case SDL_EVENT_KEY_DOWN: {
+      MenuWindow *mw = menu_leaf(root);
+      if (!mw) return false;
+      SDL_Keycode key = evt->key.key;
+      if (key == SDLK_ESCAPE) {
+        menu_finish(root, 0);
+      } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        menu_activate_item(mw, mw->hovered);
+      } else if (key == SDLK_DOWN) {
+        menu_select_delta(mw, 1);
+      } else if (key == SDLK_UP) {
+        menu_select_delta(mw, -1);
+      } else if (key == SDLK_HOME) {
+        menu_select_edge(mw, 1);
+      } else if (key == SDLK_END) {
+        menu_select_edge(mw, -1);
+      } else if (key == SDLK_RIGHT) {
+        if (mw->hovered >= 0) menu_open_child(mw, mw->hovered);
+      } else if (key == SDLK_LEFT) {
+        if (mw->parent) {
+          MenuWindow *parent = mw->parent;
+          parent->child = NULL;
+          delete mw;
+        }
+      }
+      return true;
+    }
+
+    case SDL_EVENT_MOUSE_MOTION: {
+      MenuWindow *mw = menu_find_by_window_id(root, evt->motion.windowID);
+      if (!mw) return false;
+      int newhov = -1;
+      menu_local_point_to_item(mw, evt->motion.x, evt->motion.y, &newhov);
+      if (newhov != mw->hovered) {
+        menu_close_child(mw);
+        mw->hovered = newhov;
+        menu_draw(mw);
+        menu_present(mw);
+      }
+      return true;
+    }
+
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+      MenuWindow *mw = menu_find_by_window_id(root, evt->button.windowID);
+      if (!mw) {
+        const bool same_menubar_item =
+            menu_outside_down_is_same_menubar_item(root, evt);
+        menu_finish(root, 0);
+        return same_menubar_item;
+      }
+      int idx = -1;
+      if (!menu_local_point_to_item(mw, evt->button.x, evt->button.y, &idx)) {
+        menu_finish(root, 0);
+        return false;
+      }
+      if (idx != mw->hovered) {
+        menu_close_child(mw);
+        mw->hovered = idx;
+        menu_draw(mw);
+        menu_present(mw);
+      }
+      return true;
+    }
+
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
+      if (root->ignore_initial_button_up) {
+        root->ignore_initial_button_up = false;
+        return true;
+      }
+
+      MenuWindow *mw = menu_find_by_window_id(root, evt->button.windowID);
+      if (!mw) {
+        menu_finish(root, 0);
+        return false;
+      }
+      int idx = -1;
+      if (!menu_local_point_to_item(mw, evt->button.x, evt->button.y, &idx)) {
+        menu_finish(root, 0);
+        return false;
+      }
+      menu_activate_item(mw, idx);
+      return true;
+    }
+
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE: {
+      MenuWindow *mw = menu_find_by_window_id(root, evt->window.windowID);
+      if (mw) {
+        mw->hovered = -1;
+        menu_draw(mw);
+        menu_present(mw);
+        return true;
+      }
+      return false;
+    }
+
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+    case SDL_EVENT_WINDOW_DESTROYED:
+      if (menu_find_by_window_id(root, evt->window.windowID)) {
+        menu_finish(root, 0);
+        return true;
+      }
+      return false;
+
+    default:
+      return false;
+  }
 }
 
 int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
                    int resvd, HWND hwnd, const RECT *r)
 {
   (void)resvd; (void)r;
-  if (!hMenu) return 0;
+  if (!hMenu || !hwnd) return 0;
 
   ReleaseCapture();
+  if (g_active_menu) menu_finish(g_active_menu, 0);
 
   // Send WM_INITMENUPOPUP before showing
   if (hwnd) SendMessage(hwnd, WM_INITMENUPOPUP, (WPARAM)hMenu,
                         MAKELPARAM(0, FALSE));
 
-  int cmd = run_menu_window(hMenu, xpos, ypos, hwnd, NULL, 0);
+  MenuWindow *root = menu_create_window(hMenu, xpos, ypos, hwnd, flags, NULL);
+  if (!root) return 0;
+  root->ignore_initial_button_up =
+      (g_swell_sdl_current_event_type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+  g_active_menu = root;
 
-  if (cmd && !(flags & TPM_RETURNCMD) && !(flags & TPM_NONOTIFY)) {
-    SendMessage(hwnd, WM_COMMAND, (WPARAM)cmd, 0);
+  if (!(flags & TPM_RETURNCMD)) {
+    return TRUE;
   }
-  return (flags & TPM_RETURNCMD) ? cmd : (cmd != 0);
+
+  root->sync_waiting = true;
+  while (!root->done) {
+    SWELL_RunEvents();
+    SWELL_MessageQueue_Flush();
+    if (!root->done) Sleep(1);
+  }
+
+  int cmd = root->result;
+  delete root;
+  return cmd;
 }
 
 #else  // headless stub for TrackPopupMenu

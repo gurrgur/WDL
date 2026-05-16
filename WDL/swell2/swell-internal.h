@@ -438,8 +438,8 @@ void swell_scaling_init(bool no_auto_hidpi); // auto-detect DPI via hidden SDL t
 // g_swell_ui_scale is the DPI scale * 256 (256=1.0x, 512=2.0x).
 // Physical = Logical * g_swell_ui_scale / 256
 // Logical  = Physical * 256 / g_swell_ui_scale
-inline int swell_phys_to_log(int phys) { return (phys * 256) / g_swell_ui_scale; }
-inline int swell_log_to_phys(int log)   { return (log * g_swell_ui_scale) / 256; }
+inline float swell_phys_to_log(float phys) { return (phys * 256.0) / g_swell_ui_scale; }
+inline float swell_log_to_phys(float log)   { return (log * g_swell_ui_scale) / 256.0; }
 
 inline void swell_phys_rect_to_log(const RECT *phys, RECT *log) {
   log->left = swell_phys_to_log(phys->left);
@@ -625,6 +625,10 @@ void swell_paint_menubar(HWND hwnd, HDC hdc);
 // swell-menu.cpp: hit-test menu bar; returns item index or -1.
 // item_screen_rect_out (if non-NULL) receives item rect in screen coords.
 int swell_menubar_hittest(HWND hwnd, int win_x, RECT *item_screen_rect_out);
+#ifdef SWELL_TARGET_SDL3
+extern int g_swell_sdl_current_event_type;
+bool swell_menu_sdl_handle_event(SDL_Event *evt);
+#endif
 
 // swell-wnd.cpp: invoke registered custom control creators
 HWND swell_invoke_control_creators(HWND parent, const char *cname, int idx,
