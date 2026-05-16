@@ -854,7 +854,9 @@ HWND GetFocus()
   while (w && w->m_focused_child) {
     w = (HWND)w->m_focused_child;
   }
-  if (w && w->m_visible) g_swell_focus = w;
+  while (w && !w->m_visible)
+    w = (HWND)w->m_parent;
+  g_swell_focus = w;
   return g_swell_focus;
 }
 
@@ -940,6 +942,7 @@ HWND SetParent(HWND hwnd, HWND newPar)
   hwnd->m_parent = newPar;
   if (newPar) {
     newPar->m_children.Add(hwnd);
+    hwnd->m_style |= WS_CHILD;
   } else {
     // add to global top-level list
     if (g_swell_top_level_list_end) {
@@ -951,6 +954,7 @@ HWND SetParent(HWND hwnd, HWND newPar)
     }
     g_swell_top_level_list_end = hwnd;
     hwnd->m_next = NULL;
+    hwnd->m_style &= ~WS_CHILD;
   }
 
   // Ensure OS window is created/destroyed based on new parent status

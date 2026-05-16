@@ -639,6 +639,7 @@ void GetTempPath(int sz, char *buf)
 // ============================================================================
 
 static bool g_clipboard_open = false;
+static char *g_clipboard_last_buf = NULL;
 
 bool OpenClipboard(HWND hwndDlg)
 {
@@ -654,6 +655,8 @@ void CloseClipboard()
 
 void EmptyClipboard()
 {
+  free(g_clipboard_last_buf);
+  g_clipboard_last_buf = NULL;
 #ifdef SWELL_TARGET_SDL3
   SDL_SetClipboardText("");
 #endif
@@ -664,14 +667,13 @@ HANDLE GetClipboardData(UINT type)
   if (type != CF_TEXT) return NULL;
 #ifdef SWELL_TARGET_SDL3
   if (!SDL_HasClipboardText()) return NULL;
+  free(g_clipboard_last_buf);
+  g_clipboard_last_buf = NULL;
   const char *txt = SDL_GetClipboardText();
   if (!txt) return NULL;
-  size_t len = strlen(txt);
-  char *buf = (char *)malloc(len + 1);
-  if (!buf) { SDL_free((void*)txt); return NULL; }
-  memcpy(buf, txt, len + 1);
+  g_clipboard_last_buf = strdup(txt);
   SDL_free((void*)txt);
-  return (HANDLE)buf;
+  return (HANDLE)g_clipboard_last_buf;
 #else
   return NULL;
 #endif
@@ -1037,9 +1039,26 @@ DWORD WaitForSingleObject(HANDLE hand, DWORD msTO)
     pid_t pid = (pid_t)(uintptr_t)hand;
     if (pid > 0 && kill(pid, 0) == 0) {
       int status;
-      pid_t r = waitpid(pid, &status, msTO == INFINITE ? 0 : WNOHANG);
+      pid_t r = waitpid(pid, &status, WNOHANG);
       if (r > 0) return WAIT_OBJECT_0;
-      if (r < 0) return (DWORD)WAIT_FAILED;
+      if (msTO == 0) return WAIT_TIMEOUT;
+      if (msTO == INFINITE) {
+        // Poll with WNOHANG — never call blocking waitpid so that
+        // SWELL_GetProcessExitCode can later reap the zombie.
+        while (true) {
+          usleep(10000);
+          r = waitpid(pid, &status, WNOHANG);
+          if (r > 0) return WAIT_OBJECT_0;
+          if (r < 0) return (DWORD)WAIT_FAILED;
+        }
+      }
+      DWORD start = GetTickCount();
+      while (GetTickCount() - start < msTO) {
+        usleep(10000);
+        r = waitpid(pid, &status, WNOHANG);
+        if (r > 0) return WAIT_OBJECT_0;
+        if (r < 0) return (DWORD)WAIT_FAILED;
+      }
       return WAIT_TIMEOUT;
     }
   }
@@ -1102,7 +1121,7 @@ int SWELL_GetProcessExitCode(HANDLE hand)
   int status;
   pid_t r = waitpid(pid, &status, WNOHANG);
   if (r == 0) return -1;  // still running
-  if (r < 0)  return -1;
+  if (r < 0) return -1;
   if (WIFEXITED(status)) return WEXITSTATUS(status);
   return -1;
 }
