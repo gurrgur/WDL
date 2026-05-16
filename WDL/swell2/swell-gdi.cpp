@@ -2083,6 +2083,16 @@ HFONT SWELL_GetDefaultFont()
 // Paint pipeline
 // ---------------------------------------------------------------------------
 
+static bool swell_child_needs_parent_underpaint(HWND child)
+{
+  if (!child) return false;
+  return child->m_wndproc == buttonWindowProc ||
+         child->m_wndproc == editWindowProc ||
+         child->m_wndproc == comboWindowProc ||
+         child->m_wndproc == trackbarWindowProc ||
+         child->m_wndproc == progressWindowProc;
+}
+
 void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     int bmout_xpos, int bmout_ypos, bool forceref)
 {
@@ -2151,6 +2161,7 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
       for (int i = 0; i < hwnd->m_children.GetSize(); i++) {
         HWND child = hwnd->m_children.Get(i);
         if (!child || !child->m_visible) continue;
+        if (swell_child_needs_parent_underpaint(child)) continue;
         RECT cr = child->m_position;
         canvas->clipRect(
           SkRect::MakeLTRB((float)cr.left, (float)cr.top,

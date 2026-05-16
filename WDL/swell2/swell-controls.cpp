@@ -367,7 +367,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HGDIOBJ oldbr  = SelectObject(hdc, frameBr);
         const int r = th.corner_radius;
         RoundRect(hdc, cr.left, cr.top + titlegap,
-                  cr.right - 1, cr.bottom - 1, r*2, r*2);
+                  cr.right, cr.bottom, r*2, r*2);
         SelectObject(hdc, oldpen); DeleteObject(pen);
         SelectObject(hdc, oldbr);  DeleteObject(frameBr);
 
@@ -397,9 +397,6 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       bool is_check = (bstyle == BS_AUTOCHECKBOX || bstyle == BS_AUTO3STATE ||
                        bstyle == BS_CHECKBOX || bstyle == BS_3STATE);
       bool is_radio = (bstyle == BS_AUTORADIOBUTTON || bstyle == BS_RADIOBUTTON);
-
-      // Background — parent dialog color so the control blends in.
-      fill_bg(hwnd, hdc, WM_CTLCOLORBTN, th.bg_window);
 
       COLORREF fgcol = enabled ? (COLORREF)th.fg_text
                                : (COLORREF)th.fg_text_disabled;
@@ -528,7 +525,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HGDIOBJ op = SelectObject(hdc, pen);
         HGDIOBJ ob = SelectObject(hdc, br);
         const int r = th.corner_radius;
-        RoundRect(hdc, cr.left, cr.top, cr.right - 1, cr.bottom - 1,
+        RoundRect(hdc, cr.left, cr.top, cr.right, cr.bottom,
                   r * 2, r * 2);
         SelectObject(hdc, op); DeleteObject(pen);
         SelectObject(hdc, ob); DeleteObject(br);
@@ -1254,9 +1251,6 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
       bool is_pass = (hwnd->m_style & ES_PASSWORD) != 0;
 
-      // Backfill outer area in window bg so rounded corners blend cleanly.
-      fill_bg(hwnd, hdc, WM_CTLCOLOREDIT, th.bg_window);
-
       // Rounded input field
       COLORREF fillcol = enabled ? (COLORREF)th.bg_input
                                  : (COLORREF)th.bg_input_alt;
@@ -1270,7 +1264,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HGDIOBJ op = SelectObject(hdc, pen);
       HGDIOBJ ob = SelectObject(hdc, br);
       const int r = th.corner_radius;
-      RoundRect(hdc, cr.left, cr.top, cr.right - 1, cr.bottom - 1, r*2, r*2);
+      RoundRect(hdc, cr.left, cr.top, cr.right, cr.bottom, r*2, r*2);
       SelectObject(hdc, op); DeleteObject(pen);
       SelectObject(hdc, ob); DeleteObject(br);
 
@@ -2649,7 +2643,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HPEN fp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.border_strong);
       HGDIOBJ ofp = SelectObject(hdc, fp);
       HGDIOBJ ofb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-      RoundRect(hdc, outer.left, outer.top, outer.right - 1, outer.bottom - 1,
+      RoundRect(hdc, outer.left, outer.top, outer.right, outer.bottom,
                 frame_r * 2, frame_r * 2);
       SelectObject(hdc, ofp); DeleteObject(fp);
       SelectObject(hdc, ofb);
@@ -3366,7 +3360,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HPEN fp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.border_strong);
       HGDIOBJ ofp = SelectObject(hdc, fp);
       HGDIOBJ ofb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-      RoundRect(hdc, outer.left, outer.top, outer.right - 1, outer.bottom - 1,
+      RoundRect(hdc, outer.left, outer.top, outer.right, outer.bottom,
                 frame_r * 2, frame_r * 2);
       SelectObject(hdc, ofp); DeleteObject(fp);
       SelectObject(hdc, ofb);
@@ -3687,9 +3681,6 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       bool focused = (GetFocus() == hwnd);
       int btnw = th.button_min_h;  // square dropdown affordance
 
-      // Backfill window bg so rounded corners blend.
-      fill_bg(hwnd, hdc, WM_CTLCOLOREDIT, th.bg_window);
-
       // Rounded card body
       COLORREF bordercol = focused ? (COLORREF)th.accent
                                    : (COLORREF)th.border_strong;
@@ -3699,7 +3690,7 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       HGDIOBJ op = SelectObject(hdc, pen);
       HGDIOBJ ob = SelectObject(hdc, br);
       const int r = th.corner_radius;
-      RoundRect(hdc, cr.left, cr.top, cr.right - 1, cr.bottom - 1, r*2, r*2);
+      RoundRect(hdc, cr.left, cr.top, cr.right, cr.bottom, r*2, r*2);
       SelectObject(hdc, op); DeleteObject(pen);
       SelectObject(hdc, ob); DeleteObject(br);
 
@@ -3996,7 +3987,7 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HPEN np = (HPEN)GetStockObject(NULL_PEN);
         HGDIOBJ op = SelectObject(hdc, np);
         HGDIOBJ ob = SelectObject(hdc, pageBr);
-        SWELL_DrawRoundRectEx(hdc, cr.left, by, cr.right - 1, cr.bottom - 1,
+        SWELL_DrawRoundRectEx(hdc, cr.left, by, cr.right, cr.bottom,
                               0, 0, r, r);
         SelectObject(hdc, op);
         SelectObject(hdc, ob); DeleteObject(pageBr);
@@ -4183,8 +4174,6 @@ LRESULT trackbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
 
-      fill_bg(hwnd, hdc, WM_CTLCOLORSTATIC, th.bg_window);
-
       int cy = (cr.top + cr.bottom) / 2;
 
       if (!p || p[2] <= p[1]) { EndPaint(hwnd, &ps); return 0; }
@@ -4301,9 +4290,6 @@ LRESULT progressWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       const swell_theme &th = g_swell_theme;
       RECT cr; GetClientRect(hwnd, &cr);
-
-      // Window backfill behind rounded track
-      fill_bg(hwnd, hdc, WM_CTLCOLORSTATIC, th.bg_window);
 
       const int r = (cr.bottom - cr.top) / 2;
 
