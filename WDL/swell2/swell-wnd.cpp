@@ -46,6 +46,7 @@ HWND__::HWND__(HWND__ *parent, int id, const RECT *r, const char *label,
     m_focused_child(NULL), m_menu(NULL), m_paintctx(NULL),
     m_hashaddestroy(0), m_oswindow(NULL), m_userdata(0),
     m_oswindow_private(0), m_oswindow_fullscreen(0),
+    m_style(0), m_exstyle(0),
     refcnt(1)
 {
   memset(m_extra, 0, sizeof(m_extra));
