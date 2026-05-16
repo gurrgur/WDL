@@ -1432,29 +1432,24 @@ static int swell_valid_utf8_sequence_len(const unsigned char *s, int avail)
   return 0;
 }
 
-static bool swell_text_has_8bit(const char *buf, int len)
-{
-  for (int i = 0; i < len; ++i)
-    if ((unsigned char)buf[i] >= 0x80) return true;
-  return false;
-}
-
 static const char *swell_text_for_skia(const char *buf, int len,
                                        WDL_FastString &tmp, int *out_len)
 {
-  if (!swell_text_has_8bit(buf, len)) {
-    *out_len = len;
-    return buf;
-  }
-
+  // Single-pass: check for 8-bit chars AND validate UTF-8
+  bool has_8bit = false;
   bool needs_conversion = false;
   for (int i = 0; i < len;) {
+    unsigned char c = (unsigned char)buf[i];
+    if (c >= 0x80) has_8bit = true;
+
     int n = swell_valid_utf8_sequence_len((const unsigned char *)buf + i, len - i);
     if (n <= 0) {
       needs_conversion = true;
-      break;
+      if (has_8bit) break;
+      i++;
+    } else {
+      i += n;
     }
-    i += n;
   }
 
   if (!needs_conversion) {

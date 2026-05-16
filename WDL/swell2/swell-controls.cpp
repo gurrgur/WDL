@@ -1262,6 +1262,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (multiline)
       {
         int scrWidth = tr.right - tr.left;
+        if (scrWidth < 1) scrWidth = 1;
 
         // Recompute cached display lines if text or width changed
         if (!st || st->ml_cached_text.GetLength() != tlen ||
