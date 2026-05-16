@@ -181,19 +181,22 @@ static void uncheck_radio_group(HWND hwnd)
 {
   HWND par = GetParent(hwnd);
   if (!par) return;
+  // Walk parent children (sibling order matches tab/Z-order for radio groups)
   int n = par->m_children.GetSize();
   int myIdx = -1;
   for (int i = 0; i < n; i++) {
     if (par->m_children.Get(i) == hwnd) { myIdx = i; break; }
   }
   if (myIdx < 0) return;
-  int grpStart = 0;
+  int grpStart = myIdx;
   for (int i = myIdx - 1; i >= 0; i--) {
-    if (par->m_children.Get(i)->m_style & WS_GROUP) { grpStart = i; break; }
+    if (par->m_children.Get(i)->m_style & WS_GROUP) break;
+    grpStart = i;
   }
-  int grpEnd = n;
+  int grpEnd = myIdx + 1;
   for (int i = myIdx + 1; i < n; i++) {
-    if (par->m_children.Get(i)->m_style & WS_GROUP) { grpEnd = i; break; }
+    if (par->m_children.Get(i)->m_style & WS_GROUP) break;
+    grpEnd = i + 1;
   }
   for (int i = grpStart; i < grpEnd; i++) {
     HWND sib = par->m_children.Get(i);
@@ -298,17 +301,24 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_KEYDOWN:
-      if ((wParam == VK_SPACE || wParam == VK_RETURN) && st) {
+      if (wParam == VK_SPACE && st) {
         DWORD style = hwnd->m_style & 0xFF;
         if (style == BS_AUTOCHECKBOX) {
           st->state = (st->state == BST_CHECKED) ? BST_UNCHECKED : BST_CHECKED;
+          InvalidateRect(hwnd, NULL, FALSE);
         } else if (style == BS_AUTO3STATE) {
           st->state = (st->state + 1) % 3;
+          InvalidateRect(hwnd, NULL, FALSE);
         } else if (style == BS_AUTORADIOBUTTON) {
           st->state = BST_CHECKED;
           uncheck_radio_group(hwnd);
           InvalidateRect(hwnd, NULL, FALSE);
+        } else {
+          return 0; // pushbutton / other — no key-toggle
         }
+        notify_parent(hwnd, BN_CLICKED);
+      } else if (wParam == VK_RETURN && (hwnd->m_style & 0xF) == 0 && st) {
+        // Enter on push buttons only (style & 0xF == 0 means pushbutton)
         notify_parent(hwnd, BN_CLICKED);
       }
       return 0;
@@ -834,9 +844,8 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case EM_GETSEL: {
       if (!st) { if (wParam) *(int *)wParam = 0; if (lParam) *(int *)lParam = 0; return 0; }
       if (st->sel1 < 0) {
-        // No active selection — Win32 returns -1 in both words
-        if (wParam) *(int *)wParam = st->cursor_pos;
-        if (lParam) *(int *)lParam = st->cursor_pos;
+        if (wParam) *(int *)wParam = -1;
+        if (lParam) *(int *)lParam = -1;
         return (LRESULT)-1;
       }
       int s1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
@@ -952,6 +961,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st) return 0;
       const char *t = hwnd->m_title.Get();
       int len = (int)strlen(t);
+      int nch = WDL_utf8_get_charlen(t);
       bool shift = (lParam & FSHIFT) != 0;
       bool ctrl  = (lParam & FCONTROL) != 0;
 
@@ -1018,7 +1028,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (hwnd->m_style & ES_READONLY) return 1;
         if (st->sel1 >= 0 && st->sel1 != st->sel2) {
           SendMessage(hwnd, EM_REPLACESEL, 0, (LPARAM)"");
-        } else if (st->cursor_pos < len) {
+        } else if (st->cursor_pos < nch) {
           st->sel1 = st->cursor_pos;
           st->sel2 = st->cursor_pos + 1;
           SendMessage(hwnd, EM_REPLACESEL, 0, (LPARAM)"");
@@ -1032,7 +1042,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 1;
       }
       if (wParam == VK_END) {
-        st->cursor_pos = len;
+        st->cursor_pos = nch;
         if (!shift) { st->sel1 = st->sel2 = -1; }
         InvalidateRect(hwnd, NULL, FALSE);
         return 1;
@@ -1044,28 +1054,35 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 1;
       }
       if (wParam == VK_RIGHT) {
-        if (st->cursor_pos < len) st->cursor_pos++;
+        if (st->cursor_pos < nch) st->cursor_pos++;
         if (!shift) { st->sel1 = st->sel2 = -1; }
         InvalidateRect(hwnd, NULL, FALSE);
         return 1;
       }
       if (hwnd->m_style & ES_MULTILINE) {
-        // build line-offset arrays
+        // build line-offset arrays (byte positions)
         WDL_TypedBuf<int> lineStarts, lineEnds;
         lineStarts.Add(0);
         for (int i = 0; i < len; i++) { if (t[i] == '\n') { lineEnds.Add(i); lineStarts.Add(i+1); } }
         lineEnds.Add(len);
+        // convert cursor position to byte offset for line-finding
+        int cursBpos = WDL_utf8_charpos_to_bytepos(t, st->cursor_pos);
         // find current logical line
         int curLine = 0;
         for (int li = 0; li < lineStarts.GetSize(); li++) {
-          if (st->cursor_pos >= lineStarts.Get()[li] && st->cursor_pos <= lineEnds.Get()[li]) { curLine = li; break; }
+          if (cursBpos >= lineStarts.Get()[li] && cursBpos <= lineEnds.Get()[li]) { curLine = li; break; }
         }
         if (wParam == VK_UP) {
           if (curLine > 0) {
-            int col = st->cursor_pos - lineStarts.Get()[curLine];
-            int prevLen = lineEnds.Get()[curLine-1] - lineStarts.Get()[curLine-1];
-            if (col > prevLen) col = prevLen;
-            st->cursor_pos = lineStarts.Get()[curLine-1] + col;
+            int colChars = WDL_utf8_bytepos_to_charpos(
+                t + lineStarts.Get()[curLine], cursBpos - lineStarts.Get()[curLine]);
+            int prevByteLen = lineEnds.Get()[curLine-1] - lineStarts.Get()[curLine-1];
+            int prevChars = WDL_utf8_bytepos_to_charpos(
+                t + lineStarts.Get()[curLine-1], prevByteLen);
+            if (colChars > prevChars) colChars = prevChars;
+            int newBpos = lineStarts.Get()[curLine-1] +
+                          WDL_utf8_charpos_to_bytepos(t + lineStarts.Get()[curLine-1], colChars);
+            st->cursor_pos = WDL_utf8_bytepos_to_charpos(t, newBpos);
             if (!shift) { st->sel1 = st->sel2 = -1; }
             InvalidateRect(hwnd, NULL, FALSE);
           }
@@ -1073,10 +1090,15 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         if (wParam == VK_DOWN) {
           if (curLine + 1 < lineStarts.GetSize()) {
-            int col = st->cursor_pos - lineStarts.Get()[curLine];
-            int nextLen = lineEnds.Get()[curLine+1] - lineStarts.Get()[curLine+1];
-            if (col > nextLen) col = nextLen;
-            st->cursor_pos = lineStarts.Get()[curLine+1] + col;
+            int colChars = WDL_utf8_bytepos_to_charpos(
+                t + lineStarts.Get()[curLine], cursBpos - lineStarts.Get()[curLine]);
+            int nextByteLen = lineEnds.Get()[curLine+1] - lineStarts.Get()[curLine+1];
+            int nextChars = WDL_utf8_bytepos_to_charpos(
+                t + lineStarts.Get()[curLine+1], nextByteLen);
+            if (colChars > nextChars) colChars = nextChars;
+            int newBpos = lineStarts.Get()[curLine+1] +
+                          WDL_utf8_charpos_to_bytepos(t + lineStarts.Get()[curLine+1], colChars);
+            st->cursor_pos = WDL_utf8_bytepos_to_charpos(t, newBpos);
             if (!shift) { st->sel1 = st->sel2 = -1; }
             InvalidateRect(hwnd, NULL, FALSE);
           }
@@ -3508,7 +3530,7 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int idx = (start + 1 + i) % n;
         const char *d = st->items.Get(idx)->desc;
         if (!d) continue;
-        bool match = (msg == CB_FINDSTRINGEXACT) ? !strcmp(d, s)
+        bool match = (msg == CB_FINDSTRINGEXACT) ? !strcasecmp(d, s)
                                                   : !strncasecmp(d, s, strlen(s));
         if (match) return idx;
       }
