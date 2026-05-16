@@ -957,8 +957,8 @@ HANDLE CreateEventAsSocket(void *SA, BOOL manualReset, BOOL initialSig,
 
 BOOL SetEvent(HANDLE evt)
 {
+  if (!evt || (uintptr_t)evt < 4096u) return FALSE;
   EventHandle *ev = (EventHandle *)evt;
-  if (!ev) return FALSE;
   if (ev->magic != SWELL_HANDLE_MAGIC_EVENT)
     return FALSE;
   if (ev->manual_reset) {
@@ -976,8 +976,9 @@ BOOL SetEvent(HANDLE evt)
 
 BOOL ResetEvent(HANDLE evt)
 {
+  if (!evt || (uintptr_t)evt < 4096u) return FALSE;
   EventHandle *ev = (EventHandle *)evt;
-  if (!ev || ev->magic != SWELL_HANDLE_MAGIC_EVENT) return FALSE;
+  if (ev->magic != SWELL_HANDLE_MAGIC_EVENT) return FALSE;
   char buf[256];
   while (read(ev->rd, buf, sizeof(buf)) > 0) {}
   return TRUE;
@@ -985,7 +986,7 @@ BOOL ResetEvent(HANDLE evt)
 
 DWORD WaitForSingleObject(HANDLE hand, DWORD msTO)
 {
-  if (!hand) return (DWORD)WAIT_FAILED;
+  if (!hand || (uintptr_t)hand < 4096u) return (DWORD)WAIT_FAILED;
 
   // Check known handle types by magic number first.
   const uint32_t magic = *(const uint32_t *)hand;
@@ -1073,8 +1074,11 @@ DWORD WaitForAnySocketObject(int numObjs, HANDLE *objs, DWORD msTO)
   FD_ZERO(&fds);
   int maxfd = 0;
   for (int i = 0; i < numObjs; i++) {
-    EventHandle *ev = (EventHandle *)objs[i];
-    if (!ev) continue;
+    HANDLE h = objs[i];
+    if (!h || (uintptr_t)h < 4096u) continue;
+    uint32_t magic = *(const uint32_t *)h;
+    if (magic != SWELL_HANDLE_MAGIC_EVENT) continue;
+    EventHandle *ev = (EventHandle *)h;
     FD_SET(ev->rd, &fds);
     if (ev->rd > maxfd) maxfd = ev->rd;
   }
@@ -1083,9 +1087,15 @@ DWORD WaitForAnySocketObject(int numObjs, HANDLE *objs, DWORD msTO)
                  msTO == INFINITE ? NULL : &tv);
   if (r <= 0) return (r == 0) ? (DWORD)WAIT_TIMEOUT : (DWORD)WAIT_FAILED;
   for (int i = 0; i < numObjs; i++) {
-    EventHandle *ev = (EventHandle *)objs[i];
-    if (ev && FD_ISSET(ev->rd, &fds)) {
-      char b; read(ev->rd, &b, 1);
+    HANDLE h = objs[i];
+    if (!h || (uintptr_t)h < 4096u) continue;
+    uint32_t magic = *(const uint32_t *)h;
+    if (magic != SWELL_HANDLE_MAGIC_EVENT) continue;
+    EventHandle *ev = (EventHandle *)h;
+    if (FD_ISSET(ev->rd, &fds)) {
+      if (!ev->manual_reset) {
+        char b; read(ev->rd, &b, 1);
+      }
       return WAIT_OBJECT_0 + i;
     }
   }
