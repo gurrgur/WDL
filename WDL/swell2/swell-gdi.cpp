@@ -12,6 +12,7 @@
 #undef Polygon
 
 #include <cstring>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -209,6 +210,8 @@ HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
   ctx->curpen = nullptr;
   ctx->curbrush = nullptr;
   ctx->curfont = nullptr;
+  ctx->cached_font_ptr = nullptr;
+  ctx->cached_fm_valid = false;
   ctx->cur_text_color_int = SK_ColorBLACK;
   ctx->curbkmode = TRANSPARENT;
   ctx->curbkcol = 0;
@@ -353,6 +356,8 @@ HDC GetDC(HWND hwnd)
   ctx->curpen = nullptr;
   ctx->curbrush = nullptr;
   ctx->curfont = hwnd->m_font;
+  ctx->cached_font_ptr = nullptr;
+  ctx->cached_fm_valid = false;
   ctx->cur_text_color_int = SK_ColorBLACK;
   ctx->curbkmode = TRANSPARENT;
   ctx->curbkcol = 0;
@@ -443,6 +448,8 @@ HDC GetWindowDC(HWND hwnd)
   ctx->curpen = nullptr;
   ctx->curbrush = nullptr;
   ctx->curfont = hwnd->m_font;
+  ctx->cached_font_ptr = nullptr;
+  ctx->cached_fm_valid = false;
   ctx->cur_text_color_int = SK_ColorBLACK;
   ctx->curbkmode = TRANSPARENT;
   ctx->curbkcol = 0;
@@ -621,6 +628,16 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
 
   SkBitmap *bm = new SkBitmap();
   bm->allocN32Pixels(w, h);
+
+  // Copy source pixel data from hbmColor if available
+  SkBitmap *srcBm = nullptr;
+  if (iconinfo->hbmColor && HGDIOBJ_VALID(iconinfo->hbmColor, TYPE_BITMAP))
+    srcBm = static_cast<SkBitmap *>(iconinfo->hbmColor->typedata);
+  if (srcBm && srcBm->getPixels()) {
+    SkCanvas canvas(*bm);
+    canvas.drawImage(srcBm->asImage(), 0, 0);
+  }
+
   obj->typedata = bm;
   obj->additional_refcnt = 0;
   return obj;
@@ -847,6 +864,46 @@ void Ellipse(HDC ctx, int l, int t, int r, int b)
                                        (float)r - hsw, (float)b - hsw);
     ctx->canvas->drawOval(ovalRect, strokePaint);
   }
+}
+
+void SWELL_DrawArc(HDC ctx, int l, int t, int r, int b,
+                   float start_deg, float sweep_deg)
+{
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
+  if (!pen_valid(ctx)) return;
+  swell_DirtyContext(ctx, l, t, r, b);
+
+  SkPaint strokePaint;
+  strokePaint.setStyle(SkPaint::kStroke_Style);
+  strokePaint.setColor(ctx->curpen->color);
+  strokePaint.setAlphaf(ctx->curpen->alpha);
+  float sw = ctx->curpen->wid > 0 ? (float)ctx->curpen->wid : 1.0f;
+  strokePaint.setStrokeWidth(sw);
+  strokePaint.setAntiAlias(true);
+
+  float hsw = sw * 0.5f;
+  SkRect oval = SkRect::MakeLTRB((float)l + hsw, (float)t + hsw,
+                                 (float)r - hsw, (float)b - hsw);
+  ctx->canvas->drawArc(oval, start_deg, sweep_deg, false, strokePaint);
+
+  const float pi = 3.14159265358979323846f;
+  float end_rad = (start_deg + sweep_deg) * pi / 180.0f;
+  ctx->lastpos_x = oval.centerX() + cosf(end_rad) * oval.width() * 0.5f;
+  ctx->lastpos_y = oval.centerY() + sinf(end_rad) * oval.height() * 0.5f;
+}
+
+void Arc(HDC ctx, int l, int t, int r, int b,
+         int xstart, int ystart, int xend, int yend)
+{
+  if (r <= l || b <= t) return;
+  const float cx = ((float)l + (float)r) * 0.5f;
+  const float cy = ((float)t + (float)b) * 0.5f;
+  const float pi = 3.14159265358979323846f;
+  float start = atan2f((float)ystart - cy, (float)xstart - cx) * 180.0f / pi;
+  float end = atan2f((float)yend - cy, (float)xend - cx) * 180.0f / pi;
+  float sweep = end - start;
+  while (sweep <= 0.0f) sweep += 360.0f;
+  SWELL_DrawArc(ctx, l, t, r, b, start, sweep);
 }
 
 void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
@@ -1364,9 +1421,21 @@ static int swell_valid_utf8_sequence_len(const unsigned char *s, int avail)
   return 0;
 }
 
+static bool swell_text_has_8bit(const char *buf, int len)
+{
+  for (int i = 0; i < len; ++i)
+    if ((unsigned char)buf[i] >= 0x80) return true;
+  return false;
+}
+
 static const char *swell_text_for_skia(const char *buf, int len,
                                        WDL_FastString &tmp, int *out_len)
 {
+  if (!swell_text_has_8bit(buf, len)) {
+    *out_len = len;
+    return buf;
+  }
+
   bool needs_conversion = false;
   for (int i = 0; i < len;) {
     int n = swell_valid_utf8_sequence_len((const unsigned char *)buf + i, len - i);
@@ -1404,6 +1473,7 @@ static const SkFont &swell_get_cached_skfont(HDC ctx)
     return ctx->cached_skfont;
 
   ctx->cached_font_ptr = ctx->curfont;
+  ctx->cached_fm_valid = false;
   SkFont &f = ctx->cached_skfont;
   float fontSize = 12.0f;
 
@@ -1529,33 +1599,62 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   const char *src = swell_text_for_skia(buf, len, utf8tmp, &len);
   if (len <= 0 || !src) return 0;
 
-  // Strip \r (CR) — no visible glyph, breaks line-splitting
-  for (int i = 0; i < len; i++)
-    if (src[i] != '\r') cleanbuf.Append(src + i, 1);
-  buf = cleanbuf.Get();
-  len = cleanbuf.GetLength();
-  if (len <= 0) return 0;
+  // Strip \r (CR) — no visible glyph, breaks line-splitting.
+  // Fast path: scan for \r first; skip allocation if none found.
+  bool hasCR = false;
+  for (int i = 0; i < len; ++i) {
+    if (src[i] == '\r') { hasCR = true; break; }
+  }
+  if (hasCR) {
+    for (int i = 0; i < len; i++)
+      if (src[i] != '\r') cleanbuf.Append(src + i, 1);
+    buf = cleanbuf.Get();
+    len = cleanbuf.GetLength();
+    if (len <= 0) return 0;
+  } else {
+    buf = src;
+  }
 
   // Win32 &-prefix handling: strip accelerators from display text.
   WDL_FastString prefixStripped;
   WDL_TypedBuf<int> prefixUnderlineAt;
   if (!(align & DT_NOPREFIX)) {
-    swell_handle_prefix(buf, len, prefixStripped, prefixUnderlineAt);
-    buf = prefixStripped.Get();
-    len = prefixStripped.GetLength();
-    if (len <= 0) return 0;
+    bool hasAmp = false;
+    for (int i = 0; i < len; ++i) {
+      if (buf[i] == '&') { hasAmp = true; break; }
+    }
+    if (hasAmp) {
+      swell_handle_prefix(buf, len, prefixStripped, prefixUnderlineAt);
+      buf = prefixStripped.Get();
+      len = prefixStripped.GetLength();
+      if (len <= 0) return 0;
+    }
   }
 
   // Build SkFont from selected font or default
   const SkFont &font = swell_get_cached_skfont(ctx);
 
-  SkFontMetrics fm;
-  font.getMetrics(&fm);
-  float ascent  = -fm.fAscent;
-  float descent = fm.fDescent;
-  float lineht  = ascent + descent;
-  int rowH = (int)(lineht + 0.5f);
-  if (rowH < 1) rowH = (int)(font.getSize() + 0.5f);
+  float ascent, descent, lineht;
+  int rowH;
+  if (ctx->cached_fm_valid) {
+    ascent  = ctx->cached_fm_ascent;
+    descent = ctx->cached_fm_descent;
+    lineht  = ctx->cached_fm_rowH;
+    rowH    = (int)(lineht + 0.5f);
+    if (rowH < 1) rowH = (int)(font.getSize() + 0.5f);
+  } else {
+    SkFontMetrics fm;
+    font.getMetrics(&fm);
+    ascent  = -fm.fAscent;
+    descent = fm.fDescent;
+    lineht  = ascent + descent;
+    rowH = (int)(lineht + 0.5f);
+    if (rowH < 1) rowH = (int)(font.getSize() + 0.5f);
+    ctx->cached_fm_ascent  = ascent;
+    ctx->cached_fm_descent = descent;
+    ctx->cached_fm_rowH    = lineht;
+    ctx->cached_fm_valid   = true;
+  }
 
   SkPaint underlinePaint;
   bool haveUnderlines = prefixUnderlineAt.GetSize() > 0;
@@ -1767,13 +1866,20 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
   const SkFont &font = swell_get_cached_skfont(ctx);
 
-  SkFontMetrics metrics;
-  font.getMetrics(&metrics);
+  if (!ctx->cached_fm_valid) {
+    SkFontMetrics metrics;
+    font.getMetrics(&metrics);
+    ctx->cached_fm_ascent  = -metrics.fAscent;
+    ctx->cached_fm_descent = metrics.fDescent;
+    ctx->cached_fm_rowH    = ctx->cached_fm_ascent + ctx->cached_fm_descent;
+    ctx->cached_fm_leading = metrics.fLeading;
+    ctx->cached_fm_valid   = true;
+  }
 
-  tm->tmAscent = (int)(-metrics.fAscent + 0.5f);
-  tm->tmDescent = (int)(metrics.fDescent + 0.5f);
+  tm->tmAscent = (int)(ctx->cached_fm_ascent + 0.5f);
+  tm->tmDescent = (int)(ctx->cached_fm_descent + 0.5f);
   tm->tmHeight = tm->tmAscent + tm->tmDescent;
-  tm->tmInternalLeading = (int)(metrics.fLeading + 0.5f);
+  tm->tmInternalLeading = (int)(ctx->cached_fm_leading + 0.5f);
   tm->tmAveCharWidth = (int)(font.getSize() * 0.5f + 0.5f);
 
   return TRUE;
@@ -1809,6 +1915,16 @@ void SWELL_SetClipRegion(HDC ctx, const RECT *r)
   ctx->canvas->clipRect(
     SkRect::MakeLTRB((float)r->left, (float)r->top,
                       (float)r->right, (float)r->bottom));
+}
+
+void SWELL_SetClipRoundRect(HDC ctx, int l, int t, int r, int b, int radius)
+{
+  if (!HDC_VALID(ctx) || !ctx->canvas) return;
+  if (r <= l || b <= t) return;
+  float rad = (float)(radius < 0 ? 0 : radius);
+  SkRect rect = SkRect::MakeLTRB((float)l, (float)t, (float)r, (float)b);
+  SkRRect rr = SkRRect::MakeRectXY(rect, rad, rad);
+  ctx->canvas->clipRRect(rr, SkClipOp::kIntersect, true);
 }
 
 void SWELL_PopClipRegion(HDC ctx)
@@ -1923,6 +2039,8 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     ctx_local.ctx.curpen = nullptr;
     ctx_local.ctx.curbrush = nullptr;
     ctx_local.ctx.curfont = nullptr;
+    ctx_local.ctx.cached_font_ptr = nullptr;
+    ctx_local.ctx.cached_fm_valid = false;
     ctx_local.ctx.cur_text_color_int = SK_ColorBLACK;
     ctx_local.ctx.curbkmode = TRANSPARENT;
     ctx_local.ctx.curbkcol = 0;
