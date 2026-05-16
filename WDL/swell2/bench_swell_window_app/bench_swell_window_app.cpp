@@ -344,8 +344,8 @@ static void bench_resize_window(WindowBenchState &s, int w, int h, uint64_t iter
 static void bench_control_layout(WindowBenchState &s, int w, int h, uint64_t iter)
 {
   uint32_t state = (uint32_t)iter * 313u + 29u;
-  HWND controls[] = {s.edit, s.combo, s.listbox, s.check, s.slider, s.progress, s.listview, s.treeview, s.tab, s.paint};
-  for (int i = 0; i < 10; ++i)
+  HWND controls[] = {s.edit, s.combo, s.listbox, s.check, s.slider, s.progress, s.listview, s.treeview, s.tab, s.paint, s.long_edit};
+  for (int i = 0; i < 11; ++i)
   {
     HWND hwnd = controls[i];
     if (!hwnd) continue;

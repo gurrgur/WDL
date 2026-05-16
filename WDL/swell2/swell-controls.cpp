@@ -1344,13 +1344,16 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
           }
 
-          // Rebuild char-to-display-line map
+          // Rebuild char-to-display-line map.
+          // Spaces at wrap points get skipped by pos++, creating gaps
+          // where ml_dline_ends[di] < ml_dline_starts[di+1].
+          // Map gap chars to the display line that ends before them.
           int nd = st->ml_dline_starts.GetSize();
           st->ml_char2dline.Resize(tlen + 1, false);
           if (nd > 0) {
             int di = 0;
             for (int ci = 0; ci <= tlen; ci++) {
-              while (di + 1 < nd && ci >= st->ml_dline_ends.Get()[di]) di++;
+              while (di + 1 < nd && ci >= st->ml_dline_starts.Get()[di + 1]) di++;
               st->ml_char2dline.Get()[ci] = di;
             }
           }
@@ -1408,6 +1411,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             int selLineStart = (di == dl0) ? bs1 : d0;
             int selLineEnd = (di == dl1) ? bs2 : d1;
             if (selLineStart >= selLineEnd) continue;
+            if (selLineStart < d0) selLineStart = d0;
             int ry = tr.top + di * rowH - scrollY;
 
             SkRect r1;
@@ -1436,8 +1440,10 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           int cdline = char2dline ? char2dline[bpos] : 0;
           if (cdline >= 0 && cdline < ndlines) {
             int d0 = st->ml_dline_starts.Get()[cdline];
+            int clen = bpos - d0;
+            if (clen < 0) clen = 0;
             SkRect cbr;
-            skfont.measureText(txt + d0, bpos - d0, SkTextEncoding::kUTF8, &cbr);
+            skfont.measureText(txt + d0, clen, SkTextEncoding::kUTF8, &cbr);
             int cx = tr.left + (int)(cbr.width() + 0.5f);
             int cy = tr.top + cdline * rowH - scrollY;
             if (cy >= tr.top && cy + rowH <= tr.bottom) {
