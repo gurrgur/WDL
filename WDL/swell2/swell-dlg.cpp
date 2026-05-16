@@ -587,8 +587,7 @@ void EndDialog(HWND hwnd, int result)
 
 void SWELL_CloseWindow(HWND hwnd)
 {
-  if (!hwnd) return;
-  SendMessage(hwnd, WM_CLOSE, 0, 0);
+  DestroyWindow(hwnd);
 }
 
 // ---------------------------------------------------------------------------
