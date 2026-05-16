@@ -3589,18 +3589,53 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_LBUTTONDOWN:
       if (!st) return 0;
       SetFocus(hwnd);
-      st->dropdown_armed = true;
-      SetCapture(hwnd);
-      InvalidateRect(hwnd, NULL, FALSE);
+      {
+        RECT cr; GetClientRect(hwnd, &cr);
+        int mx = GET_X_LPARAM(lParam);
+        int btnW = SWELL_UI_SCALE(16);
+        bool inButton = (mx >= cr.right - btnW);
+        // CBS_DROPDOWNLIST: whole control is clickable. Editable: only button area opens dropdown.
+        if ((hwnd->m_style & CBS_DROPDOWNLIST) || inButton) {
+          st->dropdown_armed = true;
+          SetCapture(hwnd);
+          InvalidateRect(hwnd, NULL, FALSE);
+        }
+      }
       return 0;
 
     case WM_LBUTTONUP:
-      if (st) {
-        const bool armed = st->dropdown_armed;
+      if (st && st->dropdown_armed) {
         st->dropdown_armed = false;
         if (GetCapture() == hwnd) ReleaseCapture();
         InvalidateRect(hwnd, NULL, FALSE);
-        if (armed) combo_show_dropdown(hwnd, st);
+        combo_show_dropdown(hwnd, st);
+      }
+      return 0;
+
+    case WM_MOUSEWHEEL:
+      if (st) {
+        int delta = (short)HIWORD(wParam);
+        int n = st->items.GetSize();
+        if (n > 0) {
+          if (delta > 0 && st->selidx > 0) st->selidx--;
+          else if (delta < 0 && st->selidx + 1 < n) st->selidx++;
+          __SWELL_ComboBoxInternalState_rec *rec = st->items.Get(st->selidx);
+          hwnd->m_title.Set(rec && rec->desc ? rec->desc : "");
+          InvalidateRect(hwnd, NULL, FALSE);
+          notify_parent(hwnd, CBN_SELCHANGE);
+        }
+      }
+      return 0;
+
+    case WM_CHAR:
+      // Only editable combos (not CBS_DROPDOWNLIST) accept typed text
+      if (st && (hwnd->m_style & 0x0F) != CBS_DROPDOWNLIST) {
+        // Editable combo: set title to typed character
+        char s[2] = { (char)wParam, 0 };
+        hwnd->m_title.Set(s);
+        st->selidx = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+        notify_parent(hwnd, CBN_EDITCHANGE);
       }
       return 0;
 
@@ -3733,7 +3768,11 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case TCM_SETCURSEL: {
       if (!st) return -1;
       int old = st->m_curtab;
-      st->m_curtab = (int)wParam;
+      int nt = (int)wParam;
+      int n = st->m_tabs.GetSize();
+      if (nt < 0) nt = 0;
+      if (nt >= n) nt = n - 1;
+      st->m_curtab = nt;
       InvalidateRect(hwnd, NULL, FALSE);
       // notify parent
       {
@@ -3927,11 +3966,12 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 LRESULT trackbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-  int *p = (int *)(void *)hwnd->m_private_data; // {pos, min, max}
+  // private data: {pos, min, max, drag_offs}
+  int *p = (int *)(void *)hwnd->m_private_data;
 
   switch (msg) {
     case WM_CREATE:
-      p = (int *)calloc(3, sizeof(int));
+      p = (int *)calloc(4, sizeof(int));
       p[0] = 0; p[1] = 0; p[2] = 10;
       hwnd->m_private_data = (INT_PTR)p;
       hwnd->m_wantfocus = true;
@@ -3960,9 +4000,16 @@ LRESULT trackbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int mx = GET_X_LPARAM(lParam);
       int range = p[2] - p[1];
       int tw = cr.right - cr.left;
-      if (tw > 0 && range > 0)
+      // Snapshot thumb position for drag offset
+      if (tw > 0 && range > 0) {
+        int oldp = p[0];
         p[0] = p[1] + (int)((float)mx / tw * range + 0.5f);
-      if (p[0] < p[1]) p[0] = p[1]; if (p[0] > p[2]) p[0] = p[2];
+        if (p[0] < p[1]) p[0] = p[1]; if (p[0] > p[2]) p[0] = p[2];
+        // Drag offset: thumb pixel position from click pixel position
+        float frac = (float)(p[0] - p[1]) / range;
+        int thumb_x = cr.left + (int)(frac * tw);
+        p[3] = mx - thumb_x;
+      }
       InvalidateRect(hwnd, NULL, FALSE);
       HWND par = GetParent(hwnd);
       if (par) SendMessage(par, WM_HSCROLL, MAKEWPARAM(SB_THUMBTRACK, (WORD)p[0]), (LPARAM)hwnd);
@@ -3972,7 +4019,7 @@ LRESULT trackbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEMOVE: {
       if (!p || GetCapture() != hwnd) return 0;
       RECT cr; GetClientRect(hwnd, &cr);
-      int mx = GET_X_LPARAM(lParam);
+      int mx = GET_X_LPARAM(lParam) - p[3]; // apply drag offset
       int range = p[2] - p[1];
       int tw = cr.right - cr.left;
       if (tw > 0 && range > 0)
@@ -3983,6 +4030,19 @@ LRESULT trackbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (par) SendMessage(par, WM_HSCROLL, MAKEWPARAM(SB_THUMBTRACK, (WORD)p[0]), (LPARAM)hwnd);
       return 0;
     }
+
+    case WM_LBUTTONDBLCLK:
+      if (p) {
+        // Snap to nearest tick position (use range as coarse snap)
+        p[3] = 0; // reset any pending drag offset
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
+
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
 
     case WM_LBUTTONUP:
       if (GetCapture() == hwnd) {
@@ -4127,6 +4187,10 @@ LRESULT progressWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_ERASEBKGND:
       return 1;
+
+    case WM_SIZE:
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
 
     case WM_PAINT: {
       PAINTSTRUCT ps;
