@@ -858,6 +858,17 @@ static bool swell_sdlShouldSendMouseMove(HWND hwnd, UINT msg,
   return true;
 }
 
+static float swell_sdlAbsf(float v)
+{
+  return v < 0.0f ? -v : v;
+}
+
+static float swell_sdlMinScrollDelta()
+{
+  float delta = swell_log_to_phys(1.0f);
+  return delta > 1.0f ? delta : 1.0f;
+}
+
 static void swell_sdlEventHandler(SDL_Event *evt)
 {
   switch (evt->type) {
@@ -1309,14 +1320,27 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       if (!target) break;
       swell_sdlResetLastMouseMove();
 
+      static HWND s_scroll_accum_target = NULL;
       static float s_scroll_accum_y = 0.0f;
       static float s_scroll_accum_x = 0.0f;
+      if (s_scroll_accum_target != target) {
+        s_scroll_accum_target = target;
+        s_scroll_accum_y = 0.0f;
+        s_scroll_accum_x = 0.0f;
+      }
       s_scroll_accum_y += wy * 120.0f;
       s_scroll_accum_x += wx * 120.0f;
-      int delta = (int)s_scroll_accum_y;
-      int hdelta = (int)s_scroll_accum_x;
-      s_scroll_accum_y -= (float)delta;
-      s_scroll_accum_x -= (float)hdelta;
+      const float min_scroll_delta = swell_sdlMinScrollDelta();
+      int delta = 0;
+      int hdelta = 0;
+      if (swell_sdlAbsf(s_scroll_accum_y) >= min_scroll_delta) {
+        delta = (int)s_scroll_accum_y;
+        s_scroll_accum_y -= (float)delta;
+      }
+      if (swell_sdlAbsf(s_scroll_accum_x) >= min_scroll_delta) {
+        hdelta = (int)s_scroll_accum_x;
+        s_scroll_accum_x -= (float)hdelta;
+      }
       if (delta != 0) {
         SendMessage(target, WM_MOUSEWHEEL,
                     MAKEWPARAM(0, (WORD)delta),
@@ -1397,18 +1421,68 @@ void SWELL_RunEvents()
 {
   SDL_Event evt;
   SDL_Event pending_motion;
+  SDL_Event pending_wheel;
   bool has_pending_motion = false;
+  bool has_pending_wheel = false;
+
+  auto flush_pending_motion = [&]() {
+    if (!has_pending_motion) return;
+    swell_sdlDispatchEvent(&pending_motion);
+    has_pending_motion = false;
+  };
+
+  auto flush_pending_wheel = [&]() {
+    if (!has_pending_wheel) return;
+    swell_sdlDispatchEvent(&pending_wheel);
+    has_pending_wheel = false;
+  };
 
   while (SDL_PollEvent(&evt)) {
     if (evt.type == SDL_EVENT_MOUSE_MOTION) {
+      flush_pending_wheel();
+      if (swell_sdl_has_dirty_window()) {
+        swell_sdlDispatchEvent(&evt);
+        return;
+      }
       pending_motion = evt;
       has_pending_motion = true;
       continue;
     }
 
+    if (evt.type == SDL_EVENT_MOUSE_WHEEL) {
+      flush_pending_motion();
+      if (swell_sdl_has_dirty_window()) {
+        swell_sdlDispatchEvent(&evt);
+        return;
+      }
+      if (has_pending_wheel &&
+          pending_wheel.wheel.windowID == evt.wheel.windowID) {
+        pending_wheel.wheel.x += evt.wheel.x;
+        pending_wheel.wheel.y += evt.wheel.y;
+        pending_wheel.wheel.mouse_x = evt.wheel.mouse_x;
+        pending_wheel.wheel.mouse_y = evt.wheel.mouse_y;
+        pending_wheel.wheel.timestamp = evt.wheel.timestamp;
+      } else {
+        flush_pending_wheel();
+        if (swell_sdl_has_dirty_window()) {
+          swell_sdlDispatchEvent(&evt);
+          return;
+        }
+        pending_wheel = evt;
+        has_pending_wheel = true;
+      }
+      continue;
+    }
+
     if (has_pending_motion) {
-      swell_sdlDispatchEvent(&pending_motion);
-      has_pending_motion = false;
+      flush_pending_motion();
+      if (swell_sdl_has_dirty_window()) {
+        swell_sdlDispatchEvent(&evt);
+        return;
+      }
+    }
+    if (has_pending_wheel) {
+      flush_pending_wheel();
       if (swell_sdl_has_dirty_window()) {
         swell_sdlDispatchEvent(&evt);
         return;
@@ -1419,8 +1493,9 @@ void SWELL_RunEvents()
     if (swell_sdl_has_dirty_window()) return;
   }
 
-  if (has_pending_motion)
-    swell_sdlDispatchEvent(&pending_motion);
+  flush_pending_motion();
+  if (swell_sdl_has_dirty_window()) return;
+  flush_pending_wheel();
 }
 
 // ---------------------------------------------------------------------------
