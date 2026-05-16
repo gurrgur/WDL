@@ -522,21 +522,22 @@ static sk_sp<SkTypeface> menu_get_typeface()
 // Menu layout constants (base, scaled at runtime by DPI)
 // ---------------------------------------------------------------------------
 
-// Metrics are now sourced from the global theme (already in physical pixels).
-static inline int menu_item_h()  { return g_swell_theme.menu_item_height; }
-static inline int menu_sep_h()   { return g_swell_theme.menu_separator_height; }
-static inline int menu_lpad()    { return g_swell_theme.padding_menu_item_h * 2 + g_swell_theme.checkbox_size; }
-static inline int menu_rpad()    { return g_swell_theme.padding_menu_item_h + g_swell_theme.checkbox_size; }
-static inline int menu_vpad()    { return g_swell_theme.padding_menu_item_v; }
-static inline int menu_min_w()   { return SWELL_UI_SCALE(160); }
-static inline int menu_font_sz() { return g_swell_theme.default_font_size; }
-static inline int menu_corner_r(){ return g_swell_theme.corner_radius_large; }
-
 static inline int menu_scaled_px(int px)
 {
   int v = SWELL_UI_SCALE(px);
   return v > 0 ? v : 1;
 }
+
+// Metrics are now sourced from the global theme (already in physical pixels).
+static inline int menu_item_h()  { return g_swell_theme.menu_item_height; }
+static inline int menu_sep_h()   { return g_swell_theme.menu_separator_height; }
+static inline int menu_lpad()    { return g_swell_theme.padding_menu_item_h * 2 + g_swell_theme.checkbox_size; }
+static inline int menu_rpad()    { return g_swell_theme.padding_menu_item_h + g_swell_theme.checkbox_size; }
+static inline int menu_vpad()    { return menu_scaled_px(4); }
+static inline int menu_min_w()   { return SWELL_UI_SCALE(160); }
+static inline int menu_font_sz() { return g_swell_theme.default_font_size; }
+static inline int menu_corner_r(){ return g_swell_theme.corner_radius_large; }
+static inline int menu_outer_pad(){ return menu_scaled_px(4); }
 
 // Convert native SWELL RGB color to SkColor (premul alpha)
 static SkColor swell_to_sk(int c, uint8_t a = 255)
@@ -739,7 +740,7 @@ static void menu_draw(MenuWindow *mw)
   c->save();
   c->clipRRect(outer, true);
 
-  const int item_pad = th.padding_menu_item_h / 2;
+  const int item_pad = menu_outer_pad();
 
   for (int i = 0; i < mw->n_items; i++) {
     SWELL_MenuItem *it = mw->menu->m_items.Get(i);
@@ -848,14 +849,18 @@ static void menu_draw(MenuWindow *mw)
       SkPaint ap;
       ap.setAntiAlias(true);
       ap.setColor(textCol);
-      ap.setStyle(SkPaint::kFill_Style);
-      float ax = (float)(mw->w - item_pad - 6);
+      ap.setStyle(SkPaint::kStroke_Style);
+      ap.setStrokeCap(SkPaint::kRound_Cap);
+      ap.setStrokeJoin(SkPaint::kRound_Join);
+      ap.setStrokeWidth((float)menu_scaled_px(2));
+      float ax = (float)(mw->w - item_pad - menu_scaled_px(10));
       float ay = (float)(iy + ih / 2);
+      float hw = (float)menu_scaled_px(3);
+      float hh = (float)menu_scaled_px(4);
       SkPath arrow;
-      arrow.moveTo(ax,       ay - 4.0f);
-      arrow.lineTo(ax + 5.0f, ay);
-      arrow.lineTo(ax,       ay + 4.0f);
-      arrow.close();
+      arrow.moveTo(ax - hw * 0.5f, ay - hh);
+      arrow.lineTo(ax + hw * 0.5f, ay);
+      arrow.lineTo(ax - hw * 0.5f, ay + hh);
       c->drawPath(arrow, ap);
     }
   }
