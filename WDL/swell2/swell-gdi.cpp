@@ -1591,13 +1591,18 @@ static const SkFont &swell_get_cached_skfont(HDC ctx)
   ctx->cached_font_ptr = ctx->curfont;
   ctx->cached_fm_valid = false;
   SkFont &f = ctx->cached_skfont;
-  float fontSize = 12.0f;
+  // Fallback for HDCs with no font selected: use the DPI-scaled theme default
+  // (swell_theme_rescale multiplies default_font_size by g_swell_ui_scale).
+  // Hardcoding 12 here would render text at 12 physical px regardless of
+  // scale — tooltips / drag readouts on HiDPI come out tiny.
+  const float defaultSize = (float)g_swell_theme.default_font_size;
+  float fontSize = defaultSize > 0.0f ? defaultSize : 12.0f;
 
   if (ctx->curfont && HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
     LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
     if (lf) {
       fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
-      if (fontSize < 1.0f) fontSize = 12.0f;
+      if (fontSize < 1.0f) fontSize = defaultSize > 0.0f ? defaultSize : 12.0f;
       int fontWeight = lf->lfWeight > 0 ? lf->lfWeight : FW_NORMAL;
       bool fontItalic = lf->lfItalic != 0;
       if (lf->lfFaceName[0]) {
