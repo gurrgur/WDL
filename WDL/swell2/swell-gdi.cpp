@@ -597,7 +597,11 @@ HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
   obj->type = TYPE_BITMAP;
 
   SkBitmap *bm = new SkBitmap();
-  bm->allocN32Pixels(width, height);
+  if (!bm->allocN32Pixels(width, height)) {
+    delete bm;
+    GDP_OBJECT_DELETE(obj);
+    return nullptr;
+  }
   if (bits && bitsperpixel == 32) {
     memcpy(bm->getPixels(), bits, width * height * 4);
   }
@@ -631,7 +635,11 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
   if (h <= 0) h = 32;
 
   SkBitmap *bm = new SkBitmap();
-  bm->allocN32Pixels(w, h);
+  if (!bm->allocN32Pixels(w, h)) {
+    delete bm;
+    GDP_OBJECT_DELETE(obj);
+    return nullptr;
+  }
 
   // Copy source pixel data from hbmColor if available
   SkBitmap *srcBm = nullptr;
