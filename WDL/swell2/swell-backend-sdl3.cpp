@@ -8,6 +8,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
+#include <dlfcn.h>
+
+#if __has_include(<X11/Xlib.h>) && __has_include(<X11/Xutil.h>)
+#define SWELL_SDL3_HAVE_X11_HEADERS 1
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#endif
 
 #ifdef SWELL_TARGET_SDL3
 
@@ -28,6 +36,183 @@ struct SDL_WindowEntry {
 static SDL_WindowEntry *g_sdl_windows = NULL;
 static SDL_Surface *s_program_icon_surface = NULL;
 int g_swell_sdl_current_event_type = 0;
+
+static bool swell_sdl_has_desktop_suffix(const char *name)
+{
+  if (!name) return false;
+  const size_t len = strlen(name);
+  return len > 8 && !strcmp(name + len - 8, ".desktop");
+}
+
+static bool swell_sdl_desktop_file_matches_wmclass(const char *path,
+                                                   const char *wmclass)
+{
+  FILE *fp = fopen(path, "r");
+  if (!fp) return false;
+
+  bool found = false;
+  char line[1024];
+  while (fgets(line, sizeof(line), fp)) {
+    static const char key[] = "StartupWMClass=";
+    if (strncmp(line, key, sizeof(key) - 1)) continue;
+
+    char *value = line + sizeof(key) - 1;
+    value[strcspn(value, "\r\n")] = 0;
+    found = !strcmp(value, wmclass);
+    break;
+  }
+
+  fclose(fp);
+  return found;
+}
+
+static bool swell_sdl_scan_desktop_dir_for_wmclass(const char *dir,
+                                                   const char *wmclass,
+                                                   char *out, size_t outsz)
+{
+  if (!dir || !*dir || !wmclass || !*wmclass || !out || outsz < 2)
+    return false;
+
+  DIR *dp = opendir(dir);
+  if (!dp) return false;
+
+  bool found = false;
+  struct dirent *de;
+  while (!found && (de = readdir(dp))) {
+    const char *name = de->d_name;
+    if (!swell_sdl_has_desktop_suffix(name)) continue;
+
+    char path[2048];
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (!swell_sdl_desktop_file_matches_wmclass(path, wmclass)) continue;
+
+    const size_t len = strlen(name) - 8;
+    const size_t cplen = len < outsz - 1 ? len : outsz - 1;
+    memcpy(out, name, cplen);
+    out[cplen] = 0;
+    found = true;
+  }
+
+  closedir(dp);
+  return found;
+}
+
+static bool swell_sdl_scan_xdg_data_dirs(const char *dirs,
+                                         const char *wmclass,
+                                         char *out, size_t outsz)
+{
+  if (!dirs || !*dirs) return false;
+
+  const char *p = dirs;
+  while (*p) {
+    const char *end = strchr(p, ':');
+    const size_t len = end ? (size_t)(end - p) : strlen(p);
+    if (len > 0) {
+      char dir[2048];
+      snprintf(dir, sizeof(dir), "%.*s/applications", (int)len, p);
+      if (swell_sdl_scan_desktop_dir_for_wmclass(dir, wmclass, out, outsz))
+        return true;
+    }
+    if (!end) break;
+    p = end + 1;
+  }
+  return false;
+}
+
+static bool swell_sdl_find_desktop_id_for_wmclass(const char *wmclass,
+                                                  char *out, size_t outsz)
+{
+  const char *xdg_home = getenv("XDG_DATA_HOME");
+  char dir[2048];
+  if (xdg_home && *xdg_home) {
+    snprintf(dir, sizeof(dir), "%s/applications", xdg_home);
+  } else {
+    const char *home = getenv("HOME");
+    if (home && *home)
+      snprintf(dir, sizeof(dir), "%s/.local/share/applications", home);
+    else
+      dir[0] = 0;
+  }
+  if (dir[0] && swell_sdl_scan_desktop_dir_for_wmclass(dir, wmclass, out, outsz))
+    return true;
+
+  const char *xdg_dirs = getenv("XDG_DATA_DIRS");
+  if (!xdg_dirs || !*xdg_dirs)
+    xdg_dirs = "/usr/local/share:/usr/share";
+  return swell_sdl_scan_xdg_data_dirs(xdg_dirs, wmclass, out, outsz);
+}
+
+static const char *swell_sdl_resolve_app_id()
+{
+  const char *env_id = getenv("SWELL_APP_ID");
+  if (env_id && *env_id) return env_id;
+  if (g_swell_appid && *g_swell_appid) return g_swell_appid;
+  if (!g_swell_appname || !*g_swell_appname) return NULL;
+
+  static char s_cached_wmclass[256];
+  static char s_cached_appid[256];
+  if (strcmp(s_cached_wmclass, g_swell_appname)) {
+    lstrcpyn_safe(s_cached_wmclass, g_swell_appname, sizeof(s_cached_wmclass));
+    s_cached_appid[0] = 0;
+    swell_sdl_find_desktop_id_for_wmclass(g_swell_appname,
+                                          s_cached_appid,
+                                          sizeof(s_cached_appid));
+  }
+
+  return s_cached_appid[0] ? s_cached_appid : g_swell_appname;
+}
+
+static void swell_sdl_apply_app_metadata()
+{
+  const char *appname = (g_swell_appname && *g_swell_appname) ?
+      g_swell_appname : NULL;
+  const char *appid = swell_sdl_resolve_app_id();
+
+  if (appname)
+    SDL_SetHintWithPriority(SDL_HINT_APP_NAME, appname, SDL_HINT_DEFAULT);
+  if (appid)
+    SDL_SetHintWithPriority(SDL_HINT_APP_ID, appid, SDL_HINT_DEFAULT);
+  if (appname || appid)
+    SDL_SetAppMetadata(appname ? appname : appid, NULL, appid);
+}
+
+#ifdef SWELL_SDL3_HAVE_X11_HEADERS
+static void swell_sdl_set_x11_class(SDL_Window *window)
+{
+  if (!window || !g_swell_appname || !*g_swell_appname) return;
+
+  SDL_PropertiesID props = SDL_GetWindowProperties(window);
+  Display *display = (Display *)SDL_GetPointerProperty(
+      props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+  const Window xid = (Window)SDL_GetNumberProperty(
+      props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+  if (!display || !xid) return;
+
+  typedef int (*XSetClassHintFunc)(Display *, Window, XClassHint *);
+  typedef int (*XFlushFunc)(Display *);
+  static void *s_x11;
+  static XSetClassHintFunc s_set_class_hint;
+  static XFlushFunc s_flush;
+  static bool s_checked;
+  if (!s_checked) {
+    s_checked = true;
+    s_x11 = dlopen("libX11.so.6", RTLD_LAZY | RTLD_LOCAL);
+    if (s_x11) {
+      s_set_class_hint = (XSetClassHintFunc)dlsym(s_x11, "XSetClassHint");
+      s_flush = (XFlushFunc)dlsym(s_x11, "XFlush");
+    }
+  }
+  if (!s_set_class_hint) return;
+
+  XClassHint class_hint;
+  class_hint.res_name = (char *)g_swell_appname;
+  class_hint.res_class = (char *)g_swell_appname;
+  s_set_class_hint(display, xid, &class_hint);
+  if (s_flush) s_flush(display);
+}
+#else
+static void swell_sdl_set_x11_class(SDL_Window *) {}
+#endif
 
 static SDL_WindowEntry *find_entry_by_window(SDL_Window *w)
 {
@@ -98,6 +283,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   }
 
   if (!wantOS || haveOS) return;
+
+  swell_sdl_apply_app_metadata();
 
   RECT pr = hwnd->m_position;
   int pw = pr.right - pr.left;
@@ -184,6 +371,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   if (!(is_popup && parent_sdlwin)) {
     SDL_SetWindowPosition(sdlwin, lx, ly);
   }
+
+  swell_sdl_set_x11_class(sdlwin);
 
   SDL_ShowWindow(sdlwin);
 
@@ -1243,6 +1432,7 @@ void SWELL_initargs(int *argc, char ***argv)
 {
   (void)argc;
   (void)argv;
+  swell_sdl_apply_app_metadata();
   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
   if (!SDL_WasInit(SDL_INIT_VIDEO) && !SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "SWELL SDL3: SDL_Init failed: %s\n", SDL_GetError());

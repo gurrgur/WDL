@@ -680,7 +680,8 @@ extern void (*SWELL_DDrop_onDragOver)(HWND, int, int);
 extern void (*SWELL_DDrop_onDragEnter)(void *, HWND, int, int);
 extern const char *(*SWELL_DDrop_getDroppedFileTargetPath)(const char *);
 
-// swell-misc.cpp: application name (set via SWELL_ExtendedAPI "APPNAME")
+// swell-misc.cpp: application metadata (set via SWELL_ExtendedAPI)
 extern const char *g_swell_appname;
+extern const char *g_swell_appid;
 
 #endif // _SWELL_INTERNAL_H_
