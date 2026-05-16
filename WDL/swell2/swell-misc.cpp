@@ -457,7 +457,7 @@ static void append_zenity_filters(char *cmd, int cmdsz, int *pos,
     // format: --file-filter="desc | *.ext *.ext2"
     int n = snprintf(cmd + *pos, cmdsz - *pos,
                      " --file-filter=\"%s | %s\"", desc, pat);
-    if (n > 0) *pos += n;
+    if (n > 0) { *pos += n; if (*pos >= cmdsz) *pos = cmdsz - 1; }
     p = pat + strlen(pat) + 1;
   }
 }
@@ -482,22 +482,50 @@ static char *zenity_run(const char *cmd)
   return tot > 0 ? strdup(buf) : NULL;
 }
 
+// Escape a user-provided string for safe use inside a double-quoted shell argument.
+// Replaces " $ ` \ with their backslash-escaped forms.
+static void shell_escape_arg(WDL_FastString &out, const char *s)
+{
+  if (!s) return;
+  while (*s) {
+    if (*s == '"' || *s == '$' || *s == '`' || *s == '\\')
+      out.Append("\\", 1);
+    out.Append(s, 1);
+    s++;
+  }
+}
+
 char *BrowseForFiles(const char *text, const char *initialdir,
                      const char *initialfile, bool allowmul,
                      const char *extlist)
 {
+  WDL_FastString esc_text, esc_file, esc_dir;
+  shell_escape_arg(esc_text, text);
+  shell_escape_arg(esc_file, initialfile);
+  shell_escape_arg(esc_dir, initialdir);
+
   char cmd[4096];
   int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection");
-  if (text && text[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", text);
-  if (initialfile && initialfile[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", initialfile);
-  else if (initialdir && initialdir[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", initialdir);
-  if (allowmul)
+  if (pos < 0 || pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
+  if (esc_text.GetLength()) {
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", esc_text.Get());
+    if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
+  }
+  if (esc_file.GetLength()) {
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", esc_file.Get());
+    if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
+  }
+  else if (esc_dir.GetLength()) {
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", esc_dir.Get());
+    if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
+  }
+  if (allowmul) {
     pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --multiple --separator=|");
+    if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
+  }
   append_zenity_filters(cmd, sizeof(cmd), &pos, extlist);
   pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
+  if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
 
   char *raw = zenity_run(cmd);
   if (!raw) return NULL;
@@ -521,14 +549,19 @@ bool BrowseForSaveFile(const char *text, const char *initialdir,
                        const char *initialfile, const char *extlist,
                        char *fn, int fnsize)
 {
+  WDL_FastString esc_text, esc_file, esc_dir;
+  shell_escape_arg(esc_text, text);
+  shell_escape_arg(esc_file, initialfile);
+  shell_escape_arg(esc_dir, initialdir);
+
   char cmd[4096];
   int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection --save --confirm-overwrite");
-  if (text && text[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", text);
-  if (initialfile && initialfile[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", initialfile);
-  else if (initialdir && initialdir[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", initialdir);
+  if (esc_text.GetLength())
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", esc_text.Get());
+  if (esc_file.GetLength())
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", esc_file.Get());
+  else if (esc_dir.GetLength())
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", esc_dir.Get());
   append_zenity_filters(cmd, sizeof(cmd), &pos, extlist);
   pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
 
@@ -542,12 +575,16 @@ bool BrowseForSaveFile(const char *text, const char *initialdir,
 bool BrowseForDirectory(const char *text, const char *initialdir,
                         char *fn, int fnsize)
 {
+  WDL_FastString esc_text, esc_dir;
+  shell_escape_arg(esc_text, text);
+  shell_escape_arg(esc_dir, initialdir);
+
   char cmd[4096];
   int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection --directory");
-  if (text && text[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", text);
-  if (initialdir && initialdir[0])
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", initialdir);
+  if (esc_text.GetLength())
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", esc_text.Get());
+  if (esc_dir.GetLength())
+    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", esc_dir.Get());
   pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
 
   char *raw = zenity_run(cmd);
@@ -880,8 +917,10 @@ BOOL CloseHandle(HANDLE hand)
     return TRUE;
   }
   if (magic == SWELL_HANDLE_MAGIC_THREAD) {
-    ((ThreadHandle *)hand)->magic = 0;
-    free(hand);
+    ThreadHandle *th = (ThreadHandle *)hand;
+    th->magic = 0;
+    pthread_join(th->tid, NULL);
+    free(th);
     return TRUE;
   }
   // Unknown handle type (fd, socket, etc.) — do not free
@@ -920,6 +959,14 @@ BOOL SetEvent(HANDLE evt)
   if (!ev) return FALSE;
   if (ev->magic != SWELL_HANDLE_MAGIC_EVENT)
     return FALSE;
+  if (ev->manual_reset) {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(ev->rd, &fds);
+    struct timeval tv = {0, 0};
+    if (select(ev->rd + 1, &fds, NULL, NULL, &tv) > 0)
+      return TRUE;  // already signaled
+  }
   char b = 1;
   write(ev->wr, &b, 1);
   return TRUE;
@@ -928,7 +975,7 @@ BOOL SetEvent(HANDLE evt)
 BOOL ResetEvent(HANDLE evt)
 {
   EventHandle *ev = (EventHandle *)evt;
-  if (!ev) return FALSE;
+  if (!ev || ev->magic != SWELL_HANDLE_MAGIC_EVENT) return FALSE;
   char buf[256];
   while (read(ev->rd, buf, sizeof(buf)) > 0) {}
   return TRUE;
@@ -938,21 +985,8 @@ DWORD WaitForSingleObject(HANDLE hand, DWORD msTO)
 {
   if (!hand) return (DWORD)WAIT_FAILED;
 
-  // PID handle: value is a small integer (pid_t), not a heap pointer.
-  // Check this first to avoid dereferencing unmapped memory.
-  if ((uintptr_t)hand < 0x100000) {
-    DWORD pid = (DWORD)(uintptr_t)hand;
-    if (pid > 0) {
-      int status;
-      pid_t r = waitpid((pid_t)pid, &status, msTO == INFINITE ? 0 : WNOHANG);
-      if (r > 0) return WAIT_OBJECT_0;
-      if (r < 0) return (DWORD)WAIT_FAILED;
-      return WAIT_TIMEOUT;
-    }
-    return (DWORD)WAIT_FAILED;
-  }
-
-  uint32_t magic = *(const uint32_t *)hand;
+  // Check known handle types by magic number first.
+  const uint32_t magic = *(const uint32_t *)hand;
 
   if (magic == SWELL_HANDLE_MAGIC_EVENT) {
     EventHandle *ev = (EventHandle *)hand;
@@ -974,11 +1008,10 @@ DWORD WaitForSingleObject(HANDLE hand, DWORD msTO)
     }
 
     char b;
-    if (read(ev->rd, &b, 1) <= 0) return (DWORD)WAIT_FAILED;
     if (ev->manual_reset) {
-      char buf[256];
-      while (read(ev->rd, buf, sizeof(buf)) > 0) {}
+      return WAIT_OBJECT_0;  // keep signal byte in pipe for other waiters
     }
+    if (read(ev->rd, &b, 1) <= 0) return (DWORD)WAIT_FAILED;
     return WAIT_OBJECT_0;
   }
 
@@ -994,6 +1027,20 @@ DWORD WaitForSingleObject(HANDLE hand, DWORD msTO)
       if (msTO == 0)
         return WAIT_TIMEOUT;
       usleep(1000);
+    }
+  }
+
+  // PID handle fallback: use kill(pid,0) to validate it's a real process.
+  // Linux pid_max defaults to 4,194,304; this avoids the old value-range
+  // heuristic that broke PID handles above 0x100000.
+  {
+    pid_t pid = (pid_t)(uintptr_t)hand;
+    if (pid > 0 && kill(pid, 0) == 0) {
+      int status;
+      pid_t r = waitpid(pid, &status, msTO == INFINITE ? 0 : WNOHANG);
+      if (r > 0) return WAIT_OBJECT_0;
+      if (r < 0) return (DWORD)WAIT_FAILED;
+      return WAIT_TIMEOUT;
     }
   }
 
@@ -1360,8 +1407,8 @@ void ImageList_Destroy(HIMAGELIST list)
 // Extended API / Misc
 // ============================================================================
 
-static const char *g_swell_appname    = NULL;
-static char       *g_swell_defini     = NULL;
+const char *g_swell_appname    = NULL;
+       char       *g_swell_defini     = NULL;
 static const char *g_swell_fontpangram = NULL;
 
 // Drag-drop callbacks (set by app via SWELL_ExtendedAPI)
