@@ -16,7 +16,7 @@
       "pipeTransport": {
         "pipeProgram": "/usr/bin/bwrap",
         "pipeArgs": [
-          "--ro-bind", "/", "/",
+          "--bind", "/", "/",
 
           "--bind", "${workspaceFolder}/WDL/swell2/build/libSwell.so", "/usr/lib/REAPER/libSwell.so",
 
@@ -24,12 +24,11 @@
           "--bind", "${env:HOME}/.cache", "${env:HOME}/.cache",
 
           "--tmpfs", "/tmp",
-          "--bind", "/tmp/.X11-unix", "/tmp/.X11-unix",
 
           "--dev", "/dev",
+          "--dev-bind-try", "/dev/dri", "/dev/dri",
           "--proc", "/proc",
-
-          "--setenv", "GDK_BACKEND", "x11",
+          "--cap-add", "CAP_SYS_PTRACE",
 
           "--"
         ],
@@ -41,31 +40,53 @@
       "stopAtEntry": false,
 
       "setupCommands": [
-        {
-          "text": "set pagination off",
-          "ignoreFailures": true
-        },
-        {
-          "text": "set breakpoint pending on",
-          "ignoreFailures": true
-        },
-        {
-          "text": "set solib-search-path ${workspaceFolder}/build",
-          "ignoreFailures": true
-        },
-        {
-          "text": "sharedlibrary libSwell",
-          "ignoreFailures": true
-        },
-        {
-          "text": "-enable-pretty-printing",
-          "ignoreFailures": true
-        }
-      ],
+  {
+    "text": "set pagination off",
+    "ignoreFailures": true
+  },
+  {
+    "text": "set breakpoint pending on",
+    "ignoreFailures": true
+  },
+  {
+    "text": "set print thread-events on",
+    "ignoreFailures": true
+  },
+  {
+    "text": "set auto-load safe-path /",
+    "ignoreFailures": true
+  },
+  {
+    "text": "set libthread-db-search-path /usr/lib:/lib:/lib64:/usr/lib64:/usr/lib/x86_64-linux-gnu",
+    "ignoreFailures": true
+  },
+  {
+    "text": "set solib-search-path ${workspaceFolder}/build",
+    "ignoreFailures": true
+  },
+  {
+    "text": "sharedlibrary libSwell",
+    "ignoreFailures": true
+  },
+  {
+    "text": "-enable-pretty-printing",
+    "ignoreFailures": true
+  }
+],
 
       "logging": {
         "engineLogging": true
-      }
+      },
+      "environment": [
+        {
+          "name": "SDL_VIDEO_DRIVER",
+          "value": "x11"
+        },
+        {
+          "name": "SDL_VIDEODRIVER",
+          "value": "x11"
+        }
+      ]
     }
   ]
 }

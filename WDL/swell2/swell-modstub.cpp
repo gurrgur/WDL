@@ -28,6 +28,11 @@
 #define SWELL_API_DEFINE(ret, func, parms) ret (*func) parms = nullptr;
 #include "swell-functions.h"
 
+// Resource heads — must be defined (not just extern) in each module
+// that uses SWELL_DEFINE_DIALOG_RESOURCE_BEGIN / SWELL_DEFINE_MENU_RESOURCE_BEGIN.
+SWELL_DialogResourceIndex *SWELL_curmodule_dialogresource_head = nullptr;
+SWELL_MenuResourceIndex *SWELL_curmodule_menuresource_head = nullptr;
+
 // SWELLAPI_GetFunc: host-provided lookup function pointer
 static void *(*s_getfunc)(const char *) = nullptr;
 
