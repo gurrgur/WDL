@@ -424,14 +424,7 @@ BOOL PostMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
   WDL_MutexLock lock(&g_pmq_mutex);
 
   if (g_pmq_count >= MAX_PMQ_SIZE) {
-    // drop oldest
-    PMQ_rec *old = g_pmq_head;
-    if (old) {
-      g_pmq_head = old->_next;
-      if (!g_pmq_head) g_pmq_tail = NULL;
-      delete old;
-      g_pmq_count--;
-    }
+    return FALSE;
   }
 
   PMQ_rec *rec = new PMQ_rec();
