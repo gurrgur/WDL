@@ -1460,6 +1460,14 @@ static sk_sp<SkTypeface> swell_get_typeface(const char *family, int weight, bool
   sk_sp<SkTypeface> tf = s_fontmgr->matchFamilyStyle(family, style);
   if (!tf) tf = s_fontmgr->legacyMakeTypeface(family, style);
 
+  // Reject placeholder typefaces with no glyph data. legacyMakeTypeface (and
+  // some matchFamilyStyle implementations) can return a non-null typeface
+  // that has zero glyphs / empty family name when the requested face is not
+  // available — using it makes measureText return 0 and DT_CALCRECT collapse
+  // tooltip / control widths to 0. Returning null here causes the caller to
+  // fall through to the swell default font (Arial).
+  if (tf && tf->countGlyphs() <= 0) tf.reset();
+
   if (tf) {
     std::lock_guard<std::mutex> lock(s_cache_mutex);
     s_cache[key] = tf;
@@ -1570,7 +1578,14 @@ const char *swell_text_for_skia(const char *buf, int len,
 // Helper: get or build and cache SkFont from HDC curfont
 static const SkFont &swell_get_cached_skfont(HDC ctx)
 {
-  if (ctx->cached_font_ptr == ctx->curfont && ctx->cached_skfont.getTypeface())
+  // Validate cached typeface has glyph data — SkFont default-constructs with
+  // SkTypeface::MakeEmpty() which is non-null but glyphless, and measureText
+  // on it returns 0. Without the countGlyphs check, an HDC with no font ever
+  // selected (curfont == cached_font_ptr == NULL) would short-circuit here
+  // and never get a real typeface assigned.
+  if (ctx->cached_font_ptr == ctx->curfont &&
+      ctx->cached_skfont.getTypeface() &&
+      ctx->cached_skfont.getTypeface()->countGlyphs() > 0)
     return ctx->cached_skfont;
 
   ctx->cached_font_ptr = ctx->curfont;
@@ -1597,20 +1612,25 @@ static const SkFont &swell_get_cached_skfont(HDC ctx)
       }
     }
   }
-  if (!f.getTypeface()) {
+  // SkFont default-constructs with a non-null but glyphless empty typeface
+  // singleton, so `!getTypeface()` alone is not enough — also require real
+  // glyphs. Otherwise HDCs with no curfont selected (or curfont with empty
+  // lfFaceName) keep the empty singleton and measureText returns 0.
+  if (!f.getTypeface() || f.getTypeface()->countGlyphs() <= 0) {
     f.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
   }
   f.setSize(fontSize);
   return f;
 }
 
-// Helper: measure text width in pixels using SkFont
+// Helper: measure text width in pixels using SkFont.
+// Returns advance (sum of glyph advances), not bbox — matches Win32
+// GetTextExtentPoint32 and is what callers want for layout (spaces, trailing
+// whitespace, zero-ink chars all contribute to advance but not bbox).
 static float swell_text_width(const SkFont &font, const char *buf, int len)
 {
   if (len <= 0 || !buf) return 0.0f;
-  SkRect bounds;
-  font.measureText(buf, len, SkTextEncoding::kUTF8, &bounds);
-  return bounds.width();
+  return font.measureText(buf, len, SkTextEncoding::kUTF8);
 }
 
 SkFont swell_make_skfont_from_hdc(HDC ctx)
@@ -1775,11 +1795,13 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   if (!wordbreak) {
     // ---- Single-line path (original behaviour) ----
 
-    // Measure text
+    // Measure text. Use advance (return value), not bbox.width() —
+    // bbox is visual ink extent and is 0 for whitespace-only or zero-ink
+    // glyphs, which would make DT_CALCRECT widths collapse.
     SkRect bounds;
-    font.measureText(buf, len, SkTextEncoding::kUTF8, &bounds);
+    float advance = font.measureText(buf, len, SkTextEncoding::kUTF8, &bounds);
 
-    int textW = (int)(bounds.width() + 0.5f);
+    int textW = (int)(advance + 0.5f);
     int textH = rowH;
 
     if (align & DT_CALCRECT) {

@@ -1794,7 +1794,30 @@ BOOL SWELL_IsStaticText(HWND hwnd)
 void SWELL_GetDesiredControlSize(HWND hwnd, RECT *r)
 {
   if (!hwnd || !r) return;
-  *r = hwnd->m_position;
+  if (!hwnd->m_classname) return;  // unknown class → leave r untouched
+
+  bool isbutton = !strcmp(hwnd->m_classname, "Button") &&
+                  !(hwnd->m_style & BS_GROUPBOX);
+  bool isstatic = !isbutton && !strcmp(hwnd->m_classname, "Static");
+
+  if (!isbutton && !isstatic) return;  // leave r alone
+
+  const int sf = hwnd->m_style & 0xf;
+  const bool ischk = isbutton && (sf == BS_AUTO3STATE ||
+                                  sf == BS_AUTOCHECKBOX ||
+                                  sf == BS_AUTORADIOBUTTON);
+  const int chksz = SWELL_UI_SCALE(12 + 6);
+
+  RECT r2 = {0, 0, 0, 0};
+  HDC hdc = GetDC(hwnd);
+  DrawText(hdc, hwnd->m_title.Get(), -1, &r2, DT_CALCRECT);
+  ReleaseDC(hwnd, hdc);
+
+  if (isbutton)
+    r->right = r->left + r2.right + SWELL_UI_SCALE(6) + (ischk ? chksz : 0);
+  else
+    r->right = r->left + r2.right + SWELL_UI_SCALE(4);
+  r->bottom = r->top + r2.bottom;
 }
 
 void SWELL_DisableContextMenu(HWND hwnd, bool disable)

@@ -113,24 +113,77 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   if (lw < 1) lw = 1;
   if (lh < 1) lh = 1;
 
-  SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
-  if (hwnd->m_style & WS_THICKFRAME)
-    flags |= SDL_WINDOW_RESIZABLE;
-  if (!(hwnd->m_style & WS_CAPTION))
-    flags |= SDL_WINDOW_BORDERLESS;
-  if (!wantFocus)
-    flags |= SDL_WINDOW_NOT_FOCUSABLE;
-  flags |= SDL_WINDOW_HIDDEN; // show after position is set
+  // Popup detection: match original swell's override_redirect logic.
+  // Borderless top-level window (no caption, no resize) = popup
+  // (tooltip, popup label, dropdown, context menu placeholder).
+  // Also WS_CHILD on a top-level = explicit popup flag.
+  const bool is_popup = !hwnd->m_parent &&
+      (!(hwnd->m_style & WS_CAPTION) || (hwnd->m_style & WS_CHILD));
 
-  SDL_Window *sdlwin = SDL_CreateWindow(
-      hwnd->m_title.Get(), lw, lh, flags);
+  SDL_Window *parent_sdlwin = NULL;
+  int rel_lx = lx, rel_ly = ly;
+  if (is_popup) {
+    HWND__ *osw = hwnd->m_owner;
+    while (osw && !osw->m_oswindow)
+      osw = osw->m_owner ? osw->m_owner : (HWND__ *)osw->m_parent;
+    // Tooltips in Win32 typically have no owner. Fall back to the focused
+    // top-level so we still get an xdg-popup parent (required on Wayland and
+    // needed for skip-taskbar / no-focus-steal behavior).
+    if (!osw || !osw->m_oswindow) {
+      extern HWND g_swell_focused_oswindow_hwnd;
+      if (g_swell_focused_oswindow_hwnd &&
+          g_swell_focused_oswindow_hwnd->m_oswindow)
+        osw = g_swell_focused_oswindow_hwnd;
+    }
+    parent_sdlwin = osw ? (SDL_Window *)osw->m_oswindow : NULL;
+    if (parent_sdlwin) {
+      int px = 0, py = 0;
+      SDL_GetWindowPosition(parent_sdlwin, &px, &py);
+      rel_lx = lx - px;
+      rel_ly = ly - py;
+    }
+  }
+
+  SDL_Window *sdlwin;
+  if (is_popup && parent_sdlwin) {
+    // Passive borderless popup (tooltip / dropdown label). Menus take their
+    // own path in swell-menu.cpp, so anything routed here is hover-only.
+    // SDL_WINDOW_TOOLTIP maps to xdg-popup without grab, no focus steal —
+    // matches original swell's focus_on_map=false + override_redirect.
+    sdlwin = SDL_CreatePopupWindow(parent_sdlwin, rel_lx, rel_ly, lw, lh,
+        SDL_WINDOW_TOOLTIP | SDL_WINDOW_NOT_FOCUSABLE |
+        SDL_WINDOW_HIGH_PIXEL_DENSITY);
+  } else if (is_popup) {
+    // Popup without any SDL parent → borderless regular window.
+    // UTILITY keeps it out of the taskbar; NOT_FOCUSABLE prevents focus steal.
+    SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY |
+        SDL_WINDOW_BORDERLESS | SDL_WINDOW_NOT_FOCUSABLE |
+        SDL_WINDOW_UTILITY | SDL_WINDOW_HIDDEN;
+    sdlwin = SDL_CreateWindow(hwnd->m_title.Get(), lw, lh, flags);
+  } else {
+    SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (hwnd->m_style & WS_THICKFRAME)
+      flags |= SDL_WINDOW_RESIZABLE;
+    if (!(hwnd->m_style & WS_CAPTION))
+      flags |= SDL_WINDOW_BORDERLESS;
+    if (!wantFocus)
+      flags |= SDL_WINDOW_NOT_FOCUSABLE;
+    flags |= SDL_WINDOW_HIDDEN;
+
+    sdlwin = SDL_CreateWindow(hwnd->m_title.Get(), lw, lh, flags);
+  }
 
   if (!sdlwin) {
     fprintf(stderr, "SWELL SDL3: SDL_CreateWindow failed: %s\n", SDL_GetError());
     return;
   }
 
-  SDL_SetWindowPosition(sdlwin, lx, ly);
+  // SDL_CreatePopupWindow positions at creation; everything else needs an
+  // explicit post-create position (including the popup fallback that took the
+  // regular SDL_CreateWindow path).
+  if (!(is_popup && parent_sdlwin)) {
+    SDL_SetWindowPosition(sdlwin, lx, ly);
+  }
 
   SDL_ShowWindow(sdlwin);
 
