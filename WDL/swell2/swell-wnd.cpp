@@ -331,7 +331,7 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 
     case WM_KEYDOWN: {
       if (!hwnd->m_parent) {
-        if (wParam == VK_ESCAPE) {
+        if (wParam == VK_ESCAPE && IsWindowEnabled(hwnd)) {
           if (SendMessage(hwnd, WM_CLOSE, 0, 0) == 0 &&
               hwnd->m_hashaddestroy < 2) {
             SendMessage(hwnd, WM_COMMAND, IDCANCEL, 0);
@@ -347,18 +347,28 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           }
           return 1;
         }
-        // Tab navigation
+        // Tab navigation: find next/prev focusable child
         if (wParam == VK_TAB && (lParam & ~FSHIFT) == FVIRTKEY) {
           bool back = (lParam & FSHIFT) != 0;
-          // find next/prev focusable child
-          HWND focus = GetFocus();
-          HWND start = back ? NULL : (hwnd->m_focused_child ? (HWND)hwnd->m_focused_child : NULL);
-          if (!start) start = hwnd;
-          // simplified: just move to next sibling
           int n = hwnd->m_children.GetSize();
+          int startIdx = 0;
+          HWND curFocus = GetFocus();
+          if (curFocus) {
+            // find current focused child in z-order
+            for (int i = 0; i < n; i++) {
+              if (hwnd->m_children.Get(i) == curFocus ||
+                  (curFocus->m_parent && hwnd->m_children.Get(i) == (HWND)curFocus->m_parent)) {
+                startIdx = i;
+                break;
+              }
+            }
+          }
+          if (back) startIdx = (startIdx > 0) ? startIdx - 1 : n - 1;
+          else startIdx = (startIdx + 1) % n;
           for (int i = 0; i < n; i++) {
-            HWND ch = hwnd->m_children.Get(i);
-            if (ch && ch->m_visible && ch->m_wantfocus) {
+            int idx = (startIdx + i) % n;
+            HWND ch = hwnd->m_children.Get(idx);
+            if (ch && ch->m_visible && ch->m_wantfocus && ch->m_enabled) {
               SetFocus(ch);
               break;
             }
@@ -737,6 +747,9 @@ void ShowWindow(HWND hwnd, int cmd)
       break;
   }
 
+  if (cmd == SW_SHOWMAXIMIZED)
+    swell_oswindow_maximize(hwnd);
+
   if (cmd == SW_HIDE && wasVisible) {
     if (hwnd->m_parent)
       InvalidateRect((HWND)hwnd->m_parent, &hwnd->m_position, FALSE);
@@ -785,14 +798,20 @@ bool IsWindowEnabled(HWND hwnd)
 
 bool IsWindowVisible(HWND hwnd)
 {
-  if (!hwnd) return false;
-  return hwnd->m_visible;
+  // Win32: window is visible only if itself AND all ancestors have WS_VISIBLE
+  for (HWND w = hwnd; w; w = w->m_parent)
+    if (!w->m_visible) return false;
+  return true;
 }
 
 bool IsWindow(HWND hwnd)
 {
-  // non-null pointer is enough for the headless backend
-  return hwnd != NULL;
+  if (!hwnd) return false;
+  HWND w = hwnd;
+  while (w->m_parent) w = w->m_parent;
+  for (HWND t = g_swell_top_level_list; t; t = t->m_next)
+    if (t == w) return true;
+  return false;
 }
 
 // ===========================================================================
@@ -849,7 +868,7 @@ void SetForegroundWindow(HWND hwnd)
 
 HWND GetForegroundWindow()
 {
-  return g_swell_foreground;
+  return GetFocus();
 }
 
 // ===========================================================================
@@ -1592,9 +1611,18 @@ void UpdateWindow(HWND hwnd)
 BOOL ScrollWindow(HWND hwnd, int xamt, int yamt,
                   const RECT *lpRect, const RECT *lpClipRect)
 {
-  if (!hwnd) return FALSE;
-  // for headless: invalidate and return
+  if (!hwnd || (!xamt && !yamt)) return FALSE;
+  (void)lpRect; (void)lpClipRect; // not yet supported per-rect scrolling
   InvalidateRect(hwnd, NULL, FALSE);
+  for (int i = 0; i < hwnd->m_children.GetSize(); i++) {
+    HWND c = hwnd->m_children.Get(i);
+    if (c) {
+      c->m_position.left   += xamt;
+      c->m_position.right  += xamt;
+      c->m_position.top    += yamt;
+      c->m_position.bottom += yamt;
+    }
+  }
   return TRUE;
 }
 
