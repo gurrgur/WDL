@@ -982,6 +982,11 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           break;
         }
 
+        // Screen coords for NC hit-test below (m_position is screen-absolute
+        // for top-level windows). Captured before mx/my get overwritten.
+        const int sx_screen = (int)mx + e->hwnd->m_position.left;
+        const int sy_screen = (int)my + e->hwnd->m_position.top;
+
         target = e->hwnd;
         HWND child = hittest_child(e->hwnd, &cx, &cy);
         if (child) {
@@ -989,6 +994,28 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         }
         mx = cx;
         my = cy;
+
+        // NC hit-test on the target child: if it claims the click belongs in
+        // a non-client area (e.g. a coolscroll-reserved scrollbar strip),
+        // route as WM_NC*BUTTON* with screen-coord lParam instead of client.
+        if (down && target && target != e->hwnd) {
+          LRESULT ht = SendMessage(target, WM_NCHITTEST, 0, MAKELPARAM(sx_screen, sy_screen));
+          if (ht != HTCLIENT && ht != HTNOWHERE && ht != 0) {
+            UINT ncmsg = 0;
+            if (btn == SDL_BUTTON_LEFT)
+              ncmsg = (clicks >= 2) ? WM_NCLBUTTONDBLCLK : WM_NCLBUTTONDOWN;
+            else if (btn == SDL_BUTTON_RIGHT)
+              ncmsg = (clicks >= 2) ? WM_NCRBUTTONDBLCLK : WM_NCRBUTTONDOWN;
+            else if (btn == SDL_BUTTON_MIDDLE)
+              ncmsg = (clicks >= 2) ? WM_NCMBUTTONDBLCLK : WM_NCMBUTTONDOWN;
+            if (ncmsg) {
+              if (IsWindowEnabled(target))
+                SendMessage(target, WM_MOUSEACTIVATE, 0, 0);
+              SendMessage(target, ncmsg, (WPARAM)ht, MAKELPARAM(sx_screen, sy_screen));
+              break;
+            }
+          }
+        }
 
         if (down && IsWindowEnabled(target))
           SendMessage(target, WM_MOUSEACTIVATE, 0, 0);
