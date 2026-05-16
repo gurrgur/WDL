@@ -116,8 +116,10 @@ HGDIOBJ__ *GDP_OBJECT_NEW()
 void GDP_OBJECT_DELETE(HGDIOBJ__ *obj)
 {
   if (!obj) return;
+  if (!HGDIOBJ_VALID(obj)) return;
   std::lock_guard<std::mutex> lock(g_gdiobj_pool_mutex);
   if (g_gdiobj_pool_count < SWELL_MAX_HGDIOBJ_POOL) {
+    memset(obj, 0, sizeof(HGDIOBJ__));
     obj->_infreelist = true;
     obj->_next = g_gdiobj_free_list;
     g_gdiobj_free_list = obj;
@@ -711,7 +713,7 @@ HGDIOBJ SelectObject(HDC ctx, HGDIOBJ pen)
     if (slot) {
       HGDIOBJ old = *slot;
       *slot = nullptr;
-      return old ? old : GDI_NULL_SENTINEL(sentinelType);
+      return HGDIOBJ_VALID(old, sentinelType) ? old : GDI_NULL_SENTINEL(sentinelType);
     }
     return nullptr;
   }
@@ -734,7 +736,7 @@ HGDIOBJ SelectObject(HDC ctx, HGDIOBJ pen)
 
   HGDIOBJ old = *slot;
   *slot = pen;
-  return old ? old : GDI_NULL_SENTINEL(t);
+  return HGDIOBJ_VALID(old, t) ? old : GDI_NULL_SENTINEL(t);
 }
 
 void DeleteObject(HGDIOBJ obj)
@@ -1342,6 +1344,7 @@ static sk_sp<SkTypeface> swell_get_typeface(const char *family, int weight, bool
 {
   static sk_sp<SkFontMgr> s_fontmgr;
   static std::unordered_map<std::string, sk_sp<SkTypeface>> s_cache;
+  static std::mutex s_cache_mutex;
   if (!s_fontmgr) {
     s_fontmgr = SkFontMgr_New_FontConfig(nullptr,
         SkFontScanner_Make_FreeType());
@@ -1350,14 +1353,22 @@ static sk_sp<SkTypeface> swell_get_typeface(const char *family, int weight, bool
 
   char key[128];
   snprintf(key, sizeof(key), "%s:%d:%d", family, weight, italic ? 1 : 0);
-  auto it = s_cache.find(key);
-  if (it != s_cache.end()) return it->second;
+
+  {
+    std::lock_guard<std::mutex> lock(s_cache_mutex);
+    auto it = s_cache.find(key);
+    if (it != s_cache.end()) return it->second;
+  }
 
   SkFontStyle style(weight, SkFontStyle::kNormal_Width,
       italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
   sk_sp<SkTypeface> tf = s_fontmgr->matchFamilyStyle(family, style);
   if (!tf) tf = s_fontmgr->legacyMakeTypeface(family, style);
-  if (tf) s_cache[key] = tf;
+
+  if (tf) {
+    std::lock_guard<std::mutex> lock(s_cache_mutex);
+    s_cache[key] = tf;
+  }
   return tf;
 }
 
@@ -1487,7 +1498,13 @@ static const SkFont &swell_get_cached_skfont(HDC ctx)
       if (lf->lfFaceName[0]) {
         f.setTypeface(swell_get_typeface(lf->lfFaceName, fontWeight, fontItalic));
       }
-      f.setEmbolden(fontWeight >= FW_BOLD);
+      // Only apply synthetic emboldening if the matched typeface is not
+      // already bold — avoids double-bold on fonts with true bold faces
+      if (fontWeight >= FW_BOLD && f.getTypeface()) {
+        SkFontStyle tfs = f.getTypeface()->fontStyle();
+        if (tfs.weight() < SkFontStyle::kBold_Weight)
+          f.setEmbolden(true);
+      }
     }
   }
   if (!f.getTypeface()) {
