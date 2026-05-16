@@ -160,6 +160,12 @@ static inline HBRUSH get_window_brush(HWND hwnd, HDC hdc, UINT ctlmsg)
   return NULL;
 }
 
+static inline int scaled_px(int px)
+{
+  int v = SWELL_UI_SCALE(px);
+  return v > 0 ? v : 1;
+}
+
 // fill rect with background color from parent WM_CTLCOLOR* or default
 static void fill_bg(HWND hwnd, HDC hdc, UINT ctlmsg, int defcol)
 {
@@ -683,10 +689,12 @@ static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int
 
   HBRUSH br  = CreateSolidBrush((COLORREF)th.scrollbar_thumb);
   HPEN np = (HPEN)GetStockObject(NULL_PEN);
-  int margin = 3;
-  if (thumbsz < margin * 2 + 2) margin = thumbsz > 2 ? (thumbsz - 2) / 2 : 0;
-  if (th.scrollbar_width < margin * 2 + 2)
-    margin = th.scrollbar_width > 2 ? (th.scrollbar_width - 2) / 2 : 0;
+  const int min_thumb = scaled_px(2);
+  int margin = scaled_px(3);
+  if (thumbsz < margin * 2 + min_thumb)
+    margin = thumbsz > min_thumb ? (thumbsz - min_thumb) / 2 : 0;
+  if (th.scrollbar_width < margin * 2 + min_thumb)
+    margin = th.scrollbar_width > min_thumb ? (th.scrollbar_width - min_thumb) / 2 : 0;
   RECT fr = { cr.left + thumbpos + margin,
               cr.bottom - th.scrollbar_width + margin,
               cr.left + thumbpos + thumbsz - margin,
@@ -695,8 +703,10 @@ static void drawHorizontalScrollbar(HDC hdc, RECT cr, int vieww, int totalw, int
     HGDIOBJ op = SelectObject(hdc, np);
     HGDIOBJ ob = SelectObject(hdc, br);
     int rr = (fr.bottom - fr.top) / 2;
-    if (rr > 4) rr = 4;
-    if (rr < 2) rr = 2;
+    const int maxr = scaled_px(4);
+    const int minr = scaled_px(2);
+    if (rr > maxr) rr = maxr;
+    if (rr < minr) rr = minr;
     RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr, rr);
     SelectObject(hdc, op);
     SelectObject(hdc, ob);
@@ -715,10 +725,12 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int s
 
   HBRUSH br  = CreateSolidBrush((COLORREF)th.scrollbar_thumb);
   HPEN np = (HPEN)GetStockObject(NULL_PEN);
-  int margin = 3;
-  if (thumbsz < margin * 2 + 2) margin = thumbsz > 2 ? (thumbsz - 2) / 2 : 0;
-  if (th.scrollbar_width < margin * 2 + 2)
-    margin = th.scrollbar_width > 2 ? (th.scrollbar_width - 2) / 2 : 0;
+  const int min_thumb = scaled_px(2);
+  int margin = scaled_px(3);
+  if (thumbsz < margin * 2 + min_thumb)
+    margin = thumbsz > min_thumb ? (thumbsz - min_thumb) / 2 : 0;
+  if (th.scrollbar_width < margin * 2 + min_thumb)
+    margin = th.scrollbar_width > min_thumb ? (th.scrollbar_width - min_thumb) / 2 : 0;
   RECT fr = { cr.right - th.scrollbar_width + margin,
               cr.top + thumbpos + margin,
               cr.right - margin,
@@ -727,8 +739,10 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int s
     HGDIOBJ op = SelectObject(hdc, np);
     HGDIOBJ ob = SelectObject(hdc, br);
     int rr = (fr.right - fr.left) / 2;
-    if (rr > 4) rr = 4;
-    if (rr < 2) rr = 2;
+    const int maxr = scaled_px(4);
+    const int minr = scaled_px(2);
+    if (rr > maxr) rr = maxr;
+    if (rr < minr) rr = minr;
     RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, rr, rr);
     SelectObject(hdc, op);
     SelectObject(hdc, ob);
@@ -3936,6 +3950,7 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       SelectObject(hdc, f);
       TEXTMETRIC tm2; GetTextMetrics(hdc, &tm2);
       int avgcw = tm2.tmAveCharWidth > 0 ? tm2.tmAveCharWidth : 8;
+      const int tab_gap = scaled_px(2);
       int x = cr.left + thm.padding_button_h;
       for (int i = 0; i < st->m_tabs.GetSize(); i++) {
         const char *s = st->m_tabs.Get(i);
@@ -3945,7 +3960,7 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           SendMessage(hwnd, TCM_SETCURSEL, i, 0);
           return 0;
         }
-        x += tw + 2;
+        x += tw + tab_gap;
       }
       ReleaseDC(hwnd, hdc);
       return 0;
@@ -3988,6 +4003,8 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
 
       int x = cr.left + thm.padding_button_h;
+      const int tab_gap = scaled_px(2);
+      const int tab_top_inset = scaled_px(5);
       RECT selR = { 0, 0, 0, 0 };
       for (int i = 0; i < st->m_tabs.GetSize(); i++) {
         const char *s = st->m_tabs.Get(i);
@@ -3995,7 +4012,7 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         bool sel = (i == st->m_curtab);
 
         // All tabs same size; selected tab has no bottom border.
-        RECT tr = { x, cr.top + 5, x + tw, by };
+        RECT tr = { x, cr.top + tab_top_inset, x + tw, by };
 
         HBRUSH fillBr = CreateSolidBrush(sel ? (COLORREF)thm.bg_tab_active
                                               : (COLORREF)thm.bg_tab);
@@ -4016,11 +4033,12 @@ LRESULT tabControlWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         SWELL_DrawText(hdc, s, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         if (sel) selR = tr;
-        x += tw + 2;
+        x += tw + tab_gap;
       }
 
       if (selR.left < selR.right) {
-        const int ir = r > 3 ? r / 2 : 2;
+        const int min_ir = scaled_px(2);
+        const int ir = r > min_ir ? r / 2 : min_ir;
         draw_active_tab_outline(hdc, cr, selR, by, r, ir, bw,
                                 (COLORREF)thm.border_strong);
       } else {
