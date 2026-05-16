@@ -88,6 +88,8 @@ struct HDC__ {
   HGDIOBJ__ *curpen;
   HGDIOBJ__ *curbrush;
   HGDIOBJ__ *curfont;
+  SkFont cached_skfont;
+  const HGDIOBJ__ *cached_font_ptr;
 
   int cur_text_color_int;
   int curbkcol;

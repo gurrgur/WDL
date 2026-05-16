@@ -493,7 +493,7 @@ HPEN CreatePen(int attr, int wid, int col)
   if (!obj) return nullptr;
   obj->type = TYPE_PEN;
   obj->color = SWELL_TO_SKCOLOR(col, 255);
-  obj->wid = wid;
+  obj->wid = wid < 0 ? 0 : wid;
   obj->alpha = 1.0f;
   obj->additional_refcnt = 0;
   return obj;
@@ -533,6 +533,9 @@ HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation,
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) return nullptr;
   obj->type = TYPE_FONT;
+
+  if (lfHeight == 0) lfHeight = -12;
+  lfWidth = lfWidth < 2 || lfWidth > 8192 ? 0 : lfWidth;
 
   LOGFONT *lf = new LOGFONT();
   memset(lf, 0, sizeof(LOGFONT));
@@ -1391,6 +1394,36 @@ static const char *swell_text_for_skia(const char *buf, int len,
   return tmp.Get();
 }
 
+// Helper: get or build and cache SkFont from HDC curfont
+static const SkFont &swell_get_cached_skfont(HDC ctx)
+{
+  if (ctx->cached_font_ptr == ctx->curfont && ctx->cached_skfont.getTypeface())
+    return ctx->cached_skfont;
+
+  ctx->cached_font_ptr = ctx->curfont;
+  SkFont &f = ctx->cached_skfont;
+  float fontSize = 12.0f;
+
+  if (ctx->curfont && HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
+    LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
+    if (lf) {
+      fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
+      if (fontSize < 1.0f) fontSize = 12.0f;
+      int fontWeight = lf->lfWeight > 0 ? lf->lfWeight : FW_NORMAL;
+      bool fontItalic = lf->lfItalic != 0;
+      if (lf->lfFaceName[0]) {
+        f.setTypeface(swell_get_typeface(lf->lfFaceName, fontWeight, fontItalic));
+      }
+      f.setEmbolden(fontWeight >= FW_BOLD);
+    }
+  }
+  if (!f.getTypeface()) {
+    f.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
+  }
+  f.setSize(fontSize);
+  return f;
+}
+
 // Helper: measure text width in pixels using SkFont
 static float swell_text_width(const SkFont &font, const char *buf, int len)
 {
@@ -1402,26 +1435,8 @@ static float swell_text_width(const SkFont &font, const char *buf, int len)
 
 SkFont swell_make_skfont_from_hdc(HDC ctx)
 {
-  SkFont font;
-  float fontSize = 12.0f;
-
-  if (ctx && HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
-    LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
-    if (lf) {
-      fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
-      int fontWeight = lf->lfWeight > 0 ? lf->lfWeight : FW_NORMAL;
-      bool fontItalic = lf->lfItalic != 0;
-      if (lf->lfFaceName[0]) {
-        font.setTypeface(swell_get_typeface(lf->lfFaceName, fontWeight, fontItalic));
-      }
-      font.setEmbolden(fontWeight >= FW_BOLD);
-    }
-  }
-  if (!font.getTypeface()) {
-    font.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
-  }
-  font.setSize(fontSize);
-  return font;
+  if (ctx) return SkFont(swell_get_cached_skfont(ctx));
+  return SkFont();
 }
 
 // Helper: word-wrap a logical text segment into display lines that fit within maxWidth.
@@ -1492,27 +1507,7 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   if (len <= 0) return 0;
 
   // Build SkFont from selected font or default
-  SkFont font;
-  float fontSize = 12.0f;
-  int fontWeight = FW_NORMAL;
-  bool fontItalic = false;
-
-  if (HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
-    LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
-    if (lf) {
-      fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
-      fontWeight = lf->lfWeight > 0 ? lf->lfWeight : FW_NORMAL;
-      fontItalic = lf->lfItalic != 0;
-      if (lf->lfFaceName[0]) {
-        font.setTypeface(swell_get_typeface(lf->lfFaceName, fontWeight, fontItalic));
-      }
-      font.setEmbolden(fontWeight >= FW_BOLD);
-    }
-  }
-  if (!font.getTypeface()) {
-    font.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
-  }
-  font.setSize(fontSize);
+  const SkFont &font = swell_get_cached_skfont(ctx);
 
   SkFontMetrics fm;
   font.getMetrics(&fm);
@@ -1520,7 +1515,7 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
   float descent = fm.fDescent;
   float lineht  = ascent + descent;
   int rowH = (int)(lineht + 0.5f);
-  if (rowH < 1) rowH = (int)(fontSize + 0.5f);
+  if (rowH < 1) rowH = (int)(font.getSize() + 0.5f);
 
   bool wordbreak = (align & DT_WORDBREAK) && !(align & DT_SINGLELINE);
   if (!wordbreak) {
@@ -1704,26 +1699,7 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
   memset(tm, 0, sizeof(TEXTMETRIC));
 
-  float fontSize = 12.0f;
-  const char *faceName = nullptr;
-  int fontWeight = FW_NORMAL;
-  bool fontItalic = false;
-  if (HGDIOBJ_VALID(ctx->curfont, TYPE_FONT)) {
-    LOGFONT *lf = static_cast<LOGFONT *>(ctx->curfont->typedata);
-    if (lf) {
-      fontSize = lf->lfHeight < 0 ? (float)(-lf->lfHeight) : (float)lf->lfHeight;
-      fontWeight = lf->lfWeight > 0 ? lf->lfWeight : FW_NORMAL;
-      fontItalic = lf->lfItalic != 0;
-      if (lf->lfFaceName[0]) faceName = lf->lfFaceName;
-    }
-  }
-
-  SkFont font;
-  if (faceName) font.setTypeface(swell_get_typeface(faceName, fontWeight, fontItalic));
-  if (!font.getTypeface())
-    font.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
-  font.setEmbolden(fontWeight >= FW_BOLD);
-  font.setSize(fontSize);
+  const SkFont &font = swell_get_cached_skfont(ctx);
 
   SkFontMetrics metrics;
   font.getMetrics(&metrics);
@@ -1732,7 +1708,7 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
   tm->tmDescent = (int)(metrics.fDescent + 0.5f);
   tm->tmHeight = tm->tmAscent + tm->tmDescent;
   tm->tmInternalLeading = (int)(metrics.fLeading + 0.5f);
-  tm->tmAveCharWidth = (int)(fontSize * 0.5f + 0.5f);
+  tm->tmAveCharWidth = (int)(font.getSize() * 0.5f + 0.5f);
 
   return TRUE;
 }
