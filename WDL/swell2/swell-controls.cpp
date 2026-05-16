@@ -3193,15 +3193,18 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st) return 0;
       int delta = (short)HIWORD(wParam);
       int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
-      st->m_scroll_y -= delta / 40 * rh;
-      if (st->m_scroll_y < 0) st->m_scroll_y = 0;
 
-      // Clamp to bottom — don't scroll past last item
-      int totalH = (int)st->items.GetSize() * rh;
+      // Count visible items for bottom clamp
+      WDL_PtrList<HTREEITEM__> items;
+      tv_flatten(st->m_root, items);
+      int totalH = items.GetSize() * rh;
       RECT cr; GetClientRect(hwnd, &cr);
       int viewH = cr.bottom - cr.top;
       int vmax = totalH - viewH;
       if (vmax < 0) vmax = 0;
+
+      st->m_scroll_y -= delta / 40 * rh;
+      if (st->m_scroll_y < 0) st->m_scroll_y = 0;
       if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
 
       InvalidateRect(hwnd, NULL, FALSE);
