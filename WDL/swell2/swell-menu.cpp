@@ -794,7 +794,7 @@ static void menu_draw(MenuWindow *mw)
       cp.setStrokeCap(SkPaint::kRound_Cap);
       cp.setStrokeJoin(SkPaint::kRound_Join);
       const float s = (float)th.checkbox_size;
-      const float l = (float)item_pad + s * 0.05f;
+      const float l = ((float)item_pad + (float)menu_lpad()) * 0.5f - s * 0.5f;
       const float t = (float)iy + ((float)ih - s) * 0.5f;
       SkPath ck;
       ck.moveTo(l + s * 0.22f, t + s * 0.53f);
@@ -852,11 +852,11 @@ static void menu_draw(MenuWindow *mw)
       ap.setStyle(SkPaint::kStroke_Style);
       ap.setStrokeCap(SkPaint::kRound_Cap);
       ap.setStrokeJoin(SkPaint::kRound_Join);
-      ap.setStrokeWidth((float)menu_scaled_px(2));
+      ap.setStrokeWidth((float)menu_scaled_px(1));
       float ax = (float)(mw->w - item_pad - menu_scaled_px(10));
       float ay = (float)(iy + ih / 2);
-      float hw = (float)menu_scaled_px(3);
-      float hh = (float)menu_scaled_px(4);
+      float hw = (float)menu_scaled_px(2);
+      float hh = (float)menu_scaled_px(3);
       SkPath arrow;
       arrow.moveTo(ax - hw * 0.5f, ay - hh);
       arrow.lineTo(ax + hw * 0.5f, ay);
@@ -969,6 +969,22 @@ static bool menu_local_point_to_item(MenuWindow *mw, float logical_x,
   }
   *idx = menu_hittest(mw, y);
   return true;
+}
+
+static bool menu_point_is_leaving_toward_child(MenuWindow *mw, float logical_x,
+                                               float logical_y)
+{
+  if (!mw || !mw->child || mw->hovered < 0 || mw->hovered >= mw->n_items)
+    return false;
+
+  const int x = (int)(swell_log_to_phys(logical_x) + 0.5f);
+  const int y = (int)(swell_log_to_phys(logical_y) + 0.5f);
+  const int top = mw->item_y[mw->hovered] - menu_scaled_px(2);
+  const int bottom = mw->item_y[mw->hovered + 1] + menu_scaled_px(2);
+  const int slack = menu_scaled_px(3);
+
+  return x >= mw->w - slack && x <= mw->w + slack &&
+         y >= top && y < bottom;
 }
 
 static bool menu_outside_down_is_same_menubar_item(MenuWindow *root,
@@ -1282,6 +1298,9 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
       int newhov = -1;
       menu_local_point_to_item(mw, evt->motion.x, evt->motion.y, &newhov);
       if (newhov != mw->hovered) {
+        if (newhov < 0 &&
+            menu_point_is_leaving_toward_child(mw, evt->motion.x, evt->motion.y))
+          return true;
         menu_close_child(mw);
         mw->hovered = newhov;
         menu_draw(mw);

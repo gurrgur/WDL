@@ -2808,6 +2808,60 @@ static void tv_send_mouse_notify(HWND hwnd, UINT code, HTREEITEM item, int x, in
   SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
 }
 
+static inline int tv_content_pad()
+{
+  return scaled_px(6);
+}
+
+static inline int tv_text_gap()
+{
+  return scaled_px(6);
+}
+
+static inline int tv_indent_width(int row_h)
+{
+  int min_indent = scaled_px(18);
+  return row_h > min_indent ? row_h : min_indent;
+}
+
+static inline int tv_expander_width(int row_h)
+{
+  int w = scaled_px(14);
+  if (w > row_h) w = row_h;
+  return w > 1 ? w : 1;
+}
+
+static void tv_draw_expander(HDC hdc, int cx, int cy, bool expanded, COLORREF color)
+{
+  if (!hdc || !hdc->canvas) return;
+
+  SkPaint arrow;
+  arrow.setAntiAlias(true);
+  arrow.setColor(controls_to_sk(color));
+  arrow.setStyle(SkPaint::kStroke_Style);
+  arrow.setStrokeCap(SkPaint::kRound_Cap);
+  arrow.setStrokeJoin(SkPaint::kRound_Join);
+  arrow.setStrokeWidth((float)scaled_px(1));
+
+  const float x = (float)cx;
+  const float y = (float)cy + 0.5f;
+  SkPath p;
+  if (expanded) {
+    const float hw = (float)scaled_px(3);
+    const float hh = (float)scaled_px(2);
+    p.moveTo(x - hw, y - hh * 0.5f);
+    p.lineTo(x,      y + hh);
+    p.lineTo(x + hw, y - hh * 0.5f);
+  } else {
+    const float hw = (float)scaled_px(2);
+    const float hh = (float)scaled_px(3);
+    p.moveTo(x - hw * 0.5f, y - hh);
+    p.lineTo(x + hw,        y);
+    p.lineTo(x - hw * 0.5f, y + hh);
+  }
+  hdc->canvas->drawPath(p, arrow);
+}
+
 // find parent of item (returns NULL if root-level); also returns index
 static HTREEITEM tv_find_parent(HTREEITEM root, HTREEITEM target, int *idx_out)
 {
@@ -3019,12 +3073,12 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int row = y / rh;
       if (row >= 0 && row < items.GetSize()) {
         hti->hItem = items.Get(row);
-        const int indent = rh;
-        const int expw = (rh / 4) * 2 + 3;
-        int base = tv_get_depth(st->m_root, hti->hItem) * indent;
+        const int indent = tv_indent_width(rh);
+        const int expw = tv_expander_width(rh);
+        int base = tv_content_pad() + tv_get_depth(st->m_root, hti->hItem) * indent;
         if (hti->pt.x >= base && hti->pt.x < base + expw)
           hti->flags = TVHT_ONITEMBUTTON;
-        else if (hti->pt.x >= base + expw)
+        else if (hti->pt.x >= base + expw + tv_text_gap())
           hti->flags = TVHT_ONITEMLABEL;
         else
           hti->flags = TVHT_ONITEMINDENT;
@@ -3262,12 +3316,12 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
       }
 
-      int indent = rh;
-      int expw = (rh / 4) * 2 + 3;
+      int indent = tv_indent_width(rh);
+      int expw = tv_expander_width(rh);
       int row = (my + st->m_scroll_y) / rh;
       if (row >= 0 && row < items.GetSize()) {
         HTREEITEM item = items.Get(row);
-        int base = tv_get_depth(st->m_root, item) * indent;
+        int base = tv_content_pad() + tv_get_depth(st->m_root, item) * indent;
         if (mx >= base && mx < base + expw &&
             (item->m_children.GetSize() > 0 || item->m_haschildren)) {
           SendMessage(hwnd, TVM_EXPAND, TVE_TOGGLE, (LPARAM)item);
@@ -3423,8 +3477,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         cr.right -= th.scrollbar_width;
       if (cr.right < cr.left + 1) cr.right = cr.left + 1;
 
-      int indent = rh;
-      int expw = (rh / 4) * 2 + 3;
+      int indent = tv_indent_width(rh);
+      int expw = tv_expander_width(rh);
       for (int i = 0; i < items.GetSize(); i++) {
         int ry = cr.top + i * rh - st->m_scroll_y;
         if (ry + rh < cr.top) continue;
@@ -3435,8 +3489,8 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         // rough: just indent proportional to scrolled x
         int depth = tv_get_depth(st->m_root, item);
 
-        int base = cr.left + depth * indent;
-        int x = base + expw;
+        int base = cr.left + tv_content_pad() + depth * indent;
+        int x = base + expw + tv_text_gap();
         bool sel = (item == st->m_sel);
 
         if (sel) {
@@ -3453,14 +3507,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           int ay = ry + rh/2;
           COLORREF arrowc = sel && focused ? (COLORREF)th.fg_on_accent
                                             : (COLORREF)th.fg_text_dim;
-          HPEN ap = CreatePen(PS_SOLID, th.border_width, arrowc);
-          HGDIOBJ oap = SelectObject(hdc, ap);
-          if (item->m_state & TVIS_EXPANDED) {
-            MoveToEx(hdc, ax-4, ay-2, NULL); LineTo(hdc, ax, ay+3); LineTo(hdc, ax+4, ay-2);
-          } else {
-            MoveToEx(hdc, ax-2, ay-4, NULL); LineTo(hdc, ax+3, ay); LineTo(hdc, ax-2, ay+4);
-          }
-          SelectObject(hdc, oap); DeleteObject(ap);
+          tv_draw_expander(hdc, ax, ay, (item->m_state & TVIS_EXPANDED) != 0, arrowc);
         }
 
         SetTextColor(hdc, sel ? (focused ? (COLORREF)th.fg_on_accent
@@ -3834,12 +3881,12 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         arrow.setStyle(SkPaint::kStroke_Style);
         arrow.setStrokeCap(SkPaint::kRound_Cap);
         arrow.setStrokeJoin(SkPaint::kRound_Join);
-        arrow.setStrokeWidth((float)scaled_px(2));
+        arrow.setStrokeWidth((float)scaled_px(1));
 
         const float ax = (float)(sep_x + btnw / 2);
         const float ay = ((float)cr.top + (float)cr.bottom) * 0.5f + 0.5f;
-        const float hw = (float)scaled_px(4);
-        const float dy = (float)scaled_px(3);
+        const float hw = (float)scaled_px(3);
+        const float dy = (float)scaled_px(2);
         SkPath chevron;
         chevron.moveTo(ax - hw, ay - dy * 0.5f);
         chevron.lineTo(ax,      ay + dy);
