@@ -1673,8 +1673,6 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
                    int resvd, HWND hwnd, const RECT *r)
 {
   (void)resvd; (void)r;
-  fprintf(stderr, "[SWELL] TrackPopupMenu(hMenu=%p, flags=0x%x, xy=%d,%d, hwnd=%p title='%s' parent=%p)\n",
-          (void*)hMenu, flags, xpos, ypos, (void*)hwnd, hwnd ? hwnd->m_title.Get() : "(null)", hwnd ? (void*)hwnd->m_parent : nullptr);
   if (!hMenu || !hwnd) return 0;
 
   ReleaseCapture();
