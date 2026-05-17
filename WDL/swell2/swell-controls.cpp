@@ -1503,9 +1503,10 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       const char *txt = hwnd->m_title.Get();
       int tlen = (int)strlen(txt);
+      int text_chars = WDL_utf8_get_charlen(txt);
       WDL_FastString disp;
       if (is_pass) {
-        for (int i = 0; i < tlen; i++) disp.Append("*", 1);
+        for (int i = 0; i < text_chars; i++) disp.Append("*", 1);
         txt = disp.Get();
         tlen = (int)strlen(txt);
       }
@@ -1513,107 +1514,36 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       RECT tr = { cr.left + th.padding_edit_h, cr.top + th.padding_edit_v,
                   cr.right - th.padding_edit_h, cr.bottom - th.padding_edit_v };
 
+      int layout_w = tr.right - tr.left;
+      edit_ensure_layout(hwnd, st, skfont, txt, tlen, layout_w, rowH, multiline);
+
       if (multiline)
       {
-        int scrWidth = tr.right - tr.left;
-        if (scrWidth < 1) scrWidth = 1;
-
-        // Recompute cached display lines if text or width changed
-        if (!st || st->ml_cached_text.GetLength() != tlen ||
-            strcmp(st->ml_cached_text.Get(), txt) != 0 ||
-            st->ml_cached_w != scrWidth)
-        {
-          st->ml_cached_text.Set(txt);
-          st->ml_cached_w = scrWidth;
-          st->ml_dline_starts.Resize(0, false);
-          st->ml_dline_ends.Resize(0, false);
-
-          // Build line-offset arrays from newlines
-          WDL_TypedBuf<int> lineStarts, lineEnds;
-          lineStarts.Add(0);
-          for (int i = 0; i < tlen; i++) {
-            if (txt[i] == '\n') { lineEnds.Add(i); lineStarts.Add(i+1); }
-          }
-          lineEnds.Add(tlen);
-
-           // Word-wrap: split logical lines into display lines if too wide
-           for (int li = 0; li < lineStarts.GetSize(); li++) {
-             int start_off = lineStarts.Get()[li];
-             int end_off = lineEnds.Get()[li];
-             // Empty logical line (blank line from consecutive \n)
-             if (start_off == end_off) {
-               st->ml_dline_starts.Add(start_off);
-               st->ml_dline_ends.Add(start_off);
-               continue;
-             }
-             int pos = start_off;
-            while (pos < end_off) {
-              int remain = end_off - pos;
-              SkRect bounds;
-              swell_skfont_measure_utf8(skfont, txt + pos, remain, &bounds);
-              int textW = (int)(bounds.width() + 0.5f);
-              if (textW <= scrWidth) {
-               st->ml_dline_starts.Add(pos);
-               st->ml_dline_ends.Add(end_off);
-               break;
-              }
-              // binary search for wrap point
-              int lo = pos + 1, hi = end_off;
-              while (lo < hi) {
-                int mid = (lo + hi + 1) / 2;
-                swell_skfont_measure_utf8(skfont, txt + pos, mid - pos, &bounds);
-                textW = (int)(bounds.width() + 0.5f);
-                if (textW <= scrWidth) lo = mid;
-                else hi = mid - 1;
-              }
-              int wrap = lo;
-              if (wrap <= pos) wrap = pos + 1;
-              st->ml_dline_starts.Add(pos);
-              st->ml_dline_ends.Add(wrap);
-              pos = wrap;
-              if (pos < end_off && txt[pos] == ' ') pos++;
-            }
-          }
-
-          // Rebuild char-to-display-line map.
-          // Spaces at wrap points get skipped by pos++, creating gaps
-          // where ml_dline_ends[di] < ml_dline_starts[di+1].
-          // Map gap chars to the display line that ends before them.
-          int nd = st->ml_dline_starts.GetSize();
-          st->ml_char2dline.Resize(tlen + 1, false);
-          if (nd > 0) {
-            int di = 0;
-            for (int ci = 0; ci <= tlen; ci++) {
-              while (di + 1 < nd && ci >= st->ml_dline_starts.Get()[di + 1]) di++;
-              st->ml_char2dline.Get()[ci] = di;
-            }
-          }
-        }
-
         int ndlines = st ? st->ml_dline_starts.GetSize() : 0;
         if (ndlines == 0) ndlines = 1; // at least one empty line
 
-        // Scroll
         int totalH = ndlines * rowH;
         int viewH = tr.bottom - tr.top;
-        if (totalH > viewH)
+        if (totalH > viewH) {
           tr.right -= th.scrollbar_width;
+          layout_w = tr.right - tr.left;
+          edit_ensure_layout(hwnd, st, skfont, txt, tlen, layout_w, rowH, true);
+          ndlines = st ? st->ml_dline_starts.GetSize() : 0;
+          if (ndlines == 0) ndlines = 1;
+          totalH = ndlines * rowH;
+        }
         if (st) {
           if (st->scroll_y > totalH - viewH) st->scroll_y = totalH - viewH;
           if (st->scroll_y < 0) st->scroll_y = 0;
         }
         int scrollY = st ? st->scroll_y : 0;
 
-        // Use cached char-to-display-line map
-        const int *char2dline = (st && st->ml_char2dline.GetSize() > 0)
-          ? st->ml_char2dline.Get() : nullptr;
-
         int sel1 = -1, sel2 = -1;
         if (st && st->sel1 >= 0 && st->sel1 != st->sel2) {
           sel1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
           sel2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
-          if (sel1 > tlen) sel1 = tlen;
-          if (sel2 > tlen) sel2 = tlen;
+          if (sel1 > text_chars) sel1 = text_chars;
+          if (sel2 > text_chars) sel2 = text_chars;
         }
 
         SetBkMode(hdc, TRANSPARENT);
@@ -1630,110 +1560,99 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           }
         }
 
-        // Selection highlight
-        if (char2dline && sel2 > sel1 && sel1 >= 0 && ndlines > 0) {
-          int bs1 = WDL_utf8_charpos_to_bytepos(txt, sel1);
-          int bs2 = WDL_utf8_charpos_to_bytepos(txt, sel2);
-          int dl0 = char2dline[bs1];
-          int dl1 = char2dline[bs2];
-          for (int di = dl0; di <= dl1 && di < ndlines; di++) {
-            int d0 = st->ml_dline_starts.Get()[di];
-            int d1 = st->ml_dline_ends.Get()[di];
-            int selLineStart = (di == dl0) ? bs1 : d0;
-            int selLineEnd = (di == dl1) ? bs2 : d1;
-            if (selLineStart >= selLineEnd) continue;
-            if (selLineStart < d0) selLineStart = d0;
+        if (st && sel2 > sel1 && sel1 >= 0 && ndlines > 0) {
+          HBRUSH selBr = CreateSolidBrush((COLORREF)th.accent);
+          for (int di = 0; di < ndlines; di++) {
+            const int c0 = st->ml_dline_char_starts.Get()[di];
+            const int c1 = st->ml_dline_char_ends.Get()[di];
+            int sc0 = sel1 > c0 ? sel1 : c0;
+            int sc1 = sel2 < c1 ? sel2 : c1;
+            if (sc1 <= sc0) continue;
             int ry = tr.top + di * rowH - scrollY;
+            if (ry + rowH < tr.top) continue;
+            if (ry >= tr.bottom) break;
 
-            SkRect r1;
-            swell_skfont_measure_utf8(skfont, txt + d0, selLineStart - d0, &r1);
-            int preW = (int)(r1.width() + 0.5f);
+            const int xidx = st->ml_dline_xidx.Get()[di];
+            const int rel0 = sc0 - c0;
+            const int rel1 = sc1 - c0;
+            const int x0 = st->ml_xpos.Get()[xidx + rel0];
+            const int x1 = st->ml_xpos.Get()[xidx + rel1];
+            const int b0 = st->ml_bpos.Get()[xidx + rel0];
+            const int b1 = st->ml_bpos.Get()[xidx + rel1];
+            if (x1 <= x0 || b1 <= b0) continue;
 
-            SkRect r2;
-            swell_skfont_measure_utf8(skfont, txt + selLineStart, selLineEnd - selLineStart, &r2);
-            int selW = (int)(r2.width() + 0.5f);
-
-            RECT selR = { tr.left + preW, ry, tr.left + preW + selW, ry + rowH };
-            SetBkMode(hdc, OPAQUE);
-            SetBkColor(hdc, (COLORREF)th.accent);
-            SetTextColor(hdc, (COLORREF)th.fg_on_accent);
-            SWELL_DrawText(hdc, txt + selLineStart, selLineEnd - selLineStart, &selR, DT_LEFT | DT_TOP | DT_NOPREFIX);
+            RECT selR = { tr.left + x0, ry, tr.left + x1, ry + rowH };
+            FillRect(hdc, &selR, selBr);
             SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, (COLORREF)th.fg_on_accent);
+            SWELL_DrawText(hdc, txt + b0, b1 - b0, &selR, DT_LEFT | DT_TOP | DT_NOPREFIX);
             SetTextColor(hdc, enabled ? (COLORREF)th.fg_text : (COLORREF)th.fg_text_disabled);
           }
+          DeleteObject(selBr);
         }
 
-        // Caret
         if (st && st->cursor_state && focused && ndlines > 0) {
           int cpos = st->cursor_pos;
-          if (cpos > tlen) cpos = tlen;
+          if (cpos > text_chars) cpos = text_chars;
           int bpos = WDL_utf8_charpos_to_bytepos(txt, cpos);
-          int cdline = char2dline ? char2dline[bpos] : 0;
+          int cdline = edit_layout_line_from_byte(st, bpos);
           if (cdline >= 0 && cdline < ndlines) {
-            int d0 = st->ml_dline_starts.Get()[cdline];
-            int clen = bpos - d0;
-            if (clen < 0) clen = 0;
-            SkRect cbr;
-            swell_skfont_measure_utf8(skfont, txt + d0, clen, &cbr);
-            int cx = tr.left + (int)(cbr.width() + 0.5f);
+            int c0 = st->ml_dline_char_starts.Get()[cdline];
+            int c1 = st->ml_dline_char_ends.Get()[cdline];
+            if (cpos < c0) cpos = c0;
+            if (cpos > c1) cpos = c1;
+            const int xidx = st->ml_dline_xidx.Get()[cdline];
+            int cx = tr.left + st->ml_xpos.Get()[xidx + (cpos - c0)];
             int cy = tr.top + cdline * rowH - scrollY;
-            if (cy >= tr.top && cy + rowH <= tr.bottom) {
+            if (cy + rowH > tr.top && cy < tr.bottom) {
               HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
               HGDIOBJ ocp = SelectObject(hdc, cp);
               MoveToEx(hdc, cx, cy, NULL);
               LineTo(hdc, cx, cy + rowH);
-            SelectObject(hdc, ocp); DeleteObject(cp);
-              }
+              SelectObject(hdc, ocp); DeleteObject(cp);
             }
           }
+        }
 
         drawVerticalScrollbar(hdc, cr, cr.bottom - cr.top, totalH, scrollY, st && st->m_sb_hover);
-        }
+      }
       else
       {
-        // Single-line path (unchanged logic)
-        if (!st || st->sel1 < 0 || st->sel1 == st->sel2)
-        {
-          SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
-                                    : (COLORREF)th.fg_text_disabled);
-          SetBkMode(hdc, TRANSPARENT);
-          SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        }
-        else
-        {
+        SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
+                                  : (COLORREF)th.fg_text_disabled);
+        SetBkMode(hdc, TRANSPARENT);
+        SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        if (st && st->sel1 >= 0 && st->sel1 != st->sel2) {
           int s1 = st->sel1 < st->sel2 ? st->sel1 : st->sel2;
           int s2 = st->sel1 < st->sel2 ? st->sel2 : st->sel1;
-          if (s1 > tlen) s1 = tlen;
-          if (s2 > tlen) s2 = tlen;
-          int bs1 = WDL_utf8_charpos_to_bytepos(txt, s1);
-          int bs2 = WDL_utf8_charpos_to_bytepos(txt, s2);
+          if (s1 > text_chars) s1 = text_chars;
+          if (s2 > text_chars) s2 = text_chars;
 
-          SetTextColor(hdc, enabled ? (COLORREF)th.fg_text
-                                    : (COLORREF)th.fg_text_disabled);
-          SetBkMode(hdc, TRANSPARENT);
-          SWELL_DrawText(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-          if (bs2 > bs1)
-          {
-            SkRect mr;
-            swell_skfont_measure_utf8(skfont, txt, bs1, &mr);
-            RECT selR = tr;
-            selR.left += (int)(mr.width() + 0.5f);
-            SetBkMode(hdc, OPAQUE);
-            SetBkColor(hdc, (COLORREF)th.accent);
+          if (s2 > s1 && st->ml_dline_starts.GetSize() > 0) {
+            const int xidx = st->ml_dline_xidx.Get()[0];
+            const int x0 = st->ml_xpos.Get()[xidx + s1];
+            const int x1 = st->ml_xpos.Get()[xidx + s2];
+            const int b0 = st->ml_bpos.Get()[xidx + s1];
+            const int b1 = st->ml_bpos.Get()[xidx + s2];
+            RECT selR = { tr.left + x0, tr.top, tr.left + x1, tr.bottom };
+            HBRUSH selBr = CreateSolidBrush((COLORREF)th.accent);
+            FillRect(hdc, &selR, selBr);
+            DeleteObject(selBr);
+            SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, (COLORREF)th.fg_on_accent);
-            SWELL_DrawText(hdc, txt + bs1, bs2 - bs1, &selR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            SWELL_DrawText(hdc, txt + b0, b1 - b0, &selR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
           }
         }
 
-        // Caret
         if (st && st->cursor_state && focused) {
           int cpos = st->cursor_pos;
-          if (cpos > tlen) cpos = tlen;
-          int bpos = WDL_utf8_charpos_to_bytepos(txt, cpos);
-          SkRect cbounds;
-          swell_skfont_measure_utf8(skfont, txt, bpos, &cbounds);
-          int cx = tr.left + (int)(cbounds.width() + 0.5f);
+          if (cpos > text_chars) cpos = text_chars;
+          int cx = tr.left;
+          if (st->ml_dline_starts.GetSize() > 0) {
+            const int xidx = st->ml_dline_xidx.Get()[0];
+            cx += st->ml_xpos.Get()[xidx + cpos];
+          }
           if (cx > tr.right - 1) cx = tr.right - 1;
           HPEN cp = CreatePen(PS_SOLID, th.border_width, (COLORREF)th.caret);
           HGDIOBJ ocp = SelectObject(hdc, cp);
