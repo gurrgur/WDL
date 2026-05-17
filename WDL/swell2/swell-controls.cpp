@@ -785,11 +785,29 @@ static int edit_layout_line_from_byte(__SWELL_editControlState *st, int byte_pos
   return n - 1;
 }
 
+static int edit_line_char_from_x(__SWELL_editControlState *st, int line, int x)
+{
+  if (!st || line < 0 || line >= st->ml_dline_starts.GetSize()) return 0;
+  const int c0 = st->ml_dline_char_starts.Get()[line];
+  const int c1 = st->ml_dline_char_ends.Get()[line];
+  const int npts = c1 - c0 + 1;
+  const int xidx = st->ml_dline_xidx.Get()[line];
+  if (npts <= 1 || x <= 0) return c0;
+
+  for (int i = 0; i < npts - 1; ++i) {
+    const int x0 = st->ml_xpos.Get()[xidx + i];
+    const int x1 = st->ml_xpos.Get()[xidx + i + 1];
+    if (x < (x0 + x1) / 2) return c0 + i;
+  }
+  return c1;
+}
+
 static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState *st)
 {
   const char *txt_orig = hwnd->m_title.Get();
-  int tlen_orig = (int)strlen(txt_orig);
+  int text_chars = WDL_utf8_get_charlen(txt_orig);
   bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
+  bool is_pass = (hwnd->m_style & ES_PASSWORD) != 0;
 
   RECT cr; GetClientRect(hwnd, &cr);
   const swell_theme &th = g_swell_theme;
@@ -800,84 +818,35 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
   HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
   if (f) SelectObject(hdc, f);
   SkFont skfont = swell_make_skfont_from_hdc(hdc);
+  TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+  int rowH = tm.tmHeight + 2;
 
-  int result = 0;
-
-  if (!multiline) {
-    if (mx > tr.left && tlen_orig > 0) {
-      int lo = 0, hi = tlen_orig;
-      while (lo < hi) {
-        int mid = (lo + hi + 1) / 2;
-        SkRect bounds;
-        swell_skfont_measure_utf8(skfont, txt_orig, mid, &bounds);
-        int textW = (int)(bounds.width() + 0.5f);
-        if (tr.left + textW <= mx)
-          lo = mid;
-        else
-          hi = mid - 1;
-      }
-      result = lo;
-    }
-  } else {
-    WDL_FastString stripped;
-    for (int i = 0; i < tlen_orig; i++) {
-      if (txt_orig[i] == '\r') {
-        if (i+1 < tlen_orig && txt_orig[i+1] == '\n') { stripped.Append("\n"); i++; }
-        else stripped.Append("\n");
-      } else {
-        char cbuf[2] = { txt_orig[i], 0 };
-        stripped.Append(cbuf);
-      }
-    }
-    const char *txt = stripped.Get();
-    int tlen = (int)stripped.GetLength();
-
-    TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
-    int rowH = tm.tmHeight + 2;
-    int scrollY = st->scroll_y;
-
-    if (st->ml_dline_starts.GetSize() > 0 && tlen > 0) {
-      int ndlines = st->ml_dline_starts.GetSize();
-      int di = (my + scrollY - tr.top) / rowH;
-      if (di < 0) di = 0;
-      if (di >= ndlines) di = ndlines - 1;
-
-      int d0 = st->ml_dline_starts.Get()[di];
-      int d1 = st->ml_dline_ends.Get()[di];
-      int seglen = d1 - d0;
-
-      if (mx <= tr.left) {
-        result = d0;
-      } else if (seglen > 0) {
-        int lo = 0, hi = seglen;
-        while (lo < hi) {
-          int mid = (lo + hi + 1) / 2;
-          SkRect bounds;
-          swell_skfont_measure_utf8(skfont, txt + d0, mid, &bounds);
-          int textW = (int)(bounds.width() + 0.5f);
-          if (tr.left + textW <= mx)
-            lo = mid;
-          else
-            hi = mid - 1;
-        }
-        result = d0 + lo;
-      } else {
-        result = d0;
-      }
-    }
-
-    // convert stripped index to original text index
-    int oi = 0, si = 0;
-    while (oi < tlen_orig && si < result) {
-      if (txt_orig[oi] == '\r') { oi++; }
-      else { oi++; si++; }
-    }
-    result = oi;
+  WDL_FastString pass;
+  const char *txt = txt_orig;
+  int tlen = (int)strlen(txt);
+  if (is_pass) {
+    pass.Set("");
+    for (int i = 0; i < text_chars; ++i) pass.Append("*", 1);
+    txt = pass.Get();
+    tlen = pass.GetLength();
   }
 
+  int layout_w = tr.right - tr.left;
+  edit_ensure_layout(hwnd, st, skfont, txt, tlen, layout_w, rowH, multiline);
+
+  int line = 0;
+  if (multiline && st && st->ml_dline_starts.GetSize() > 0) {
+    line = (my + st->scroll_y - tr.top) / rowH;
+    if (line < 0) line = 0;
+    const int n = st->ml_dline_starts.GetSize();
+    if (line >= n) line = n - 1;
+  }
+
+  int result = edit_line_char_from_x(st, line, mx - tr.left);
+  if (result < 0) result = 0;
+  if (result > text_chars) result = text_chars;
+
   ReleaseDC(hwnd, hdc);
-  // result is a byte offset into the UTF-8 string; convert to character position
-  result = WDL_utf8_bytepos_to_charpos(txt_orig, result);
   return result;
 }
 
