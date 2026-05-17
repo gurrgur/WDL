@@ -4705,8 +4705,8 @@ LRESULT trackbarWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       if (!p || p[2] <= p[1]) { EndPaint(hwnd, &ps); return 0; }
 
-      const int track_h = 4;
-      const int thumb_r = 7;
+      const int track_h = th.trackbar_track_h;
+      const int thumb_r = th.trackbar_thumb_r;
       const int track_left = cr.left + thumb_r;
       const int track_right = cr.right - thumb_r;
 

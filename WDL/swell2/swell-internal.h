@@ -563,6 +563,8 @@ struct swell_theme {
   int tab_height;
   int scrollbar_width;
   int scrollbar_min_thumb_height;
+  int trackbar_track_h;
+  int trackbar_thumb_r;
   int checkbox_size;
   int radio_size;
 
