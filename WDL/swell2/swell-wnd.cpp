@@ -267,6 +267,19 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (hwnd->m_font) return (LRESULT)hwnd->m_font;
       return (LRESULT)SWELL_GetDefaultFont();
 
+    case WM_SETTEXT:
+      hwnd->m_title.Set((const char *)lParam);
+      swell_oswindow_update_text(hwnd);
+      InvalidateRect(hwnd, NULL, FALSE);
+      return TRUE;
+
+    case WM_GETTEXT:
+      if (lParam && wParam > 0) {
+        lstrcpyn((char *)lParam, hwnd->m_title.Get(), (int)wParam);
+        return (LRESULT)strlen((char *)lParam);
+      }
+      return 0;
+
     case WM_DROPFILES:
       if (!(hwnd->m_exstyle & WS_EX_ACCEPTFILES) && hwnd->m_parent) {
         return SendMessage((HWND)hwnd->m_parent, msg, wParam, lParam);
@@ -1219,6 +1232,7 @@ BOOL SetDlgItemText(HWND hwnd, int idx, const char *text)
 
   w->m_title.Set(text);
   SendMessage(w, WM_SETTEXT, 0, (LPARAM)text);
+  swell_oswindow_update_text(w);
   InvalidateRect(w, NULL, FALSE);
   return TRUE;
 }
