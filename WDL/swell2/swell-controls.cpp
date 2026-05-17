@@ -1429,6 +1429,14 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 1;
       }
+      // Enter: insert newline (multiline) or beep (single-line)
+      if (wParam == VK_RETURN) {
+        if (hwnd->m_style & ES_READONLY) return 1;
+        if (multiline) {
+          SendMessage(hwnd, WM_CHAR, '\n', 0);
+        }
+        return 1;
+      }
       // Ctrl+A: select all
       if (ctrl && (wParam == 'A' || wParam == 'a')) {
         SendMessage(hwnd, EM_SETSEL, 0, -1);
