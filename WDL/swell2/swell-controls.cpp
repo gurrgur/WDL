@@ -267,6 +267,7 @@ static void uncheck_radio_group(HWND hwnd)
 LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   buttonWindowState *st = (buttonWindowState *)(void *)hwnd->m_private_data;
+  const bool is_groupbox = hwnd && (hwnd->m_style & BS_GROUPBOX);
 
   switch (msg) {
     case WM_CREATE: {
@@ -325,16 +326,19 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
+      if (is_groupbox) return 0;
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
 
     case WM_LBUTTONDOWN:
+      if (is_groupbox) return 0;
       SetFocus(hwnd);
       SetCapture(hwnd);
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
 
     case WM_LBUTTONUP: {
+      if (is_groupbox) return 0;
       if (GetCapture() != hwnd) return 0;
       ReleaseCapture();
       RECT cr; GetClientRect(hwnd, &cr);
@@ -380,6 +384,7 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
 
     case WM_CAPTURECHANGED:
+      if (is_groupbox) return 0;
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
 
