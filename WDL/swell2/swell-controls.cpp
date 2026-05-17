@@ -1204,7 +1204,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int bs1 = WDL_utf8_charpos_to_bytepos(t, s1);
       int bs2 = WDL_utf8_charpos_to_bytepos(t, s2);
       WDL_FastString ns;
-      ns.Set(t, bs1);
+      if (bs1 > 0) ns.Set(t, bs1);
       ns.Append(newtext);
       ns.Append(t + bs2);
       hwnd->m_title.Set(ns.Get());
