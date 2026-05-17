@@ -427,10 +427,30 @@ char *WDL_ChooseFileForOpen2(HWND parent,
     WDL_fixfnforopenfn(if_temp);
     initialfile = if_temp;
   }
+  else if (defext && *defext)
+  {
+    // SWELL treats initialfile of ".ext" as default extension hint
+    snprintf(if_temp,sizeof(if_temp),".%s",defext);
+    initialfile = if_temp;
+  }
   
-  // defext support?
   BrowseFile_SetTemplate(dlgid,(DLGPROC)dlgProc,reshead);
   char *ret = BrowseForFiles(text,initialdir,initialfile,allowmul,extlist);
+
+  if (ret && defext && *defext && !allowmul) {
+    const char *ext = WDL_get_fileext(ret);
+    if (!ext || !*ext) {
+      size_t len = strlen(ret);
+      size_t dlen = strlen(defext);
+      char *tmp = (char *)realloc(ret, len + dlen + 2);
+      if (tmp) {
+        ret = tmp;
+        ret[len] = '.';
+        memcpy(ret + len + 1, defext, dlen + 1);
+      }
+    }
+  }
+
   if (preservecwd) SetCurrentDirectory(olddir);
 
   return ret;
