@@ -707,4 +707,10 @@ extern const char *(*SWELL_DDrop_getDroppedFileTargetPath)(const char *);
 // swell-misc.cpp: application name (set via SWELL_ExtendedAPI "APPNAME")
 extern const char *g_swell_appname;
 
+// swell-lua.cpp: Lua scripting engine (no-ops when SWELL2_HAS_LUA undefined)
+void swell_lua_init();
+void swell_lua_tick();
+void swell_lua_notify_frame(HWND hwnd, double frame_ms, bool painted);
+void swell_lua_shutdown();
+
 #endif // _SWELL_INTERNAL_H_

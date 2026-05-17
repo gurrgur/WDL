@@ -24,6 +24,7 @@ set(SWELL2_SOURCES
   swell-kb.cpp
   swell-stubs.cpp
   swell-appstub.cpp
+  swell-lua.cpp
 )
 
 # ---- backend selection ----
@@ -44,6 +45,16 @@ target_include_directories(Swell PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
+
+# ---- Lua scripting (optional) ----
+pkg_check_modules(LUA IMPORTED_TARGET lua)
+if(LUA_FOUND)
+  message(STATUS "Lua found — enabling swell Lua scripting engine")
+  target_compile_definitions(Swell PRIVATE SWELL2_HAS_LUA)
+  target_link_libraries(Swell PUBLIC PkgConfig::LUA)
+else()
+  message(STATUS "Lua NOT found — swell Lua scripting disabled")
+endif()
 
 target_link_libraries(Swell PRIVATE
   PkgConfig::SKIA

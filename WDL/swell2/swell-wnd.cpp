@@ -5,6 +5,7 @@
 */
 
 #include "swell-internal.h"
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <sys/time.h>
@@ -1647,11 +1648,18 @@ void UpdateWindow(HWND hwnd)
   if (s_updatewindow_depth > 0) return;
   s_updatewindow_depth++;
 
+  using namespace std::chrono;
+  auto t0 = steady_clock::now();
+
   SkCanvas *canvas = top->m_backingstore->getCanvas();
   if (canvas) {
     SWELL_internalSkiaPaint(top, canvas, 0, 0, false);
     swell_oswindow_updatetoscreen(top, NULL);
   }
+
+  auto t1 = steady_clock::now();
+  double frame_ms = duration<double, std::milli>(t1 - t0).count();
+  swell_lua_notify_frame(top, frame_ms, canvas != nullptr);
 
   s_updatewindow_depth--;
 }
@@ -1936,6 +1944,8 @@ void SWELL_RunMessageLoop()
   SWELL_RunEvents();
 
   // Paint all dirty top-level windows (deferred from InvalidateRect calls)
+  using namespace std::chrono;
+  auto frame_start = steady_clock::now();
   HWND w = g_swell_top_level_list;
   while (w) {
     if ((w->m_invalidated || w->m_child_invalidated) && w->m_backingstore) {
@@ -1943,12 +1953,18 @@ void SWELL_RunMessageLoop()
       if (canvas) {
         SWELL_internalSkiaPaint(w, canvas, 0, 0, false);
         swell_oswindow_updatetoscreen(w, NULL);
+        auto frame_end = steady_clock::now();
+        double frame_ms = duration<double, std::milli>(frame_end - frame_start).count();
+        swell_lua_notify_frame(w, frame_ms, true);
+        frame_start = steady_clock::now();
       }
     }
     w = w->m_next;
   }
 
   fireTimers();
+
+  swell_lua_tick();
 }
 
 // ===========================================================================
