@@ -1149,8 +1149,8 @@ static bool menu_point_is_leaving_toward_child(MenuWindow *mw, float logical_x,
          y >= top && y < bottom;
 }
 
-static bool menu_outside_down_is_same_menubar_item(MenuWindow *root,
-                                                   const SDL_Event *evt)
+static bool menu_outside_down_is_other_menubar_item(MenuWindow *root,
+                                                    const SDL_Event *evt)
 {
   if (!root || !evt || evt->type != SDL_EVENT_MOUSE_BUTTON_DOWN ||
       evt->button.button != SDL_BUTTON_LEFT)
@@ -1172,7 +1172,7 @@ static bool menu_outside_down_is_same_menubar_item(MenuWindow *root,
 
   RECT item_sr = {};
   const int idx = swell_menubar_hittest(owner, wx, &item_sr);
-  return idx >= 0 && GetSubMenu(owner->m_menu, idx) == root->menu;
+  return idx >= 0 && GetSubMenu(owner->m_menu, idx) != root->menu;
 }
 
 static int menu_menubar_hittest_from_event(MenuWindow *root,
@@ -1594,10 +1594,10 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
       MenuWindow *mw = menu_find_by_window_id(root, evt->button.windowID);
       if (!mw) {
-        const bool same_menubar_item =
-            menu_outside_down_is_same_menubar_item(root, evt);
+        const bool other_menubar_item =
+            menu_outside_down_is_other_menubar_item(root, evt);
         menu_finish(root, 0);
-        return same_menubar_item;
+        return !other_menubar_item;
       }
       menu_clear_scroll_hover(root);
       int idx = -1;
