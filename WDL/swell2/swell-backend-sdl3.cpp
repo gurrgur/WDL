@@ -706,6 +706,15 @@ static void sdl_window_point_to_client(HWND hwnd, float *x, float *y)
 static bool swell_sdl_send_key(HWND hwnd, UINT msgtype, WPARAM wParam, LPARAM lParam)
 {
   if (!hwnd) return false;
+
+  // Inspector hotkey: Ctrl+Shift+I toggles
+  if (msgtype == WM_KEYDOWN) {
+    bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    if (swell_inspector_check_hotkey(wParam, ctrl, shift))
+      return true;
+  }
+
   MSG msg = { hwnd, msgtype, wParam, lParam, 0, {0, 0} };
   INT_PTR extra_flags = 0;
   if (SWELLAppMain(SWELLAPP_PROCESSMESSAGE, (INT_PTR)&msg, extra_flags) <= 0) {

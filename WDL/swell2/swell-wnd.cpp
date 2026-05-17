@@ -1654,12 +1654,33 @@ void UpdateWindow(HWND hwnd)
   SkCanvas *canvas = top->m_backingstore->getCanvas();
   if (canvas) {
     SWELL_internalSkiaPaint(top, canvas, 0, 0, false);
+
+    // Inspector highlight: red outline on selected window
+    if (g_swell_inspector_highlight && canvas) {
+      RECT hr;
+      if (GetWindowRect(g_swell_inspector_highlight, &hr)) {
+        SkPaint hp;
+        hp.setColor(SkColorSetARGB(180, 255, 40, 40));
+        hp.setStyle(SkPaint::kStroke_Style);
+        hp.setStrokeWidth(2.0f);
+        hp.setAntiAlias(true);
+        RECT cr; GetWindowRect(top, &cr);
+        float x = (float)(hr.left - cr.left);
+        float y = (float)(hr.top - cr.top);
+        float cw = (float)(hr.right - hr.left);
+        float ch = (float)(hr.bottom - hr.top);
+        canvas->drawRect(SkRect::MakeXYWH(x, y, cw, ch), hp);
+      }
+    }
+
     swell_oswindow_updatetoscreen(top, NULL);
   }
 
   auto t1 = steady_clock::now();
   double frame_ms = duration<double, std::milli>(t1 - t0).count();
   swell_lua_notify_frame(top, frame_ms, canvas != nullptr);
+  if (canvas)
+    swell_inspector_notify_frame(top, frame_ms);
 
   s_updatewindow_depth--;
 }
@@ -1952,10 +1973,31 @@ void SWELL_RunMessageLoop()
       SkCanvas *canvas = w->m_backingstore->getCanvas();
       if (canvas) {
         SWELL_internalSkiaPaint(w, canvas, 0, 0, false);
+
+        // Inspector highlight: red outline on selected window
+        if (g_swell_inspector_highlight) {
+          RECT hr;
+          if (GetWindowRect(g_swell_inspector_highlight, &hr) && canvas) {
+            SkPaint hp;
+            hp.setColor(SkColorSetARGB(180, 255, 40, 40));
+            hp.setStyle(SkPaint::kStroke_Style);
+            hp.setStrokeWidth(2.0f);
+            hp.setAntiAlias(true);
+            // Convert screen coords to canvas-local
+            RECT cr; GetWindowRect(w, &cr);
+            float x = (float)(hr.left - cr.left);
+            float y = (float)(hr.top - cr.top);
+            float cw = (float)(hr.right - hr.left);
+            float ch = (float)(hr.bottom - hr.top);
+            canvas->drawRect(SkRect::MakeXYWH(x, y, cw, ch), hp);
+          }
+        }
+
         swell_oswindow_updatetoscreen(w, NULL);
         auto frame_end = steady_clock::now();
         double frame_ms = duration<double, std::milli>(frame_end - frame_start).count();
         swell_lua_notify_frame(w, frame_ms, true);
+        swell_inspector_notify_frame(w, frame_ms);
         frame_start = steady_clock::now();
       }
     }
@@ -1965,6 +2007,7 @@ void SWELL_RunMessageLoop()
   fireTimers();
 
   swell_lua_tick();
+  swell_inspector_tick();
 }
 
 // ===========================================================================

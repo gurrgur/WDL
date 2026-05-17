@@ -25,6 +25,7 @@ set(SWELL2_SOURCES
   swell-stubs.cpp
   swell-appstub.cpp
   swell-lua.cpp
+  swell-inspector.cpp
 )
 
 # ---- backend selection ----

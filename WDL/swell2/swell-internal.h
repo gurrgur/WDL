@@ -713,4 +713,14 @@ void swell_lua_tick();
 void swell_lua_notify_frame(HWND hwnd, double frame_ms, bool painted);
 void swell_lua_shutdown();
 
+// swell-inspector.cpp: interactive HWND tree inspector
+extern HWND g_swell_inspector_highlight;
+void swell_inspector_init();
+void swell_inspector_tick();
+void swell_inspector_notify_frame(HWND hwnd, double frame_ms);
+void inspector_open();
+void inspector_close();
+void inspector_toggle();
+bool swell_inspector_check_hotkey(WPARAM vk, bool ctrl, bool shift);
+
 #endif // _SWELL_INTERNAL_H_
