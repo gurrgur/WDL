@@ -13,6 +13,7 @@
 #include "swell-menugen.h"
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
 
 // swell-functions.h defines Polygon(a,b,c) which clashes with SkPath::Polygon
 #undef Polygon
@@ -1672,6 +1673,8 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
                    int resvd, HWND hwnd, const RECT *r)
 {
   (void)resvd; (void)r;
+  fprintf(stderr, "[SWELL] TrackPopupMenu(hMenu=%p, flags=0x%x, xy=%d,%d, hwnd=%p title='%s' parent=%p)\n",
+          (void*)hMenu, flags, xpos, ypos, (void*)hwnd, hwnd ? hwnd->m_title.Get() : "(null)", hwnd ? (void*)hwnd->m_parent : nullptr);
   if (!hMenu || !hwnd) return 0;
 
   ReleaseCapture();
@@ -1719,6 +1722,15 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
 // WM_NCPAINT / menu bar drawing (called from DefWindowProc in swell-wnd.cpp)
 // ============================================================================
 
+// Check if a menu item name requests right-alignment via a leading
+// non-alphanumeric, non-ampersand character (Win32/REAPER convention).
+static bool wantRightAlignedMenuBarItem(const char *p)
+{
+  if (!p) return false;
+  char c = *p;
+  return c > 0 && c != '&' && !isalnum((unsigned char)c);
+}
+
 // Shared layout helper: iterates menu bar items measuring widths.
 // If hdc is non-NULL, draws each item (with highlight if hilight_idx matches).
 // If hit_x >= 0, finds which item contains that window-x coordinate.
@@ -1741,31 +1753,84 @@ static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *
 
   HFONT oldf = (HFONT)SelectObject(mdc, SWELL_GetDefaultFont());
 
-  int x = th.padding_button_h / 2;
-  int hit = -1;
   int n = menu->m_items.GetSize();
-  WDL_FastString stripMb;
   const int pad_h = th.padding_button_h;
-  const int item_r = th.corner_radius / 2;
-  for (int i = 0; i < n; i++) {
-    SWELL_MenuItem *it = menu->m_items.Get(i);
-    if (!it) continue;
-    const char *raw = it->m_name.Get();
-    if (!raw || !raw[0]) continue;
-    const char *txt = menu_strip_accel(raw, stripMb);
-    if (!txt || !txt[0]) continue;
+  const int margin = pad_h / 2;
 
-    RECT msz = { 0, 0, 0, 0 };
-    SWELL_DrawText(mdc, txt, -1, &msz, DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
-    int itemW = (msz.right - msz.left) + pad_h;
-    RECT itemR = { x, 0, x + itemW, barH };
+  // Get window width for right-alignment computation.
+  // Use m_position (pre-NCCALCSIZE) so the bar spans the full window width.
+  const int winW = hwnd->m_position.right - hwnd->m_position.left;
 
-    if (hit_x >= x && hit_x < x + itemW) {
-      hit = i;
-      if (rect_out) *rect_out = itemR;
+  // --- Pass 1: measure items, detect right-aligned last item, compute positions ---
+  WDL_FastString stripMb;
+  bool lastRight = false;
+  int itemX[128], itemW[128];
+  if (n > 128) n = 128; // safety clamp
+
+  {
+    int x = margin;
+    for (int i = 0; i < n; i++) {
+      SWELL_MenuItem *it = menu->m_items.Get(i);
+      itemX[i] = x;
+      itemW[i] = 0;
+      if (!it) continue;
+      const char *raw = it->m_name.Get();
+      if (!raw || !raw[0]) continue;
+
+      if (i == n - 1)
+        lastRight = wantRightAlignedMenuBarItem(raw);
+
+      const char *txt = menu_strip_accel(raw, stripMb);
+      if (!txt || !txt[0]) continue;
+
+      RECT msz = { 0, 0, 0, 0 };
+      SWELL_DrawText(mdc, txt, -1, &msz, DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
+      itemW[i] = (msz.right - msz.left) + pad_h;
+      x += itemW[i] + 2;
     }
 
-    if (hdc) {
+    // Reposition last item if right-aligned
+    if (lastRight && n > 0 && itemW[n - 1] > 0) {
+      const int right_x = winW - margin - itemW[n - 1];
+      // wdl_max: only move right if it won't collide with left-flow items
+      if (right_x > itemX[n - 1]) {
+        itemX[n - 1] = right_x;
+      }
+    }
+  }
+
+  // --- Pass 2: hit-test ---
+  int hit = -1;
+  if (hit_x >= 0) {
+    for (int i = 0; i < n; i++) {
+      if (itemW[i] == 0) continue;
+      if (hit_x >= itemX[i] && hit_x < itemX[i] + itemW[i]) {
+        hit = i;
+        if (rect_out) {
+          rect_out->left   = itemX[i];
+          rect_out->right  = itemX[i] + itemW[i];
+          rect_out->top    = 0;
+          rect_out->bottom = barH;
+        }
+        break;
+      }
+    }
+  }
+
+  // --- Pass 3: draw (only when paint DC is available) ---
+  if (hdc) {
+    const int item_r = th.corner_radius / 2;
+    for (int i = 0; i < n; i++) {
+      if (itemW[i] == 0) continue;
+      SWELL_MenuItem *it = menu->m_items.Get(i);
+      if (!it) continue;
+      const char *raw = it->m_name.Get();
+      if (!raw || !raw[0]) continue;
+      const char *txt = menu_strip_accel(raw, stripMb);
+      if (!txt || !txt[0]) continue;
+
+      RECT itemR = { itemX[i], 0, itemX[i] + itemW[i], barH };
+
       bool hl = (i == hilight_idx);
       if (hl) {
         HPEN np = (HPEN)GetStockObject(NULL_PEN);
@@ -1784,8 +1849,6 @@ static int menubar_layout(HWND hwnd, HDC hdc, int hit_x, int hilight_idx, RECT *
       SWELL_DrawText(hdc, txt, -1, &itemR,
                      DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
     }
-
-    x += itemW + 2;
   }
 
   SelectObject(mdc, oldf);
