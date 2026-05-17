@@ -218,9 +218,19 @@ LRESULT DefWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int idx = swell_menubar_hittest(hwnd, win_x, &item_sr);
         if (idx >= 0) {
           HMENU sub = GetSubMenu(hwnd->m_menu, idx);
-          if (sub)
+          if (sub) {
             TrackPopupMenu(sub, TPM_LEFTALIGN | TPM_TOPALIGN,
                            item_sr.left, item_sr.bottom, 0, hwnd, NULL);
+          } else {
+            MENUITEMINFO mi = { sizeof(mi), 0, };
+            mi.fMask = MIIM_ID | MIIM_STATE | MIIM_TYPE;
+            if (GetMenuItemInfo(hwnd->m_menu, idx, TRUE, &mi) &&
+                !(mi.fType & MFT_SEPARATOR) &&
+                !(mi.fState & (MFS_DISABLED|MFS_GRAYED)) &&
+                mi.wID) {
+              SendMessage(hwnd, WM_COMMAND, (WPARAM)mi.wID, 0);
+            }
+          }
         }
       }
       return 0;
