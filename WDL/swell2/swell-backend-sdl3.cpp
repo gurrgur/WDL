@@ -210,6 +210,7 @@ static void swell_sdl_set_x11_class(SDL_Window *window)
   s_set_class_hint(display, xid, &class_hint);
   if (s_flush) s_flush(display);
 }
+
 #else
 static void swell_sdl_set_x11_class(SDL_Window *) {}
 #endif
@@ -1595,8 +1596,10 @@ void SWELL_GetViewPort(RECT *r, const RECT *sourcerect, bool wantWork)
     if (d) display = d;
   }
   SDL_Rect dr = { 0, 0, 1024, 768 };
-  if ((wantWork ? SDL_GetDisplayUsableBounds(display, &dr) :
-                  SDL_GetDisplayBounds(display, &dr))) {
+  bool ok = wantWork ? SDL_GetDisplayUsableBounds(display, &dr) :
+                       SDL_GetDisplayBounds(display, &dr);
+
+  if (ok) {
     // SDL returns logical; swell uses physical
     r->left = swell_log_to_phys(dr.x);
     r->top = swell_log_to_phys(dr.y);

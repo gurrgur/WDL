@@ -560,7 +560,11 @@ struct MenuWindow {
   sk_sp<SkSurface> surface;
   SkFont         font;
   int            w, h;
+  int            content_h;
+  int            scroll_y;
+  int            l_sx, l_sy; // SDL logical screen position
   int            hovered;   // -1 = none
+  int            scroll_hover_dir;
   int            n_items;
   int           *item_y;    // top Y of each item (size n_items)
   bool           done;
@@ -568,16 +572,19 @@ struct MenuWindow {
   bool           ignore_initial_button_up;
   int            result;    // selected item ID, 0 = cancelled
   SDL_WindowID   window_id;
+  SDL_TimerID    scroll_timer;
   MenuWindow    *parent;
   MenuWindow    *child;
 
   MenuWindow() : menu(NULL), owner_hwnd(NULL), flags(0), sx(0), sy(0),
     sdlwin(NULL), renderer(NULL), texture(NULL),
-    hovered(-1), done(false), result(0), w(0), h(0),
-    n_items(0), item_y(NULL), sync_waiting(false),
-    ignore_initial_button_up(false), window_id(0),
+    w(0), h(0), content_h(0), scroll_y(0), l_sx(0), l_sy(0),
+    hovered(-1), scroll_hover_dir(0), n_items(0), item_y(NULL),
+    done(false), sync_waiting(false), ignore_initial_button_up(false),
+    result(0), window_id(0), scroll_timer(0),
     parent(NULL), child(NULL) {}
   ~MenuWindow() {
+    if (scroll_timer) SDL_RemoveTimer(scroll_timer);
     if (child) delete child;
     if (!parent && owner_hwnd)
       RemoveProp(owner_hwnd, "SWELL_MenuOwner");
@@ -590,6 +597,25 @@ struct MenuWindow {
 };
 
 static MenuWindow *g_active_menu = NULL;
+
+static Uint32 menu_scroll_timer_event_type()
+{
+  static Uint32 s_type = 0;
+  if (!s_type) s_type = SDL_RegisterEvents(1);
+  return s_type;
+}
+
+static Uint32 SDLCALL menu_scroll_timer_cb(void *, SDL_TimerID, Uint32 interval)
+{
+  Uint32 type = menu_scroll_timer_event_type();
+  if (type != (Uint32)-1) {
+    SDL_Event evt;
+    memset(&evt, 0, sizeof(evt));
+    evt.type = type;
+    SDL_PushEvent(&evt);
+  }
+  return interval;
+}
 
 // ---------------------------------------------------------------------------
 // Strip Win32 & accelerator prefix for display, stopping at \t shortcut sep.
@@ -681,7 +707,41 @@ static void menu_measure(MenuWindow *mw)
       y += menu_item_h();
   }
   mw->item_y[n] = y;
-  mw->h = y + menu_vpad();
+  mw->content_h = y + menu_vpad();
+  mw->h = mw->content_h;
+}
+
+static int menu_scroll_indicator_h()
+{
+  int h = menu_scaled_px(22);
+  if (h > menu_item_h()) h = menu_item_h();
+  return h;
+}
+
+static int menu_max_scroll(MenuWindow *mw)
+{
+  if (!mw || mw->content_h <= mw->h) return 0;
+  return mw->content_h - mw->h;
+}
+
+static void menu_clamp_scroll(MenuWindow *mw)
+{
+  if (!mw) return;
+  const int max_scroll = menu_max_scroll(mw);
+  if (mw->scroll_y < 0) mw->scroll_y = 0;
+  if (mw->scroll_y > max_scroll) mw->scroll_y = max_scroll;
+}
+
+static int menu_scroll_zone_at(MenuWindow *mw, int local_y)
+{
+  if (!mw || menu_max_scroll(mw) <= 0) return 0;
+  const int ind_h = menu_scroll_indicator_h();
+  if (mw->scroll_y > 0 && local_y >= 0 && local_y < ind_h)
+    return -1;
+  if (mw->scroll_y < menu_max_scroll(mw) &&
+      local_y >= mw->h - ind_h && local_y < mw->h)
+    return 1;
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -743,6 +803,9 @@ static void menu_draw(MenuWindow *mw)
   c->clipRRect(outer, true);
 
   const int item_pad = menu_outer_pad();
+
+  c->save();
+  c->translate(0.0f, (float)-mw->scroll_y);
 
   for (int i = 0; i < mw->n_items; i++) {
     SWELL_MenuItem *it = mw->menu->m_items.Get(i);
@@ -868,6 +931,50 @@ static void menu_draw(MenuWindow *mw)
   }
 
   c->restore();
+
+  const int max_scroll = menu_max_scroll(mw);
+  const int ind_h = menu_scroll_indicator_h();
+  if (max_scroll > 0) {
+    auto draw_scroll_overlay = [&](bool top) {
+      SkRect rr = top ?
+          SkRect::MakeLTRB(0.0f, 0.0f, (float)mw->w, (float)ind_h) :
+          SkRect::MakeLTRB(0.0f, (float)(mw->h - ind_h),
+                           (float)mw->w, (float)mw->h);
+
+      SkPaint op;
+      op.setAntiAlias(false);
+      op.setColor(swell_to_sk(th.bg_menu, 220));
+      c->drawRect(rr, op);
+
+      SkPaint ap;
+      ap.setAntiAlias(true);
+      ap.setColor(swell_to_sk(th.fg_text, 210));
+      ap.setStyle(SkPaint::kFill_Style);
+
+      const float cx = (float)mw->w * 0.5f;
+      const float cy = top ? (float)ind_h * 0.48f
+                           : (float)mw->h - (float)ind_h * 0.48f;
+      const float hw = (float)menu_scaled_px(5);
+      const float hh = (float)menu_scaled_px(4);
+      SkPath arrow;
+      if (top) {
+        arrow.moveTo(cx, cy - hh);
+        arrow.lineTo(cx - hw, cy + hh);
+        arrow.lineTo(cx + hw, cy + hh);
+      } else {
+        arrow.moveTo(cx, cy + hh);
+        arrow.lineTo(cx - hw, cy - hh);
+        arrow.lineTo(cx + hw, cy - hh);
+      }
+      arrow.close();
+      c->drawPath(arrow, ap);
+    };
+
+    if (mw->scroll_y > 0) draw_scroll_overlay(true);
+    if (mw->scroll_y < max_scroll) draw_scroll_overlay(false);
+  }
+
+  c->restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -898,6 +1005,55 @@ static void menu_present(MenuWindow *mw)
   SDL_FRect fr = { 0, 0, (float)pw, (float)ph };
   SDL_RenderTexture(mw->renderer, mw->texture, &fr, &fr);
   SDL_RenderPresent(mw->renderer);
+}
+
+static void menu_close_child(MenuWindow *mw);
+
+static bool menu_scroll_to(MenuWindow *mw, int y)
+{
+  if (!mw) return false;
+  const int old_y = mw->scroll_y;
+  mw->scroll_y = y;
+  menu_clamp_scroll(mw);
+  if (mw->scroll_y == old_y) return false;
+  menu_close_child(mw);
+  mw->hovered = -1;
+  menu_draw(mw);
+  menu_present(mw);
+  return true;
+}
+
+static bool menu_scroll_by(MenuWindow *mw, int dy)
+{
+  return menu_scroll_to(mw, mw ? mw->scroll_y + dy : 0);
+}
+
+static void menu_ensure_item_visible(MenuWindow *mw, int idx)
+{
+  if (!mw || idx < 0 || idx >= mw->n_items) return;
+  const int ind_h = menu_scroll_indicator_h();
+  int view_top = mw->scroll_y;
+  int view_bottom = mw->scroll_y + mw->h;
+  if (mw->scroll_y > 0) view_top += ind_h;
+  if (mw->scroll_y < menu_max_scroll(mw)) view_bottom -= ind_h;
+
+  int new_scroll = mw->scroll_y;
+  if (mw->item_y[idx] < view_top)
+    new_scroll = mw->item_y[idx] - (mw->scroll_y > 0 ? ind_h : 0);
+  else if (mw->item_y[idx + 1] > view_bottom)
+    new_scroll = mw->item_y[idx + 1] - mw->h +
+                 (mw->scroll_y < menu_max_scroll(mw) ? ind_h : 0);
+
+  if (new_scroll != mw->scroll_y)
+    menu_scroll_to(mw, new_scroll);
+}
+
+static void menu_clear_scroll_hover(MenuWindow *mw)
+{
+  while (mw) {
+    mw->scroll_hover_dir = 0;
+    mw = mw->child;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -969,7 +1125,11 @@ static bool menu_local_point_to_item(MenuWindow *mw, float logical_x,
     *idx = -1;
     return false;
   }
-  *idx = menu_hittest(mw, y);
+  if (menu_scroll_zone_at(mw, y)) {
+    *idx = -1;
+    return true;
+  }
+  *idx = menu_hittest(mw, y + mw->scroll_y);
   return true;
 }
 
@@ -981,8 +1141,8 @@ static bool menu_point_is_leaving_toward_child(MenuWindow *mw, float logical_x,
 
   const int x = (int)(swell_log_to_phys(logical_x) + 0.5f);
   const int y = (int)(swell_log_to_phys(logical_y) + 0.5f);
-  const int top = mw->item_y[mw->hovered] - menu_scaled_px(2);
-  const int bottom = mw->item_y[mw->hovered + 1] + menu_scaled_px(2);
+  const int top = mw->item_y[mw->hovered] - mw->scroll_y - menu_scaled_px(2);
+  const int bottom = mw->item_y[mw->hovered + 1] - mw->scroll_y + menu_scaled_px(2);
   const int slack = menu_scaled_px(3);
 
   return x >= mw->w - slack && x <= mw->w + slack &&
@@ -1068,6 +1228,14 @@ static int menu_phys_to_log_i(int phys)
   return (int)(v + (v >= 0.0f ? 0.5f : -0.5f));
 }
 
+static int menu_phys_to_log_ceil_i(int phys)
+{
+  const float v = swell_phys_to_log((float)phys);
+  int i = (int)v;
+  if ((float)i < v) i++;
+  return i;
+}
+
 static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
                                       HWND owner_hwnd, int flags,
                                       MenuWindow *parent)
@@ -1087,41 +1255,94 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
 
   menu_measure(mw);
 
-  RECT screen;
-  SWELL_GetViewPort(&screen, NULL, true);
-  if (sx + mw->w > screen.right)  sx = screen.right - mw->w;
-  if (sy + mw->h > screen.bottom) sy = screen.bottom - mw->h;
-  if (sx < screen.left)           sx = screen.left;
-  if (sy < screen.top)            sy = screen.top;
-  mw->sx = sx;
-  mw->sy = sy;
-
-  int l_w = menu_phys_to_log_i(mw->w);
-  int l_h = menu_phys_to_log_i(mw->h);
-  if (l_w < 1) l_w = 1;
-  if (l_h < 1) l_h = 1;
-
   SDL_Window *parent_sdlwin = parent ? parent->sdlwin : NULL;
-  int rel_lx = 0, rel_ly = 0;
+  int parent_lx = 0, parent_ly = 0, parent_lw = 0, parent_lh = 0;
   if (parent_sdlwin) {
-    rel_lx = menu_phys_to_log_i(sx - parent->sx);
-    rel_ly = menu_phys_to_log_i(sy - parent->sy);
+    parent_lx = parent->l_sx;
+    parent_ly = parent->l_sy;
+    parent_lw = parent->w;
+    parent_lh = parent->h;
   } else {
     HWND__ *osw = owner_hwnd;
     while (osw && !osw->m_oswindow)
       osw = osw->m_owner ? osw->m_owner : (HWND__*)osw->m_parent;
     parent_sdlwin = osw ? (SDL_Window *)osw->m_oswindow : NULL;
     if (parent_sdlwin) {
-      int px = 0, py = 0;
-      SDL_GetWindowPosition(parent_sdlwin, &px, &py);
-      rel_lx = menu_phys_to_log_i(sx) - px;
-      rel_ly = menu_phys_to_log_i(sy) - py;
+      SDL_GetWindowPosition(parent_sdlwin, &parent_lx, &parent_ly);
+      SDL_GetWindowSize(parent_sdlwin, &parent_lw, &parent_lh);
     }
   }
   if (!parent_sdlwin) {
     delete mw;
     return NULL;
   }
+
+  int l_sx = menu_phys_to_log_i(sx);
+  int l_sy = menu_phys_to_log_i(sy);
+  int l_w = menu_phys_to_log_ceil_i(mw->w);
+  int l_content_h = menu_phys_to_log_ceil_i(mw->content_h);
+  if (l_w < 1) l_w = 1;
+  if (l_content_h < 1) l_content_h = 1;
+
+  RECT work_phys = { 0, 0, 1024, 768 };
+  RECT source_phys = { sx, sy, sx + 1, sy + 1 };
+  SWELL_GetViewPort(&work_phys, &source_phys, true);
+  SDL_Rect work = {
+    menu_phys_to_log_i(work_phys.left),
+    menu_phys_to_log_i(work_phys.top),
+    menu_phys_to_log_i(work_phys.right - work_phys.left),
+    menu_phys_to_log_i(work_phys.bottom - work_phys.top)
+  };
+  if (work.w < 1) work.w = 1;
+  if (work.h < 1) work.h = 1;
+
+  if (l_sx + l_w > work.x + work.w) l_sx = work.x + work.w - l_w;
+  if (l_sx < work.x) l_sx = work.x;
+
+  const bool anchored_menu =
+      parent != NULL || (!parent && menu_is_owner_menubar_submenu(mw));
+  const char *video_driver = SDL_GetCurrentVideoDriver();
+  const bool root_menubar_relative =
+      anchored_menu && !parent && parent_lh > 0 &&
+      video_driver && !strcmp(video_driver, "wayland");
+
+  int l_h = l_content_h;
+  if (root_menubar_relative) {
+    if (l_sy < 0) l_sy = 0;
+    if (l_sy >= parent_lh) l_sy = parent_lh - 1;
+    int avail_h = parent_lh - l_sy;
+    if (avail_h < 1) avail_h = 1;
+    if (l_h > avail_h) l_h = avail_h;
+  } else if (anchored_menu) {
+    if (l_sy < work.y) l_sy = work.y;
+    if (l_sy >= work.y + work.h) l_sy = work.y + work.h - 1;
+    int avail_h = work.y + work.h - l_sy;
+    if (avail_h < 1) avail_h = 1;
+    if (l_h > avail_h) l_h = avail_h;
+  } else {
+    if (l_content_h > work.h && work.h > 0) {
+      l_sy = work.y;
+      l_h = work.h;
+    } else {
+      if (l_sy + l_content_h > work.y + work.h)
+        l_sy = work.y + work.h - l_content_h;
+      if (l_sy < work.y) l_sy = work.y;
+      l_h = l_content_h;
+    }
+  }
+  if (l_h < 1) l_h = 1;
+  mw->h = (l_h >= l_content_h) ? mw->content_h : (int)swell_log_to_phys((float)l_h);
+  if (mw->h < 1) mw->h = 1;
+  menu_clamp_scroll(mw);
+  sx = (int)swell_log_to_phys((float)l_sx);
+  sy = (int)swell_log_to_phys((float)l_sy);
+  mw->sx = sx;
+  mw->sy = sy;
+  mw->l_sx = l_sx;
+  mw->l_sy = l_sy;
+
+  const int rel_lx = l_sx - parent_lx;
+  const int rel_ly = l_sy - parent_ly;
 
   mw->sdlwin = SDL_CreatePopupWindow(parent_sdlwin,
       rel_lx, rel_ly, l_w, l_h,
@@ -1143,6 +1364,9 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
   SDL_GetWindowSizeInPixels(mw->sdlwin, &pix_w, &pix_h);
   if (pix_w < 1) pix_w = mw->w;
   if (pix_h < 1) pix_h = mw->h;
+  mw->w = pix_w;
+  mw->h = pix_h;
+  menu_clamp_scroll(mw);
   mw->surface = SkSurfaces::Raster(
       SkImageInfo::Make(pix_w, pix_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
   if (!mw->surface) {
@@ -1153,7 +1377,12 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
   menu_draw(mw);
   menu_present(mw);
   SDL_ShowWindow(mw->sdlwin);
-  if (!mw->parent) SetProp(mw->owner_hwnd, "SWELL_MenuOwner", (HANDLE)1);
+  if (!mw->parent) {
+    SetProp(mw->owner_hwnd, "SWELL_MenuOwner", (HANDLE)1);
+    Uint32 type = menu_scroll_timer_event_type();
+    if (type != (Uint32)-1)
+      mw->scroll_timer = SDL_AddTimer(35, menu_scroll_timer_cb, NULL);
+  }
   return mw;
 }
 
@@ -1197,7 +1426,7 @@ static bool menu_open_child(MenuWindow *mw, int idx)
   SendMessage(mw->owner_hwnd, WM_INITMENUPOPUP, (WPARAM)it->m_submenu,
               MAKELPARAM(idx, FALSE));
   mw->child = menu_create_window(it->m_submenu, mw->sx + mw->w,
-                                 mw->sy + mw->item_y[idx],
+                                 mw->sy + mw->item_y[idx] - mw->scroll_y,
                                  mw->owner_hwnd, mw->flags, mw);
   return mw->child != NULL;
 }
@@ -1208,6 +1437,8 @@ static void menu_activate_item(MenuWindow *mw, int idx)
   SWELL_MenuItem *it = mw->menu->m_items.Get(idx);
   if (!it || (it->m_flags & (MF_GRAYED|MF_DISABLED|MF_SEPARATOR))) return;
 
+  mw->hovered = idx;
+  menu_ensure_item_visible(mw, idx);
   mw->hovered = idx;
   menu_draw(mw);
   menu_present(mw);
@@ -1232,6 +1463,8 @@ static void menu_select_delta(MenuWindow *mw, int dir)
       if (i != mw->hovered) {
         menu_close_child(mw);
         mw->hovered = i;
+        menu_ensure_item_visible(mw, i);
+        mw->hovered = i;
         menu_draw(mw);
         menu_present(mw);
       }
@@ -1249,6 +1482,8 @@ static void menu_select_edge(MenuWindow *mw, int dir)
     if (it && !(it->m_flags & (MF_SEPARATOR|MF_GRAYED|MF_DISABLED))) {
       menu_close_child(mw);
       mw->hovered = i;
+      menu_ensure_item_visible(mw, i);
+      mw->hovered = i;
       menu_draw(mw);
       menu_present(mw);
       return;
@@ -1262,6 +1497,17 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
   if (!evt || !g_active_menu) return false;
 
   MenuWindow *root = g_active_menu;
+  if (evt->type == menu_scroll_timer_event_type()) {
+    for (MenuWindow *mw = root; mw; mw = mw->child) {
+      if (mw->scroll_hover_dir) {
+        const int step = menu_item_h() > 1 ? menu_item_h() / 2 : 1;
+        menu_scroll_by(mw, mw->scroll_hover_dir * step);
+        return true;
+      }
+    }
+    return true;
+  }
+
   switch (evt->type) {
     case SDL_EVENT_QUIT:
       menu_finish(root, 0);
@@ -1295,7 +1541,27 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
 
     case SDL_EVENT_MOUSE_MOTION: {
       MenuWindow *mw = menu_find_by_window_id(root, evt->motion.windowID);
-      if (!mw) return menu_switch_to_menubar_item(root, evt);
+      if (!mw) {
+        menu_clear_scroll_hover(root);
+        return menu_switch_to_menubar_item(root, evt);
+      }
+
+      const int local_y = (int)(swell_log_to_phys(evt->motion.y) + 0.5f);
+      const int scroll_zone = menu_scroll_zone_at(mw, local_y);
+      menu_clear_scroll_hover(root);
+      if (scroll_zone) {
+        mw->scroll_hover_dir = scroll_zone;
+        if (mw->hovered != -1 || mw->child) {
+          menu_close_child(mw);
+          mw->hovered = -1;
+          menu_draw(mw);
+          menu_present(mw);
+        }
+        const int step = menu_item_h() > 1 ? menu_item_h() / 2 : 1;
+        menu_scroll_by(mw, scroll_zone * step);
+        return true;
+      }
+
       int newhov = -1;
       menu_local_point_to_item(mw, evt->motion.x, evt->motion.y, &newhov);
       if (newhov != mw->hovered) {
@@ -1311,6 +1577,20 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
       return true;
     }
 
+    case SDL_EVENT_MOUSE_WHEEL: {
+      MenuWindow *mw = menu_find_by_window_id(root, evt->wheel.windowID);
+      if (!mw) return false;
+      menu_clear_scroll_hover(root);
+      if (menu_max_scroll(mw) <= 0) return true;
+
+      const float wy = evt->wheel.y;
+      int dy = (int)(-wy * (float)menu_item_h() * 3.0f);
+      if (dy == 0 && wy != 0.0f)
+        dy = wy > 0.0f ? -menu_item_h() : menu_item_h();
+      if (dy != 0) menu_scroll_by(mw, dy);
+      return true;
+    }
+
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
       MenuWindow *mw = menu_find_by_window_id(root, evt->button.windowID);
       if (!mw) {
@@ -1319,6 +1599,7 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
         menu_finish(root, 0);
         return same_menubar_item;
       }
+      menu_clear_scroll_hover(root);
       int idx = -1;
       if (!menu_local_point_to_item(mw, evt->button.x, evt->button.y, &idx)) {
         menu_finish(root, 0);
@@ -1344,6 +1625,7 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
         menu_finish(root, 0);
         return false;
       }
+      menu_clear_scroll_hover(root);
       int idx = -1;
       if (!menu_local_point_to_item(mw, evt->button.x, evt->button.y, &idx)) {
         menu_finish(root, 0);
@@ -1356,6 +1638,7 @@ bool swell_menu_sdl_handle_event(SDL_Event *evt)
     case SDL_EVENT_WINDOW_MOUSE_LEAVE: {
       MenuWindow *mw = menu_find_by_window_id(root, evt->window.windowID);
       if (mw) {
+        mw->scroll_hover_dir = 0;
         if (!mw->child) {
           mw->hovered = -1;
           menu_draw(mw);
@@ -1534,9 +1817,16 @@ int swell_menubar_hittest(HWND hwnd, int win_x, RECT *item_screen_rect_out)
   RECT wr = { 0, 0, 0, 0 };
   int hit = menubar_layout(hwnd, NULL, win_x, -1, &wr);
   if (hit >= 0 && item_screen_rect_out) {
-    // convert window rect to screen by adding window's screen origin
     int sx = hwnd->m_position.left;
     int sy = hwnd->m_position.top;
+#ifdef SWELL_TARGET_SDL3
+    if (!hwnd->m_parent && hwnd->m_oswindow) {
+      int lx = 0, ly = 0;
+      SDL_GetWindowPosition((SDL_Window *)hwnd->m_oswindow, &lx, &ly);
+      sx = (int)swell_log_to_phys((float)lx);
+      sy = (int)swell_log_to_phys((float)ly);
+    }
+#endif
     item_screen_rect_out->left   = sx + wr.left;
     item_screen_rect_out->top    = sy + wr.top;
     item_screen_rect_out->right  = sx + wr.right;
