@@ -262,6 +262,14 @@ struct __SWELL_editControlState {
   WDL_TypedBuf<int> ml_dline_ends;
   WDL_TypedBuf<int> ml_char2dline;
   int ml_cached_w;
+  int ml_cached_multiline;
+  int ml_cached_rowh;
+  WDL_TypedBuf<int> ml_dline_char_starts;
+  WDL_TypedBuf<int> ml_dline_char_ends;
+  WDL_TypedBuf<int> ml_dline_xidx;
+  WDL_TypedBuf<int> ml_dline_widths;
+  WDL_TypedBuf<int> ml_xpos;
+  WDL_TypedBuf<int> ml_bpos;
 
   __SWELL_editControlState() : cursor_pos(0), sel1(-1), sel2(-1),
     cursor_state(0), cursor_timer(0), scroll_x(0), scroll_y(0),
@@ -270,7 +278,7 @@ struct __SWELL_editControlState {
     max_height(0), max_width(0), cache_linelen_w(0),
     cache_linelen_strlen(0), m_disable_contextmenu(false),
     m_mouse_sel_active(false), m_mouse_sel_anchor(0),
-    ml_cached_w(-1) {}
+    ml_cached_w(-1), ml_cached_multiline(-1), ml_cached_rowh(0) {}
 };
 
 class SWELL_ListView_Row {

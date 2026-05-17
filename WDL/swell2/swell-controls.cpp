@@ -621,6 +621,170 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 // 2. editWindowProc
 // ===========================================================================
 
+static int edit_measure_utf8_width(const SkFont &font, const char *buf, int len)
+{
+  if (!buf || len <= 0) return 0;
+  WDL_FastString tmp;
+  int out_len = len;
+  const char *p = swell_text_for_skia(buf, len, tmp, &out_len);
+  if (!p || out_len <= 0) return 0;
+  return (int)(font.measureText(p, out_len, SkTextEncoding::kUTF8) + 0.5f);
+}
+
+static bool edit_is_wrap_space(const char *txt, int byte_pos, int byte_end)
+{
+  if (byte_pos < 0 || byte_pos >= byte_end) return false;
+  unsigned char c = (unsigned char)txt[byte_pos];
+  return c == ' ' || c == '\t';
+}
+
+static void edit_clear_layout(__SWELL_editControlState *st)
+{
+  if (!st) return;
+  st->ml_dline_starts.Resize(0, false);
+  st->ml_dline_ends.Resize(0, false);
+  st->ml_char2dline.Resize(0, false);
+  st->ml_dline_char_starts.Resize(0, false);
+  st->ml_dline_char_ends.Resize(0, false);
+  st->ml_dline_xidx.Resize(0, false);
+  st->ml_dline_widths.Resize(0, false);
+  st->ml_xpos.Resize(0, false);
+  st->ml_bpos.Resize(0, false);
+  st->max_width = 0;
+}
+
+static void edit_add_layout_line(__SWELL_editControlState *st,
+                                 const WDL_TypedBuf<int> &bytes,
+                                 const WDL_TypedBuf<int> &xpos,
+                                 int char_base, int first_char,
+                                 int last_char)
+{
+  if (!st) return;
+  if (first_char < 0) first_char = 0;
+  if (last_char < first_char) last_char = first_char;
+  const int npos = bytes.GetSize();
+  if (last_char >= npos) last_char = npos > 0 ? npos - 1 : 0;
+
+  const int xidx = st->ml_xpos.GetSize();
+  const int base_x = xpos.Get()[first_char];
+  for (int i = first_char; i <= last_char; ++i) {
+    st->ml_xpos.Add(xpos.Get()[i] - base_x);
+    st->ml_bpos.Add(bytes.Get()[i]);
+  }
+
+  const int width = xpos.Get()[last_char] - base_x;
+  st->ml_dline_starts.Add(bytes.Get()[first_char]);
+  st->ml_dline_ends.Add(bytes.Get()[last_char]);
+  st->ml_dline_char_starts.Add(char_base + first_char);
+  st->ml_dline_char_ends.Add(char_base + last_char);
+  st->ml_dline_xidx.Add(xidx);
+  st->ml_dline_widths.Add(width);
+  if (width > st->max_width) st->max_width = width;
+}
+
+static void edit_layout_logical_line(__SWELL_editControlState *st,
+                                     const SkFont &font,
+                                     const char *txt,
+                                     int byte_start, int byte_end,
+                                     int char_start,
+                                     int wrap_width,
+                                     bool multiline)
+{
+  WDL_TypedBuf<int> bytes;
+  WDL_TypedBuf<int> xpos;
+  bytes.Add(byte_start);
+  xpos.Add(0);
+
+  int x = 0;
+  for (int b = byte_start; b < byte_end;) {
+    int clen = wdl_utf8_parsechar(txt + b, NULL);
+    if (clen < 1) clen = 1;
+    if (b + clen > byte_end) clen = byte_end - b;
+    x += edit_measure_utf8_width(font, txt + b, clen);
+    b += clen;
+    bytes.Add(b);
+    xpos.Add(x);
+  }
+
+  const int nchars = bytes.GetSize() - 1;
+  if (nchars <= 0 || !multiline || wrap_width <= 0) {
+    edit_add_layout_line(st, bytes, xpos, char_start, 0, nchars);
+    return;
+  }
+
+  int first = 0;
+  while (first < nchars) {
+    int last = first + 1;
+    while (last < nchars && xpos.Get()[last + 1] - xpos.Get()[first] <= wrap_width)
+      ++last;
+
+    if (last < nchars) {
+      int space_break = -1;
+      for (int i = first + 1; i <= last; ++i) {
+        if (edit_is_wrap_space(txt, bytes.Get()[i - 1], byte_end))
+          space_break = i;
+      }
+      if (space_break > first) last = space_break;
+    }
+
+    edit_add_layout_line(st, bytes, xpos, char_start, first, last);
+    first = last;
+  }
+}
+
+static void edit_ensure_layout(HWND hwnd, __SWELL_editControlState *st,
+                               const SkFont &font, const char *txt,
+                               int text_len, int width, int rowH,
+                               bool multiline)
+{
+  if (!st) return;
+  if (width < 1) width = 1;
+  const int multiline_i = multiline ? 1 : 0;
+  if (st->ml_cached_text.GetLength() == text_len &&
+      strcmp(st->ml_cached_text.Get(), txt) == 0 &&
+      st->ml_cached_w == width &&
+      st->ml_cached_multiline == multiline_i &&
+      st->ml_cached_rowh == rowH)
+    return;
+
+  st->ml_cached_text.Set(txt);
+  st->ml_cached_w = width;
+  st->ml_cached_multiline = multiline_i;
+  st->ml_cached_rowh = rowH;
+  edit_clear_layout(st);
+
+  if (!multiline) {
+    edit_layout_logical_line(st, font, txt, 0, text_len, 0, 0, false);
+    return;
+  }
+
+  int line_start = 0;
+  int char_start = 0;
+  for (int i = 0;; ++i) {
+    if (txt[i] == '\n' || txt[i] == 0) {
+      edit_layout_logical_line(st, font, txt, line_start, i, char_start,
+                               width, true);
+      if (txt[i] == 0) break;
+      line_start = i + 1;
+      char_start = WDL_utf8_bytepos_to_charpos(txt, line_start);
+    }
+  }
+
+  if (st->ml_dline_starts.GetSize() < 1)
+    edit_layout_logical_line(st, font, txt, 0, 0, 0, width, true);
+}
+
+static int edit_layout_line_from_byte(__SWELL_editControlState *st, int byte_pos)
+{
+  if (!st || st->ml_dline_starts.GetSize() < 1) return 0;
+  const int n = st->ml_dline_starts.GetSize();
+  for (int i = 0; i < n; ++i) {
+    if (byte_pos <= st->ml_dline_ends.Get()[i]) return i;
+    if (i + 1 < n && byte_pos < st->ml_dline_starts.Get()[i + 1]) return i;
+  }
+  return n - 1;
+}
+
 static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState *st)
 {
   const char *txt_orig = hwnd->m_title.Get();
