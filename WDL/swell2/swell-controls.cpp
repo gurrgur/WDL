@@ -4044,6 +4044,10 @@ LRESULT comboWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_LBUTTONDOWN:
       if (!st) return 0;
+      if (GetProp(hwnd, "SWELL_MenuOwner")) {
+        st->dropdown_armed = false;
+        return 0;
+      }
       SetFocus(hwnd);
       {
         RECT cr; GetClientRect(hwnd, &cr);
