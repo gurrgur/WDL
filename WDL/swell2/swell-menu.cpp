@@ -1690,10 +1690,9 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
       (g_swell_sdl_current_event_type == SDL_EVENT_MOUSE_BUTTON_DOWN);
   g_active_menu = root;
 
-  if (!(flags & TPM_RETURNCMD)) {
-    return TRUE;
-  }
-
+  // Win32 TrackPopupMenu is always modal; only the return value differs
+  // (cmd id vs TRUE + posted WM_COMMAND). Block until the menu closes so
+  // the caller can safely DestroyMenu(hMenu) afterwards.
   root->sync_waiting = true;
   while (!root->done) {
     SWELL_RunEvents();
@@ -1703,7 +1702,10 @@ int TrackPopupMenu(HMENU hMenu, int flags, int xpos, int ypos,
 
   int cmd = root->result;
   delete root;
-  return cmd;
+  if (flags & TPM_RETURNCMD) return cmd;
+  if (cmd && !(flags & TPM_NONOTIFY))
+    SendMessage(hwnd, WM_COMMAND, (WPARAM)cmd, 0);
+  return TRUE;
 }
 
 #else  // headless stub for TrackPopupMenu
