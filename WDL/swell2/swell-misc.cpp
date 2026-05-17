@@ -568,10 +568,11 @@ char *BrowseForFiles(const char *text, const char *initialdir,
   char *raw = zenity_run(cmd);
   if (!raw) return NULL;
 
-  if (!allowmul) {
-    // Return double-null terminated buffer (Win32 convention, matches
-    // original SWELL calloc(l+2) format). Callers parse by scanning
-    // until double-null, even for single-file results.
+  if (!allowmul || !strchr(raw, '|')) {
+    // Single file (or single file selected in multi mode): return full
+    // path with double-null termination. Matches original SWELL behavior
+    // where single selection in OPENMULTI mode takes the else-branch
+    // and returns calloc(l+2) for the complete path.
     size_t len = strlen(raw);
     char *out = (char *)malloc(len + 2);
     if (!out) { free(raw); return NULL; }
@@ -581,7 +582,7 @@ char *BrowseForFiles(const char *text, const char *initialdir,
     return out;
   }
 
-  // Convert '|'-separated full paths to Win32 allowmul=1 format:
+  // Multi-file: convert '|'-separated full paths to Win32 allowmul=1 format:
   // "dir/file1|dir/file2" -> "dir/\0file1\0file2\0\0"
   size_t len = strlen(raw);
 
