@@ -802,6 +802,70 @@ static int edit_line_char_from_x(__SWELL_editControlState *st, int line, int x)
   return c1;
 }
 
+static int edit_layout_line_from_char(__SWELL_editControlState *st, int char_pos)
+{
+  if (!st || st->ml_dline_char_starts.GetSize() < 1) return 0;
+  const int n = st->ml_dline_char_starts.GetSize();
+  for (int i = 0; i < n; ++i) {
+    if (char_pos <= st->ml_dline_char_ends.Get()[i]) return i;
+    if (i + 1 < n && char_pos < st->ml_dline_char_starts.Get()[i + 1]) return i;
+  }
+  return n - 1;
+}
+
+static int edit_line_x_from_char(__SWELL_editControlState *st, int line, int char_pos)
+{
+  if (!st || line < 0 || line >= st->ml_dline_char_starts.GetSize()) return 0;
+  const int c0 = st->ml_dline_char_starts.Get()[line];
+  const int c1 = st->ml_dline_char_ends.Get()[line];
+  if (char_pos < c0) char_pos = c0;
+  if (char_pos > c1) char_pos = c1;
+  return st->ml_xpos.Get()[st->ml_dline_xidx.Get()[line] + char_pos - c0];
+}
+
+static bool edit_prepare_layout(HWND hwnd, __SWELL_editControlState *st,
+                                int *rowHOut, int *viewHOut)
+{
+  if (!hwnd || !st) return false;
+  RECT cr; GetClientRect(hwnd, &cr);
+  const swell_theme &th = g_swell_theme;
+  RECT tr = { cr.left + th.padding_edit_h, cr.top + th.padding_edit_v,
+              cr.right - th.padding_edit_h, cr.bottom - th.padding_edit_v };
+
+  HDC hdc = GetDC(hwnd);
+  if (!hdc) return false;
+  HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
+  if (f) SelectObject(hdc, f);
+  TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+  int rowH = tm.tmHeight + 2;
+  SkFont skfont = swell_make_skfont_from_hdc(hdc);
+
+  const char *txt = hwnd->m_title.Get();
+  int text_chars = WDL_utf8_get_charlen(txt);
+  WDL_FastString pass;
+  if (hwnd->m_style & ES_PASSWORD) {
+    for (int i = 0; i < text_chars; ++i) pass.Append("*", 1);
+    txt = pass.Get();
+  }
+
+  const bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
+  int layout_w = tr.right - tr.left;
+  edit_ensure_layout(hwnd, st, skfont, txt, (int)strlen(txt), layout_w, rowH,
+                     multiline);
+  const int viewH = tr.bottom - tr.top;
+  if (multiline && st->ml_dline_starts.GetSize() * rowH > viewH) {
+    tr.right -= th.scrollbar_width;
+    layout_w = tr.right - tr.left;
+    edit_ensure_layout(hwnd, st, skfont, txt, (int)strlen(txt), layout_w, rowH,
+                       true);
+  }
+
+  ReleaseDC(hwnd, hdc);
+  if (rowHOut) *rowHOut = rowH;
+  if (viewHOut) *viewHOut = viewH;
+  return st->ml_dline_starts.GetSize() > 0;
+}
+
 static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState *st)
 {
   const char *txt_orig = hwnd->m_title.Get();
@@ -1179,6 +1243,7 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int nch = WDL_utf8_get_charlen(t);
       bool shift = (lParam & FSHIFT) != 0;
       bool ctrl  = (lParam & FCONTROL) != 0;
+      bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
 
       // --- Clipboard shortcuts (Ctrl+C/X/V) ---
       if (ctrl && (wParam == 'C' || wParam == 'c' ||
@@ -1252,7 +1317,12 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       if (wParam == VK_HOME) {
         int old_pos = st->cursor_pos;
-        st->cursor_pos = 0;
+        if (multiline && !ctrl && edit_prepare_layout(hwnd, st, NULL, NULL)) {
+          int line = edit_layout_line_from_char(st, st->cursor_pos);
+          st->cursor_pos = st->ml_dline_char_starts.Get()[line];
+        } else {
+          st->cursor_pos = 0;
+        }
         if (!shift) { st->sel1 = st->sel2 = -1; }
         else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
         InvalidateRect(hwnd, NULL, FALSE);
@@ -1260,7 +1330,12 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       if (wParam == VK_END) {
         int old_pos = st->cursor_pos;
-        st->cursor_pos = nch;
+        if (multiline && !ctrl && edit_prepare_layout(hwnd, st, NULL, NULL)) {
+          int line = edit_layout_line_from_char(st, st->cursor_pos);
+          st->cursor_pos = st->ml_dline_char_ends.Get()[line];
+        } else {
+          st->cursor_pos = nch;
+        }
         if (!shift) { st->sel1 = st->sel2 = -1; }
         else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
         InvalidateRect(hwnd, NULL, FALSE);
@@ -1286,74 +1361,32 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 1;
       }
-      if (hwnd->m_style & ES_MULTILINE) {
-        // build line-offset arrays (byte positions)
-        WDL_TypedBuf<int> lineStarts, lineEnds;
-        lineStarts.Add(0);
-        for (int i = 0; i < len; i++) { if (t[i] == '\n') { lineEnds.Add(i); lineStarts.Add(i+1); } }
-        lineEnds.Add(len);
-        // convert cursor position to byte offset for line-finding
-        int cursBpos = WDL_utf8_charpos_to_bytepos(t, st->cursor_pos);
-        // find current logical line
-        int curLine = 0;
-        for (int li = 0; li < lineStarts.GetSize(); li++) {
-          if (cursBpos >= lineStarts.Get()[li] && cursBpos <= lineEnds.Get()[li]) { curLine = li; break; }
-        }
-        if (wParam == VK_UP) {
-          if (curLine > 0) {
-            int colChars = WDL_utf8_bytepos_to_charpos(
-                t + lineStarts.Get()[curLine], cursBpos - lineStarts.Get()[curLine]);
-            int prevByteLen = lineEnds.Get()[curLine-1] - lineStarts.Get()[curLine-1];
-            int prevChars = WDL_utf8_bytepos_to_charpos(
-                t + lineStarts.Get()[curLine-1], prevByteLen);
-            if (colChars > prevChars) colChars = prevChars;
-            int newBpos = lineStarts.Get()[curLine-1] +
-                          WDL_utf8_charpos_to_bytepos(t + lineStarts.Get()[curLine-1], colChars);
-            int old_pos = st->cursor_pos;
-            st->cursor_pos = WDL_utf8_bytepos_to_charpos(t, newBpos);
-            if (!shift) { st->sel1 = st->sel2 = -1; }
-            else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
-            InvalidateRect(hwnd, NULL, FALSE);
+      if (multiline && (wParam == VK_UP || wParam == VK_DOWN ||
+                        wParam == VK_PRIOR || wParam == VK_NEXT)) {
+        int rowH = 0, viewH = 0;
+        if (edit_prepare_layout(hwnd, st, &rowH, &viewH)) {
+          const int line_count = st->ml_dline_starts.GetSize();
+          int curLine = edit_layout_line_from_char(st, st->cursor_pos);
+          int targetLine = curLine;
+          if (wParam == VK_UP) targetLine--;
+          else if (wParam == VK_DOWN) targetLine++;
+          else {
+            int pagesz = rowH > 0 ? viewH / rowH : 1;
+            if (pagesz < 1) pagesz = 1;
+            targetLine += (wParam == VK_PRIOR ? -pagesz : pagesz);
           }
-          return 1;
-        }
-        if (wParam == VK_DOWN) {
-          if (curLine + 1 < lineStarts.GetSize()) {
-            int colChars = WDL_utf8_bytepos_to_charpos(
-                t + lineStarts.Get()[curLine], cursBpos - lineStarts.Get()[curLine]);
-            int nextByteLen = lineEnds.Get()[curLine+1] - lineStarts.Get()[curLine+1];
-            int nextChars = WDL_utf8_bytepos_to_charpos(
-                t + lineStarts.Get()[curLine+1], nextByteLen);
-            if (colChars > nextChars) colChars = nextChars;
-            int newBpos = lineStarts.Get()[curLine+1] +
-                          WDL_utf8_charpos_to_bytepos(t + lineStarts.Get()[curLine+1], colChars);
-            int old_pos = st->cursor_pos;
-            st->cursor_pos = WDL_utf8_bytepos_to_charpos(t, newBpos);
-            if (!shift) { st->sel1 = st->sel2 = -1; }
-            else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
-            InvalidateRect(hwnd, NULL, FALSE);
-          }
-          return 1;
-        }
-        if (wParam == VK_PRIOR || wParam == VK_NEXT) {
-          RECT cr; GetClientRect(hwnd, &cr);
-          int viewH = (cr.bottom - cr.top) - g_swell_theme.padding_edit_v * 2;
-          int rh = st->max_height > 0 ? st->max_height : 16;
-          int pagesz = viewH / rh;
-          if (pagesz < 1) pagesz = 1;
-          int targetLine = curLine + (wParam == VK_PRIOR ? -pagesz : pagesz);
+
           if (targetLine < 0) targetLine = 0;
-          if (targetLine >= lineStarts.GetSize()) targetLine = lineStarts.GetSize() - 1;
-          int col = st->cursor_pos - lineStarts.Get()[curLine];
-          int targLen = lineEnds.Get()[targetLine] - lineStarts.Get()[targetLine];
-          if (col > targLen) col = targLen;
+          if (targetLine >= line_count) targetLine = line_count - 1;
+
           int old_pos = st->cursor_pos;
-          st->cursor_pos = lineStarts.Get()[targetLine] + col;
+          int x = edit_line_x_from_char(st, curLine, st->cursor_pos);
+          st->cursor_pos = edit_line_char_from_x(st, targetLine, x);
           if (!shift) { st->sel1 = st->sel2 = -1; }
           else { st->sel1 = (st->sel1 < 0) ? old_pos : st->sel1; st->sel2 = st->cursor_pos; }
           InvalidateRect(hwnd, NULL, FALSE);
-          return 1;
         }
+        return 1;
       }
       // Ctrl+A: select all
       if (ctrl && (wParam == 'A' || wParam == 'a')) {
