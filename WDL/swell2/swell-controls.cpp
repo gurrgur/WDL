@@ -3123,11 +3123,11 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       LPTVITEM item = (LPTVITEM)lParam;
       HTREEITEM h = item->hItem;
       if (!h || !tv_contains_item(st->m_root, h)) return FALSE;
+      item->cChildren = h->m_children.GetSize() > 0 || h->m_haschildren ? 1 : 0;
+      item->lParam = h->m_param;
+      item->state = (h == st->m_sel ? TVIS_SELECTED : 0) | (h->m_state & TVIS_EXPANDED);
       if (item->mask & TVIF_TEXT && item->pszText && item->cchTextMax > 0)
         lstrcpyn(item->pszText, h->m_value.Get(), item->cchTextMax);
-      if (item->mask & TVIF_PARAM) item->lParam = h->m_param;
-      if (item->mask & TVIF_STATE) item->state = (h == st->m_sel ? TVIS_SELECTED : 0) | (h->m_state & TVIS_EXPANDED);
-      if (item->mask & TVIF_CHILDREN) item->cChildren = h->m_children.GetSize() > 0 || h->m_haschildren ? 1 : 0;
       return TRUE;
     }
 
@@ -3176,7 +3176,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 
     case TVM_GETNEXTITEM: {
-      if (!st || !lParam) return 0;
+      if (!st) return 0;
       UINT flag = (UINT)wParam;
       HTREEITEM item = (HTREEITEM)lParam;
       switch (flag) {
