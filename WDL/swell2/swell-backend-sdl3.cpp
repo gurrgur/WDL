@@ -1508,6 +1508,9 @@ void SWELL_initargs(int *argc, char ***argv)
   (void)argc;
   (void)argv;
   swell_sdl_apply_app_metadata();
+#if defined(__linux__)
+  SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "wayland,x11", SDL_HINT_DEFAULT);
+#endif
   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
   if (!SDL_WasInit(SDL_INIT_VIDEO) && !SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "SWELL SDL3: SDL_Init failed: %s\n", SDL_GetError());
