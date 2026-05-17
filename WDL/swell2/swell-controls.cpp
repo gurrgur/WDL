@@ -1475,15 +1475,16 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 st->m_sb_drag_scroll = st->scroll_y;
                 SetCapture(hwnd);
                 return 0;
-              } else if (hit == 1) {
-                st->scroll_y -= viewH;
-                if (st->scroll_y < 0) st->scroll_y = 0;
-                InvalidateRect(hwnd, NULL, FALSE);
-                return 0;
               } else {
-                st->scroll_y += viewH;
+                int new_thumb = my - cr.top;
+                st->scroll_y = scrollFromThumbPos(new_thumb, viewH, totalH);
                 int vmax = totalH - viewH;
                 if (st->scroll_y > vmax) st->scroll_y = vmax;
+                if (st->scroll_y < 0) st->scroll_y = 0;
+                st->m_sb_dragging = 1;
+                st->m_sb_drag_mouse = my;
+                st->m_sb_drag_scroll = st->scroll_y;
+                SetCapture(hwnd);
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
               }
@@ -2629,15 +2630,16 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             st->m_sb_drag_scroll_y = st->m_scroll_y;
             SetCapture(hwnd);
             return 0;
-          } else if (hit == 1) {
-            st->m_scroll_y -= viewH;
-            if (st->m_scroll_y < 0) st->m_scroll_y = 0;
-            InvalidateRect(hwnd, NULL, FALSE);
-            return 0;
-          } else if (hit == 3) {
-            st->m_scroll_y += viewH;
+          } else if (hit == 1 || hit == 3) {
+            int new_thumb = my - cr.top;
+            st->m_scroll_y = scrollFromThumbPos(new_thumb, viewH, totalH);
             int vmax = totalH - viewH;
             if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+            if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+            st->m_sb_dragging = 1;
+            st->m_sb_drag_mouse_y = my;
+            st->m_sb_drag_scroll_y = st->m_scroll_y;
+            SetCapture(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
           }
@@ -2659,15 +2661,16 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             st->m_sb_drag_scroll_x = st->m_scroll_x;
             SetCapture(hwnd);
             return 0;
-          } else if (hit == 1) {
-            st->m_scroll_x -= viewW;
-            if (st->m_scroll_x < 0) st->m_scroll_x = 0;
-            InvalidateRect(hwnd, NULL, FALSE);
-            return 0;
-          } else if (hit == 3) {
-            st->m_scroll_x += viewW;
+          } else if (hit == 1 || hit == 3) {
+            int new_thumb = mx - cr.left;
+            st->m_scroll_x = scrollFromThumbPos(new_thumb, viewW, totalW);
             int hmax = totalW - viewW;
             if (st->m_scroll_x > hmax) st->m_scroll_x = hmax;
+            if (st->m_scroll_x < 0) st->m_scroll_x = 0;
+            st->m_sb_dragging = 2;
+            st->m_sb_drag_mouse_x = mx;
+            st->m_sb_drag_scroll_x = st->m_scroll_x;
+            SetCapture(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
           }
@@ -3726,15 +3729,16 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             st->m_sb_drag_scroll = st->m_scroll_y;
             SetCapture(hwnd);
             return 0;
-          } else if (hit == 1) {
-            st->m_scroll_y -= viewH;
-            if (st->m_scroll_y < 0) st->m_scroll_y = 0;
-            InvalidateRect(hwnd, NULL, FALSE);
-            return 0;
-          } else if (hit == 3) {
-            st->m_scroll_y += viewH;
+          } else if (hit == 1 || hit == 3) {
+            int new_thumb = my - cr.top;
+            st->m_scroll_y = scrollFromThumbPos(new_thumb, viewH, totalH);
             int vmax = totalH - viewH;
             if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
+            if (st->m_scroll_y < 0) st->m_scroll_y = 0;
+            st->m_sb_dragging = 1;
+            st->m_sb_drag_mouse = my;
+            st->m_sb_drag_scroll = st->m_scroll_y;
+            SetCapture(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
           }
