@@ -518,10 +518,8 @@ char *BrowseForFiles(const char *text, const char *initialdir,
                      const char *initialfile, bool allowmul,
                      const char *extlist)
 {
-  WDL_FastString esc_text, esc_file, esc_dir;
+  WDL_FastString esc_text;
   shell_escape_arg(esc_text, text);
-  shell_escape_arg(esc_file, initialfile);
-  shell_escape_arg(esc_dir, initialdir);
 
   char cmd[4096];
   int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection");
@@ -530,14 +528,35 @@ char *BrowseForFiles(const char *text, const char *initialdir,
     pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", esc_text.Get());
     if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
   }
-  if (esc_file.GetLength()) {
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", esc_file.Get());
-    if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
+
+  {
+    // Build --filename: combine initialdir + initialfile when both provided.
+    // Skip initialfile starting with '.' (SWELL default-extension convention).
+    const bool have_file = (initialfile && initialfile[0] && initialfile[0] != '.');
+    const bool have_dir  = (initialdir  && initialdir[0]);
+    WDL_FastString combo, escaped_fn;
+
+    if (have_file) {
+      const char *slash = strrchr(initialfile, '/');
+      if (!slash && have_dir) {
+        combo.Set(initialdir);
+        if (combo.Get()[combo.GetLength()-1] != '/') combo.Append("/", 1);
+        combo.Append(initialfile);
+      } else {
+        combo.Set(initialfile);
+      }
+    } else if (have_dir) {
+      combo.Set(initialdir);
+      combo.Append("/", 1);
+    }
+
+    if (combo.GetLength()) {
+      shell_escape_arg(escaped_fn, combo.Get());
+      pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", escaped_fn.Get());
+      if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
+    }
   }
-  else if (esc_dir.GetLength()) {
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", esc_dir.Get());
-    if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
-  }
+
   if (allowmul) {
     pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --multiple --separator=|");
     if (pos >= (int)sizeof(cmd)) pos = (int)sizeof(cmd) - 1;
@@ -568,19 +587,40 @@ bool BrowseForSaveFile(const char *text, const char *initialdir,
                        const char *initialfile, const char *extlist,
                        char *fn, int fnsize)
 {
-  WDL_FastString esc_text, esc_file, esc_dir;
+  WDL_FastString esc_text;
   shell_escape_arg(esc_text, text);
-  shell_escape_arg(esc_file, initialfile);
-  shell_escape_arg(esc_dir, initialdir);
 
   char cmd[4096];
   int pos = snprintf(cmd, sizeof(cmd), "zenity --file-selection --save --confirm-overwrite");
   if (esc_text.GetLength())
     pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --title=\"%s\"", esc_text.Get());
-  if (esc_file.GetLength())
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", esc_file.Get());
-  else if (esc_dir.GetLength())
-    pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s/\"", esc_dir.Get());
+
+  {
+    // Build --filename: combine initialdir + initialfile when both provided.
+    // Keep initialfile starting with '.' (SWELL default-extension hint for save).
+    const bool have_file = (initialfile && initialfile[0]);
+    const bool have_dir  = (initialdir  && initialdir[0]);
+    WDL_FastString combo, escaped_fn;
+
+    if (have_file) {
+      const char *slash = strrchr(initialfile, '/');
+      if (!slash && have_dir) {
+        combo.Set(initialdir);
+        if (combo.Get()[combo.GetLength()-1] != '/') combo.Append("/", 1);
+        combo.Append(initialfile);
+      } else {
+        combo.Set(initialfile);
+      }
+    } else if (have_dir) {
+      combo.Set(initialdir);
+      combo.Append("/", 1);
+    }
+
+    if (combo.GetLength()) {
+      shell_escape_arg(escaped_fn, combo.Get());
+      pos += snprintf(cmd + pos, sizeof(cmd) - pos, " --filename=\"%s\"", escaped_fn.Get());
+    }
+  }
   append_zenity_filters(cmd, sizeof(cmd), &pos, extlist);
   pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 2>/dev/null");
 
