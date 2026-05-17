@@ -697,6 +697,25 @@ static void sdl_window_point_to_client(HWND hwnd, float *x, float *y)
 }
 
 // ---------------------------------------------------------------------------
+// swell_sdl_send_key: route key/mouse messages through SWELLAppMain
+// (matching swell-experimental's swell_sdl_send_key / SWELL_SendMouseMessage).
+// SWELLAppMain handles accelerator tables, IsDialogMessage, etc.
+// Returns true if the app ate the message (SWELLAppMain returned > 0).
+// ---------------------------------------------------------------------------
+
+static bool swell_sdl_send_key(HWND hwnd, UINT msgtype, WPARAM wParam, LPARAM lParam)
+{
+  if (!hwnd) return false;
+  MSG msg = { hwnd, msgtype, wParam, lParam, 0, {0, 0} };
+  INT_PTR extra_flags = 0;
+  if (SWELLAppMain(SWELLAPP_PROCESSMESSAGE, (INT_PTR)&msg, extra_flags) <= 0) {
+    SendMessage(hwnd, msg.message, msg.wParam, msg.lParam);
+    return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // swell_sdlEventHandler: SDL event -> SWELL message translation
 // ---------------------------------------------------------------------------
 
@@ -957,7 +976,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
               k == SDLK_LGUI || k == SDLK_RGUI)
             kmsg = WM_SYSKEYDOWN;
 
-          SendMessage(foc, kmsg, vk, lp);
+          swell_sdl_send_key(foc, kmsg, vk, lp);
         }
       }
       break;
@@ -980,7 +999,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
               k == SDLK_LSHIFT || k == SDLK_RSHIFT ||
               k == SDLK_LGUI || k == SDLK_RGUI)
             kmsg = WM_SYSKEYUP;
-          SendMessage(foc, kmsg, vk, lp);
+          swell_sdl_send_key(foc, kmsg, vk, lp);
         }
       }
       break;
@@ -999,7 +1018,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { c = ((*p & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); p += 3; }
         else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) { c = ((*p & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F); p += 4; }
         else p++;
-        if (c) SendMessage(foc, WM_CHAR, c, 0);
+        if (c) swell_sdl_send_key(foc, WM_CHAR, c, 0);
       }
       break;
     }
