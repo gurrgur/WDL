@@ -285,19 +285,26 @@ struct __SWELL_editControlState {
     ml_cached_w(-1), ml_cached_multiline(-1), ml_cached_rowh(0) {}
 };
 
-class SWELL_ListView_Row {
-public:
-  WDL_TypedBuf<SWELL_ListView_Rec> m_cols;
-  LPARAM m_param;
-  int m_tmp;
-  SWELL_ListView_Row() : m_param(0), m_tmp(0) {}
-};
+class SWELL_ListView_Row;
 
 struct SWELL_ListView_Rec {
   char *txt;
   int image_idx;
   SWELL_ListView_Rec() : txt(NULL), image_idx(-1) {}
   ~SWELL_ListView_Rec() { free(txt); }
+};
+
+class SWELL_ListView_Row {
+public:
+  WDL_TypedBuf<SWELL_ListView_Rec> m_cols;
+  LPARAM m_param;
+  int m_tmp;
+  SWELL_ListView_Row() : m_param(0), m_tmp(0) {}
+  int get_img_idx(int x) const { return x >= 0 && x < m_cols.GetSize() ? m_cols.Get()[x].image_idx : 0; }
+  void set_img_idx(int x, int index) {
+    if (x >= 0 && x < m_cols.GetSize())
+      m_cols.Get()[x].image_idx = index;
+  }
 };
 
 struct SWELL_ListView_Col {
@@ -338,6 +345,8 @@ struct listViewState {
   int m_capmode_data1, m_capmode_data2;
   HIMAGELIST m_status_imagelist;
   int m_status_imagelist_type;
+  bool hasStatusImage() const { return m_status_imagelist && m_status_imagelist_type == 1; }
+  bool hasAnyImage() const { return m_status_imagelist && (m_status_imagelist_type == 2 || m_status_imagelist_type == 1); }
   int m_extended_style;
   int m_fastclick_mask;
   int m_color_bg, m_color_bg_sel, m_color_bg_sel_inactive;

@@ -833,6 +833,7 @@ __attribute__ ((visibility ("default"))) BOOL WINAPI DllMain(HINSTANCE hInstDLL,
 #define LVNI_FOCUSED 2
 #define INDEXTOSTATEIMAGEMASK(x) ((x)<<16)
 #define LVIS_STATEIMAGEMASK (255<<16)
+#define STATEIMAGEMASKTOINDEX(x) (((x)>>16)&0xff)
 
 #define LVN_FIRST               (0U-100U)       // listview
 #define LVN_LAST                (0U-199U)
