@@ -1278,7 +1278,8 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return DefWindowProc(hwnd, msg, wParam, lParam);
       if (st && (hwnd->m_style & ES_MULTILINE)) {
         int delta = (short)HIWORD(wParam);
-        st->scroll_y -= delta / 40 * (st->max_height > 0 ? st->max_height : 16);
+        int rowH = st->max_height > 0 ? st->max_height : 16;
+        st->scroll_y -= (int)((float)delta / 40.0f * (float)rowH);
         if (st->scroll_y < 0) st->scroll_y = 0;
         InvalidateRect(hwnd, NULL, FALSE);
       }
@@ -2804,7 +2805,8 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return DefWindowProc(hwnd, msg, wParam, lParam);
       if (!st) return 0;
       int delta = (short)HIWORD(wParam);
-      st->m_scroll_y -= delta / 40 * (st->m_last_row_height > 0 ? st->m_last_row_height : 16);
+      int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
+      st->m_scroll_y -= (int)((float)delta / 40.0f * (float)rh);
       if (st->m_scroll_y < 0) st->m_scroll_y = 0;
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
@@ -3850,7 +3852,7 @@ LRESULT treeViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int vmax = totalH - viewH;
       if (vmax < 0) vmax = 0;
 
-      st->m_scroll_y -= delta / 40 * rh;
+      st->m_scroll_y -= (int)((float)delta / 40.0f * (float)rh);
       if (st->m_scroll_y < 0) st->m_scroll_y = 0;
       if (st->m_scroll_y > vmax) st->m_scroll_y = vmax;
 
