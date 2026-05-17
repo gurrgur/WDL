@@ -2888,6 +2888,10 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       int top_row = st->m_scroll_y / rh;
 
+      const bool has_image = st->hasAnyImage();
+      const bool has_status_image = st->hasStatusImage();
+      const bool has_subitem_image = (st->m_extended_style & LVS_EX_SUBITEMIMAGES) != 0;
+
       for (int i = top_row; i < n; i++) {
         int ry = cr.top + hdr + i * rh - st->m_scroll_y;
         if (ry >= cr.bottom) break;
@@ -2918,32 +2922,90 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         // For owner-data, get text via LVN_GETDISPINFO
         if (st->m_owner_data_size >= 0) {
-          NMLVDISPINFO di = {};
-          di.hdr.hwndFrom = hwnd;
-          di.hdr.idFrom = hwnd->m_id;
-          di.hdr.code = LVN_GETDISPINFO;
-          char buf[512]; buf[0] = 0;
-          di.item.mask = LVIF_TEXT;
-          di.item.iItem = i;
-          di.item.iSubItem = 0;
-          di.item.pszText = buf;
-          di.item.cchTextMax = sizeof(buf);
           HWND par = GetParent(hwnd);
-
           int ncols = st->m_cols.GetSize();
           if (ncols == 0) {
+            NMLVDISPINFO di = {};
+            di.hdr.hwndFrom = hwnd;
+            di.hdr.idFrom = hwnd->m_id;
+            di.hdr.code = LVN_GETDISPINFO;
+            char buf[512]; buf[0] = 0;
+            di.item.mask = LVIF_TEXT;
+            di.item.iItem = i;
+            di.item.iSubItem = 0;
+            di.item.pszText = buf;
+            di.item.cchTextMax = sizeof(buf);
+
+            if (has_image) {
+              if (st->m_status_imagelist_type == 1) di.item.mask |= LVIF_STATE;
+              else di.item.mask |= LVIF_IMAGE;
+            }
             if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
+
+            int image_idx = 0;
+            if (has_image) {
+              if (st->m_status_imagelist_type == 1)
+                image_idx = STATEIMAGEMASKTOINDEX(di.item.state);
+              else
+                image_idx = di.item.iImage + 1;
+            }
+
             RECT tr = { cr.left+2, ry, cr.right-2, ry+rh };
+            if (has_image && image_idx > 0 && st->m_status_imagelist) {
+              HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
+              HIMAGELIST__::Entry *ent = himl->m_entries.Get(image_idx - 1);
+              if (ent && ent->image) {
+                RECT ir = { tr.left + rh/4, ry, tr.left + rh/4 + (has_status_image ? rh : rh), ry+rh };
+                DrawImageInRect(hdc, (HICON)ent->image, &ir);
+              }
+              tr.left += rh;
+            }
             SWELL_DrawText(hdc, di.item.pszText ? di.item.pszText : "", -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
           } else {
-            int cx = cr.left - st->m_scroll_x;
+            int xpos = cr.left - st->m_scroll_x;
             for (int c = 0; c < ncols; c++) {
+              NMLVDISPINFO di = {};
+              di.hdr.hwndFrom = hwnd;
+              di.hdr.idFrom = hwnd->m_id;
+              di.hdr.code = LVN_GETDISPINFO;
+              char buf[512]; buf[0] = 0;
+              di.item.mask = LVIF_TEXT;
+              di.item.iItem = i;
               di.item.iSubItem = st->m_cols.Get()[c].col_index;
-              di.item.pszText = buf; buf[0] = 0;
+              di.item.pszText = buf;
+              di.item.cchTextMax = sizeof(buf);
+
+              int image_idx = 0;
+              if ((!c || has_subitem_image) && has_image) {
+                if (st->m_status_imagelist_type == 1) di.item.mask |= LVIF_STATE;
+                else di.item.mask |= LVIF_IMAGE;
+              }
               if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
-              RECT tr = { cx+2, ry, cx + st->m_cols.Get()[c].xwid - 2, ry+rh };
+              if ((!c || has_subitem_image) && has_image) {
+                if (st->m_status_imagelist_type == 1)
+                  image_idx = STATEIMAGEMASKTOINDEX(di.item.state);
+                else
+                  image_idx = di.item.iImage + 1;
+              }
+
+              RECT tr = { xpos+2, ry, xpos + st->m_cols.Get()[c].xwid - 2, ry+rh };
+              if ((!c || has_subitem_image) && has_image && image_idx > 0 && st->m_status_imagelist) {
+                HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
+                HIMAGELIST__::Entry *ent = himl->m_entries.Get(image_idx - 1);
+                if (ent && ent->image) {
+                  if (has_status_image || c >= ncols)
+                    tr.right = tr.left + rh;
+                  else
+                    tr.right = tr.left + wdl_min(rh, st->m_cols.Get()[c].xwid);
+                  DrawImageInRect(hdc, (HICON)ent->image, &tr);
+                }
+                tr.left += rh;
+                tr.right = xpos + st->m_cols.Get()[c].xwid - 2;
+                if (has_status_image) xpos += rh;
+              }
+
               SWELL_DrawText(hdc, di.item.pszText ? di.item.pszText : "", -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-              cx += st->m_cols.Get()[c].xwid;
+              xpos += st->m_cols.Get()[c].xwid;
             }
           }
         } else if (i < st->m_data.GetSize()) {
@@ -2952,18 +3014,47 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           if (ncols == 0 || st->m_is_listbox) {
             const char *t = row->m_cols.GetSize() > 0 && row->m_cols.Get()[0].txt
                           ? row->m_cols.Get()[0].txt : "";
+            int image_idx = has_image ? row->get_img_idx(0) : 0;
+
             RECT tr = { cr.left+2, ry, cr.right-2, ry+rh };
+            if (has_image && image_idx > 0 && st->m_status_imagelist) {
+              HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
+              HIMAGELIST__::Entry *ent = himl->m_entries.Get(image_idx - 1);
+              if (ent && ent->image) {
+                RECT ir = { tr.left + rh/4, ry, tr.left + rh/4 + (has_status_image ? rh : rh), ry+rh };
+                DrawImageInRect(hdc, (HICON)ent->image, &ir);
+              }
+              tr.left += rh;
+            }
             SWELL_DrawText(hdc, t, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
           } else {
-            int cx = cr.left - st->m_scroll_x;
+            int xpos = cr.left - st->m_scroll_x;
             for (int c = 0; c < ncols; c++) {
               const char *t = "";
               int logcol = st->m_cols.Get()[c].col_index;
               if (logcol < row->m_cols.GetSize() && row->m_cols.Get()[logcol].txt)
                 t = row->m_cols.Get()[logcol].txt;
-              RECT tr = { cx+2, ry, cx + st->m_cols.Get()[c].xwid - 2, ry+rh };
+
+              int image_idx = ((!c || has_subitem_image) && has_image) ? row->get_img_idx(logcol) : 0;
+
+              RECT tr = { xpos+2, ry, xpos + st->m_cols.Get()[c].xwid - 2, ry+rh };
+              if ((!c || has_subitem_image) && has_image && image_idx > 0 && st->m_status_imagelist) {
+                HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
+                HIMAGELIST__::Entry *ent = himl->m_entries.Get(image_idx - 1);
+                if (ent && ent->image) {
+                  if (has_status_image || c >= ncols)
+                    tr.right = tr.left + rh;
+                  else
+                    tr.right = tr.left + wdl_min(rh, st->m_cols.Get()[c].xwid);
+                  DrawImageInRect(hdc, (HICON)ent->image, &tr);
+                }
+                tr.left += rh;
+                tr.right = xpos + st->m_cols.Get()[c].xwid - 2;
+                if (has_status_image) xpos += rh;
+              }
+
               SWELL_DrawText(hdc, t, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-              cx += st->m_cols.Get()[c].xwid;
+              xpos += st->m_cols.Get()[c].xwid;
             }
           }
         }
