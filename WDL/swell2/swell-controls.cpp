@@ -1990,7 +1990,13 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (item->mask & LVIF_TEXT && item->pszText) {
         row->m_cols.Resize(1, false);
         row->m_cols.Get()[0].txt = strdup(item->pszText);
+      } else {
+        row->m_cols.Resize(1, false);
       }
+      if (item->mask & LVIF_IMAGE)
+        row->set_img_idx(0, item->iImage + 1);
+      if (item->stateMask & LVIS_STATEIMAGEMASK)
+        row->set_img_idx(0, STATEIMAGEMASKTOINDEX(item->state));
       st->m_data.Insert(pos, row);
       InvalidateRect(hwnd, NULL, FALSE);
       return pos;
@@ -2008,6 +2014,17 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           if (item->state & LVIS_SELECTED) r->m_tmp |= 1;
           else r->m_tmp &= ~1;
         }
+        if (item->stateMask & LVIS_STATEIMAGEMASK)
+          r->set_img_idx(0, STATEIMAGEMASKTOINDEX(item->state));
+      }
+      if (item->mask & LVIF_IMAGE) {
+        int col = item->iSubItem;
+        if (col >= r->m_cols.GetSize()) {
+          int old = r->m_cols.GetSize();
+          r->m_cols.Resize(col+1, false);
+          for (int i = old; i <= col; i++) r->m_cols.Get()[i].txt = NULL;
+        }
+        r->set_img_idx(col, item->iImage + 1);
       }
       if (item->mask & LVIF_TEXT && item->pszText) {
         int col = item->iSubItem;
@@ -2030,7 +2047,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int nitems = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
       if (row < 0 || row >= nitems) return FALSE;
       if (st->m_owner_data_size >= 0) {
-        int mask = item->mask & (LVIF_PARAM | LVIF_TEXT);
+        int mask = item->mask & (LVIF_PARAM | LVIF_TEXT | LVIF_IMAGE);
         if ((mask & LVIF_TEXT) && (!item->pszText || item->cchTextMax <= 0))
           mask &= ~LVIF_TEXT;
         if (mask) {
@@ -2051,6 +2068,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
               lstrcpyn(item->pszText, txt, item->cchTextMax);
           }
           if (mask & LVIF_PARAM) item->lParam = di.item.lParam;
+          if (mask & LVIF_IMAGE) item->iImage = di.item.iImage;
         }
         if (item->mask & LVIF_STATE) {
           item->state = 0;
@@ -2064,6 +2082,15 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         item->state = 0;
         if (r->m_tmp & 1) item->state |= LVIS_SELECTED;
         if (st->m_selitem == row) item->state |= LVIS_FOCUSED;
+        if (st->hasStatusImage()) {
+          int idx = r->get_img_idx(0);
+          if (idx > 0) item->state |= INDEXTOSTATEIMAGEMASK(idx);
+        }
+      }
+      if (item->mask & LVIF_IMAGE) {
+        int col = item->iSubItem;
+        int idx = r->get_img_idx(col);
+        item->iImage = idx > 0 ? idx - 1 : -1;
       }
       if (item->mask & LVIF_TEXT && item->pszText && item->cchTextMax > 0) {
         int col = item->iSubItem;
@@ -2137,6 +2164,10 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           state |= LVIS_SELECTED;
       }
       if (mask & LVIS_FOCUSED && st->m_selitem == row) state |= LVIS_FOCUSED;
+      if (st->hasStatusImage()) {
+        int idx = st->m_data.Get(row)->get_img_idx(0);
+        if (idx > 0) state |= INDEXTOSTATEIMAGEMASK(idx);
+      }
       return state;
     }
 
@@ -2166,6 +2197,8 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         if (item->stateMask & LVIS_FOCUSED && item->state & LVIS_FOCUSED)
           st->m_selitem = row;
+        if (item->stateMask & LVIS_STATEIMAGEMASK)
+          st->m_data.Get(row)->set_img_idx(0, STATEIMAGEMASKTOINDEX(item->state));
       }
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
