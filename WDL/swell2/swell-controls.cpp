@@ -1033,8 +1033,15 @@ static void drawVerticalScrollbar(HDC hdc, RECT cr, int viewh, int totalh, int s
 
 static int scrollFromThumbPos(int thumb_pos, int view, int total)
 {
-  if (view <= 0 || total <= 0) return 0;
-  return (int)(thumb_pos * (double)total / view + 0.5);
+  if (view <= 0 || total <= view) return 0;
+  int thumbsz = (int)((double)view * view / total + 0.5);
+  if (thumbsz < g_swell_theme.scrollbar_min_thumb_height)
+    thumbsz = g_swell_theme.scrollbar_min_thumb_height;
+  int avail = view - thumbsz;
+  if (avail <= 0) return 0;
+  if (thumb_pos > avail) thumb_pos = avail;
+  if (thumb_pos < 0) thumb_pos = 0;
+  return (int)(thumb_pos * (double)(total - view) / avail + 0.5);
 }
 
 // Returns thumb bounds in scrollbar-local coordinates (0..view)
