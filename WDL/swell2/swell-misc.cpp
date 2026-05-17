@@ -1671,7 +1671,6 @@ void ImageList_Destroy(HIMAGELIST list)
 // ============================================================================
 
 const char *g_swell_appname    = NULL;
-const char *g_swell_appid      = NULL;
        char       *g_swell_defini     = NULL;
 static const char *g_swell_fontpangram = NULL;
 
@@ -1687,10 +1686,6 @@ void *SWELL_ExtendedAPI(const char *key, void *v)
 
   if (!strcmp(key, "APPNAME")) {
     g_swell_appname = (const char *)v;
-    return NULL;
-  }
-  if (!strcmp(key, "APPID")) {
-    g_swell_appid = (const char *)v;
     return NULL;
   }
   if (!strcmp(key, "FONTPANGRAM")) {

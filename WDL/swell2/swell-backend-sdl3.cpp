@@ -8,7 +8,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <dirent.h>
 #include <dlfcn.h>
 
 #if __has_include(<X11/Xlib.h>) && __has_include(<X11/Xutil.h>)
@@ -37,143 +36,15 @@ static SDL_WindowEntry *g_sdl_windows = NULL;
 static SDL_Surface *s_program_icon_surface = NULL;
 int g_swell_sdl_current_event_type = 0;
 
-static bool swell_sdl_has_desktop_suffix(const char *name)
-{
-  if (!name) return false;
-  const size_t len = strlen(name);
-  return len > 8 && !strcmp(name + len - 8, ".desktop");
-}
-
-static bool swell_sdl_desktop_file_matches_wmclass(const char *path,
-                                                   const char *wmclass)
-{
-  FILE *fp = fopen(path, "r");
-  if (!fp) return false;
-
-  bool found = false;
-  char line[1024];
-  while (fgets(line, sizeof(line), fp)) {
-    static const char key[] = "StartupWMClass=";
-    if (strncmp(line, key, sizeof(key) - 1)) continue;
-
-    char *value = line + sizeof(key) - 1;
-    value[strcspn(value, "\r\n")] = 0;
-    found = !strcmp(value, wmclass);
-    break;
-  }
-
-  fclose(fp);
-  return found;
-}
-
-static bool swell_sdl_scan_desktop_dir_for_wmclass(const char *dir,
-                                                   const char *wmclass,
-                                                   char *out, size_t outsz)
-{
-  if (!dir || !*dir || !wmclass || !*wmclass || !out || outsz < 2)
-    return false;
-
-  DIR *dp = opendir(dir);
-  if (!dp) return false;
-
-  bool found = false;
-  struct dirent *de;
-  while (!found && (de = readdir(dp))) {
-    const char *name = de->d_name;
-    if (!swell_sdl_has_desktop_suffix(name)) continue;
-
-    char path[2048];
-    snprintf(path, sizeof(path), "%s/%s", dir, name);
-    if (!swell_sdl_desktop_file_matches_wmclass(path, wmclass)) continue;
-
-    const size_t len = strlen(name) - 8;
-    const size_t cplen = len < outsz - 1 ? len : outsz - 1;
-    memcpy(out, name, cplen);
-    out[cplen] = 0;
-    found = true;
-  }
-
-  closedir(dp);
-  return found;
-}
-
-static bool swell_sdl_scan_xdg_data_dirs(const char *dirs,
-                                         const char *wmclass,
-                                         char *out, size_t outsz)
-{
-  if (!dirs || !*dirs) return false;
-
-  const char *p = dirs;
-  while (*p) {
-    const char *end = strchr(p, ':');
-    const size_t len = end ? (size_t)(end - p) : strlen(p);
-    if (len > 0) {
-      char dir[2048];
-      snprintf(dir, sizeof(dir), "%.*s/applications", (int)len, p);
-      if (swell_sdl_scan_desktop_dir_for_wmclass(dir, wmclass, out, outsz))
-        return true;
-    }
-    if (!end) break;
-    p = end + 1;
-  }
-  return false;
-}
-
-static bool swell_sdl_find_desktop_id_for_wmclass(const char *wmclass,
-                                                  char *out, size_t outsz)
-{
-  const char *xdg_home = getenv("XDG_DATA_HOME");
-  char dir[2048];
-  if (xdg_home && *xdg_home) {
-    snprintf(dir, sizeof(dir), "%s/applications", xdg_home);
-  } else {
-    const char *home = getenv("HOME");
-    if (home && *home)
-      snprintf(dir, sizeof(dir), "%s/.local/share/applications", home);
-    else
-      dir[0] = 0;
-  }
-  if (dir[0] && swell_sdl_scan_desktop_dir_for_wmclass(dir, wmclass, out, outsz))
-    return true;
-
-  const char *xdg_dirs = getenv("XDG_DATA_DIRS");
-  if (!xdg_dirs || !*xdg_dirs)
-    xdg_dirs = "/usr/local/share:/usr/share";
-  return swell_sdl_scan_xdg_data_dirs(xdg_dirs, wmclass, out, outsz);
-}
-
-static const char *swell_sdl_resolve_app_id()
-{
-  const char *env_id = getenv("SWELL_APP_ID");
-  if (env_id && *env_id) return env_id;
-  if (g_swell_appid && *g_swell_appid) return g_swell_appid;
-  if (!g_swell_appname || !*g_swell_appname) return NULL;
-
-  static char s_cached_wmclass[256];
-  static char s_cached_appid[256];
-  if (strcmp(s_cached_wmclass, g_swell_appname)) {
-    lstrcpyn_safe(s_cached_wmclass, g_swell_appname, sizeof(s_cached_wmclass));
-    s_cached_appid[0] = 0;
-    swell_sdl_find_desktop_id_for_wmclass(g_swell_appname,
-                                          s_cached_appid,
-                                          sizeof(s_cached_appid));
-  }
-
-  return s_cached_appid[0] ? s_cached_appid : g_swell_appname;
-}
-
 static void swell_sdl_apply_app_metadata()
 {
   const char *appname = (g_swell_appname && *g_swell_appname) ?
       g_swell_appname : NULL;
-  const char *appid = swell_sdl_resolve_app_id();
+  if (!appname) return;
 
-  if (appname)
-    SDL_SetHintWithPriority(SDL_HINT_APP_NAME, appname, SDL_HINT_DEFAULT);
-  if (appid)
-    SDL_SetHintWithPriority(SDL_HINT_APP_ID, appid, SDL_HINT_DEFAULT);
-  if (appname || appid)
-    SDL_SetAppMetadata(appname ? appname : appid, NULL, appid);
+  SDL_SetHintWithPriority(SDL_HINT_APP_NAME, appname, SDL_HINT_DEFAULT);
+  SDL_SetHintWithPriority(SDL_HINT_APP_ID, appname, SDL_HINT_DEFAULT);
+  SDL_SetAppMetadata(appname, NULL, appname);
 }
 
 #ifdef SWELL_SDL3_HAVE_X11_HEADERS
