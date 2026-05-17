@@ -337,10 +337,6 @@ LRESULT SwellDialogDefaultWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_PAINT:
       break; // already handled above
 
-    case WM_CLOSE:
-      EndDialog(hwnd, IDCANCEL);
-      return 0;
-
     case WM_KEYDOWN: {
       if (!hwnd->m_parent) {
         if (wParam == VK_ESCAPE && IsWindowEnabled(hwnd)) {
