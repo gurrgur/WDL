@@ -2010,7 +2010,37 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st || !lParam) return FALSE;
       LVITEM *item = (LVITEM *)lParam;
       int row = item->iItem;
-      if (row < 0 || row >= st->m_data.GetSize()) return FALSE;
+      int nitems = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
+      if (row < 0 || row >= nitems) return FALSE;
+      if (st->m_owner_data_size >= 0) {
+        int mask = item->mask & (LVIF_PARAM | LVIF_TEXT);
+        if ((mask & LVIF_TEXT) && (!item->pszText || item->cchTextMax <= 0))
+          mask &= ~LVIF_TEXT;
+        if (mask) {
+          NMLVDISPINFO di = {};
+          di.hdr.hwndFrom = hwnd;
+          di.hdr.idFrom = hwnd->m_id;
+          di.hdr.code = LVN_GETDISPINFO;
+          di.item.mask = mask;
+          di.item.iItem = item->iItem;
+          di.item.iSubItem = item->iSubItem;
+          di.item.pszText = item->pszText;
+          di.item.cchTextMax = item->cchTextMax;
+          HWND par = GetParent(hwnd);
+          if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
+          if (mask & LVIF_TEXT) {
+            const char *txt = di.item.pszText ? di.item.pszText : "";
+            if (txt != item->pszText)
+              lstrcpyn(item->pszText, txt, item->cchTextMax);
+          }
+          if (mask & LVIF_PARAM) item->lParam = di.item.lParam;
+        }
+        if (item->mask & LVIF_STATE) {
+          item->state = 0;
+          if (st->m_selitem == row) item->state |= LVIS_SELECTED | LVIS_FOCUSED;
+        }
+        return TRUE;
+      }
       SWELL_ListView_Row *r = st->m_data.Get(row);
       if (item->mask & LVIF_PARAM) item->lParam = r->m_param;
       if (item->mask & LVIF_STATE) {
@@ -2147,7 +2177,26 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st || !lParam) return 0;
       int row = (int)wParam;
       LVITEM *item = (LVITEM *)lParam;
-      if (row < 0 || row >= st->m_data.GetSize()) return 0;
+      int nitems = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
+      if (row < 0 || row >= nitems || !item->pszText || item->cchTextMax <= 0) return 0;
+      if (st->m_owner_data_size >= 0) {
+        item->pszText[0] = 0;
+        NMLVDISPINFO di = {};
+        di.hdr.hwndFrom = hwnd;
+        di.hdr.idFrom = hwnd->m_id;
+        di.hdr.code = LVN_GETDISPINFO;
+        di.item.mask = LVIF_TEXT;
+        di.item.iItem = row;
+        di.item.iSubItem = item->iSubItem;
+        di.item.pszText = item->pszText;
+        di.item.cchTextMax = item->cchTextMax;
+        HWND par = GetParent(hwnd);
+        if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
+        const char *txt = di.item.pszText ? di.item.pszText : "";
+        if (txt != item->pszText)
+          lstrcpyn(item->pszText, txt, item->cchTextMax);
+        return (LRESULT)strlen(item->pszText);
+      }
       SWELL_ListView_Row *r = st->m_data.Get(row);
       int col = item->iSubItem;
       const char *txt = "";
@@ -2835,7 +2884,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           if (ncols == 0) {
             if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
             RECT tr = { cr.left+2, ry, cr.right-2, ry+rh };
-            SWELL_DrawText(hdc, buf, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            SWELL_DrawText(hdc, di.item.pszText ? di.item.pszText : "", -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
           } else {
             int cx = cr.left - st->m_scroll_x;
             for (int c = 0; c < ncols; c++) {
@@ -2843,7 +2892,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
               di.item.pszText = buf; buf[0] = 0;
               if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&di);
               RECT tr = { cx+2, ry, cx + st->m_cols.Get()[c].xwid - 2, ry+rh };
-              SWELL_DrawText(hdc, buf, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+              SWELL_DrawText(hdc, di.item.pszText ? di.item.pszText : "", -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
               cx += st->m_cols.Get()[c].xwid;
             }
           }
