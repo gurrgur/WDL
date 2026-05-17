@@ -570,16 +570,42 @@ char *BrowseForFiles(const char *text, const char *initialdir,
 
   if (!allowmul) return raw;
 
-  // Convert '|'-separated to '\0'-separated with double-null terminator
+  // Convert '|'-separated full paths to Win32 allowmul=1 format:
+  // "dir/file1|dir/file2" -> "dir/\0file1\0file2\0\0"
   size_t len = strlen(raw);
+
+  // Find directory prefix of first entry (up to and including last '/')
+  char *last_slash = NULL;
+  for (size_t i = 0; i < len && raw[i] != '|'; i++)
+    if (raw[i] == '/') last_slash = raw + i;
+  size_t dir_len = last_slash ? (size_t)(last_slash - raw + 1) : 0;
+
   char *out = (char *)malloc(len + 2);
   if (!out) { free(raw); return NULL; }
-  memcpy(out, raw, len + 1);
+
+  // Copy directory prefix
+  if (dir_len > 0) memcpy(out, raw, dir_len);
+  size_t wpos = dir_len;
+
+  // Process each pipe-separated entry, stripping common dir prefix
+  const char *p = raw;
+  while (*p) {
+    const char *end = strchr(p, '|');
+    size_t seg_len = end ? (size_t)(end - p) : strlen(p);
+
+    if (dir_len > 0 && seg_len > dir_len && !memcmp(p, raw, dir_len))
+      memcpy(out + wpos, p + dir_len, seg_len - dir_len);
+    else
+      memcpy(out + wpos, p, seg_len);
+    wpos += (dir_len > 0 && seg_len > dir_len && !memcmp(p, raw, dir_len))
+              ? (seg_len - dir_len) : seg_len;
+    out[wpos++] = '\0';
+
+    if (!end) break;
+    p = end + 1;
+  }
+  out[wpos] = '\0';  // double-null terminator
   free(raw);
-  // replace '|' with '\0'
-  for (size_t i = 0; i < len; i++)
-    if (out[i] == '|') out[i] = '\0';
-  out[len + 1] = '\0';
   return out;
 }
 
