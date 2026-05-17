@@ -24,6 +24,10 @@
 #include <core/SkBitmap.h>
 #include <core/SkImage.h>
 #include <core/SkFont.h>
+#include <core/SkSurfaceProps.h>
+
+// Shared surface properties: kRGB_H_SkPixelGeometry enables LCD subpixel AA.
+static const SkSurfaceProps g_swell_surfprops(0, kRGB_H_SkPixelGeometry);
 
 #define WDL_FastString WDL_String
 
@@ -442,6 +446,7 @@ extern HWND g_swell_top_level_list_end;
 extern int g_swell_event_dispatch_depth;
 
 extern int g_swell_ui_scale;              // DPI scaling: 256 = 1.0x
+extern bool g_swell_subpixel_text;       // subpixel positioning + LCD AA
 #define SWELL_UI_SCALE(x) (((x)*g_swell_ui_scale)/256)
 void swell_scaling_init(bool no_auto_hidpi); // auto-detect DPI via hidden SDL test window
 

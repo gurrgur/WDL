@@ -1251,7 +1251,12 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
 
   mw->font.setTypeface(menu_get_typeface());
   mw->font.setSize((float)menu_font_sz());
-  mw->font.setEdging(SkFont::Edging::kAntiAlias);
+  if (g_swell_subpixel_text) {
+    mw->font.setSubpixel(true);
+    mw->font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+  } else {
+    mw->font.setEdging(SkFont::Edging::kAntiAlias);
+  }
 
   menu_measure(mw);
 
@@ -1368,7 +1373,8 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
   mw->h = pix_h;
   menu_clamp_scroll(mw);
   mw->surface = SkSurfaces::Raster(
-      SkImageInfo::Make(pix_w, pix_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+      SkImageInfo::Make(pix_w, pix_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType),
+      &g_swell_surfprops);
   if (!mw->surface) {
     delete mw;
     return NULL;

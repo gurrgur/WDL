@@ -270,7 +270,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   if (surf_w < 1) surf_w = pw;
   if (surf_h < 1) surf_h = ph;
   hwnd->m_backingstore = SkSurfaces::Raster(
-      SkImageInfo::Make(surf_w, surf_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+      SkImageInfo::Make(surf_w, surf_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType),
+      &g_swell_surfprops);
   if (hwnd->m_backingstore) {
     SkCanvas *c = hwnd->m_backingstore->getCanvas();
     if (c) c->clear(SK_ColorTRANSPARENT);
@@ -343,7 +344,8 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
         oldImage = hwnd->m_backingstore->makeImageSnapshot();
 
       hwnd->m_backingstore = SkSurfaces::Raster(
-          SkImageInfo::Make(surf_w, surf_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+          SkImageInfo::Make(surf_w, surf_h, kBGRA_8888_SkColorType, kPremul_SkAlphaType),
+          &g_swell_surfprops);
 
       if (hwnd->m_backingstore) {
         SkCanvas *c = hwnd->m_backingstore->getCanvas();
@@ -806,7 +808,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
               oldImage = e->hwnd->m_backingstore->makeImageSnapshot();
 
             e->hwnd->m_backingstore = SkSurfaces::Raster(
-                SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+                SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType),
+                &g_swell_surfprops);
 
             if (e->hwnd->m_backingstore) {
               SkCanvas *c = e->hwnd->m_backingstore->getCanvas();
@@ -855,7 +858,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           if (e->hwnd->m_backingstore)
             oldImage = e->hwnd->m_backingstore->makeImageSnapshot();
           e->hwnd->m_backingstore = SkSurfaces::Raster(
-              SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+              SkImageInfo::Make(pw, ph, kBGRA_8888_SkColorType, kPremul_SkAlphaType),
+              &g_swell_surfprops);
           if (e->hwnd->m_backingstore) {
             SkCanvas *c = e->hwnd->m_backingstore->getCanvas();
             if (c) { c->clear(SK_ColorTRANSPARENT); if (oldImage) c->drawImage(oldImage, 0, 0); }

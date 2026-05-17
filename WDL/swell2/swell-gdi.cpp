@@ -48,6 +48,7 @@ static HFONT g_swell_default_font_instance = nullptr;
 HFONT g_swell_default_font = nullptr; // extern, may alias the static
 
 int g_swell_ui_scale = 256;
+bool g_swell_subpixel_text = true;
 
 // ---------------------------------------------------------------------------
 // Pool infrastructure
@@ -197,7 +198,9 @@ HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
   if (!ctx) return nullptr;
 
-  ctx->surface = SkSurfaces::Raster(SkImageInfo::Make(w, h, kBGRA_8888_SkColorType, kPremul_SkAlphaType));
+  ctx->surface = SkSurfaces::Raster(
+    SkImageInfo::Make(w, h, kBGRA_8888_SkColorType, kPremul_SkAlphaType),
+    &g_swell_surfprops);
   if (ctx->surface) {
     ctx->canvas = ctx->surface->getCanvas();
     if (ctx->canvas) {
@@ -1649,6 +1652,10 @@ static const SkFont &swell_get_cached_skfont(HDC ctx)
     f.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
   }
   f.setSize(fontSize);
+  if (g_swell_subpixel_text) {
+    f.setSubpixel(true);
+    f.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+  }
   return f;
 }
 
@@ -2575,6 +2582,9 @@ static void swell_theme_populate_metrics(swell_theme &t)
 
 void swell_theme_init(int mode)
 {
+#ifndef SWELL_TARGET_SDL3
+  g_swell_subpixel_text = false;
+#endif
   g_swell_theme_mode = mode;
   if (mode == SWELL_THEME_DARK) swell_theme_populate_dark(g_swell_theme);
   else                          swell_theme_populate_light(g_swell_theme);
