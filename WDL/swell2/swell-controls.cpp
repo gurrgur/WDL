@@ -1147,6 +1147,30 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case EM_REPLACESEL: {
       const char *newtext = (const char *)lParam;
       if (!st || !newtext) return 0;
+      WDL_FastString clean_insert;
+      if (hwnd->m_style & ES_MULTILINE) {
+        for (const char *p = newtext; *p; ++p) {
+          if (*p == '\r') {
+            if (*(p + 1) == '\n') continue;
+            clean_insert.Append("\n", 1);
+          } else {
+            clean_insert.Append(p, 1);
+          }
+        }
+        newtext = clean_insert.Get();
+      } else {
+        for (const char *p = newtext; *p; ++p) {
+          if (*p == '\r') {
+            clean_insert.Append(" ", 1);
+            if (*(p + 1) == '\n') ++p;
+          } else if (*p == '\n') {
+            clean_insert.Append(" ", 1);
+          } else {
+            clean_insert.Append(p, 1);
+          }
+        }
+        newtext = clean_insert.Get();
+      }
       const char *t = hwnd->m_title.Get();
       int tlen_chars = WDL_utf8_get_charlen(t);
       int s1 = st->sel1 < 0 ? st->cursor_pos : (st->sel1 < st->sel2 ? st->sel1 : st->sel2);
