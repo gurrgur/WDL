@@ -404,6 +404,18 @@ LRESULT buttonWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       bool focused = (GetFocus() == hwnd);
       bool pressed = (GetCapture() == hwnd);
 
+      if (bstyle == BS_OWNERDRAW) {
+        if (hwnd->m_parent) {
+          DRAWITEMSTRUCT dis = { ODT_BUTTON, (UINT)hwnd->m_id, 0, 0,
+              (UINT)(pressed ? ODS_SELECTED : 0), hwnd, hdc, cr,
+              (DWORD_PTR)hwnd->m_userdata };
+          SendMessage(hwnd->m_parent, WM_DRAWITEM,
+              (WPARAM)hwnd->m_id, (LPARAM)&dis);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+      }
+
       if (style & BS_GROUPBOX) {
         // Modern group box: subtle filled card with rounded corners and a
         // floating title that overlaps the top border.
