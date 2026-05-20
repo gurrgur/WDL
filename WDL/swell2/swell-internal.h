@@ -10,6 +10,8 @@
 #include "../ptrlist.h"
 #include "../heapbuf.h"
 #include "../assocarray.h"
+#include <chrono>
+#include <cstdint>
 
 // swell-functions.h defines Polygon(a,b,c) as SWELL_Polygon which clashes
 // with SkPath::Polygon. Undefine it here since all swell-internal.h consumers
@@ -595,6 +597,44 @@ void swell_theme_init(int mode);   // populate g_swell_theme (logical units)
 void swell_theme_rescale();        // apply g_swell_ui_scale to metrics
 
 // ---- Internal function declarations ----
+
+// GDI API instrumentation. When env SWELL_GDI_PROFILE_LOG=/path is set at
+// startup, every SGDI_PROF() scope accumulates call count + nanoseconds
+// into a static per-function bucket. atexit dumps a CSV to the configured
+// path. Overhead when disabled is one predictable branch + one chrono call
+// skipped.
+struct swell_gdi_prof_stat {
+  const char *name;
+  uint64_t calls;
+  uint64_t nanos;
+};
+extern bool g_swell_gdi_prof_enabled;
+swell_gdi_prof_stat *swell_gdi_prof_register(const char *name);
+void swell_gdi_prof_dump_now(void);  // safe to call any time
+
+struct swell_gdi_prof_scope {
+  swell_gdi_prof_stat *st;
+  std::chrono::steady_clock::time_point t0;
+  swell_gdi_prof_scope(swell_gdi_prof_stat *s) : st(nullptr) {
+    if (g_swell_gdi_prof_enabled) {
+      st = s;
+      t0 = std::chrono::steady_clock::now();
+    }
+  }
+  ~swell_gdi_prof_scope() {
+    if (st) {
+      auto dur = std::chrono::steady_clock::now() - t0;
+      __atomic_add_fetch(&st->calls, 1, __ATOMIC_RELAXED);
+      __atomic_add_fetch(&st->nanos,
+          (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(dur).count(),
+          __ATOMIC_RELAXED);
+    }
+  }
+};
+
+#define SGDI_PROF(NAME) \
+  static swell_gdi_prof_stat *_sgdi_stat_##NAME = swell_gdi_prof_register(#NAME); \
+  swell_gdi_prof_scope _sgdi_prof_##NAME(_sgdi_stat_##NAME)
 
 // swell-gdi.cpp internal
 void swell_DirtyContext(HDC__ *ctx, int l, int t, int r, int b);

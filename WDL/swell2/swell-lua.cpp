@@ -314,6 +314,7 @@ static int l_print(lua_State *L)
 static int l_exit(lua_State *L)
 {
   int code = (int)luaL_optinteger(L, 1, 0);
+  swell_gdi_prof_dump_now();
   _exit(code);
   return 0;
 }

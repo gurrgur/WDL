@@ -135,12 +135,43 @@ the whole surface (partial-upload optimization didn't trigger).
 
 ## Environment toggles
 
-| Env var               | Effect                                                |
-|-----------------------|-------------------------------------------------------|
-| `SWELL_PROF_SCRIPT`   | Lua script run on startup (e.g. scroll_reaper.lua)    |
-| `SWELL_PROFILE_LOG`   | Path to per-frame CSV log                             |
-| `SCROLL_DURATION_SEC` | How long the Lua scroll loop runs before quitting     |
-| `SWELL_NO_VSYNC`      | `1` disables SDL renderer vsync (clean paint timing)  |
+| Env var                  | Effect                                                |
+|--------------------------|-------------------------------------------------------|
+| `SWELL_PROF_SCRIPT`      | Lua script run on startup (e.g. scroll_reaper.lua)    |
+| `SWELL_PROFILE_LOG`      | Path to per-frame CSV log                             |
+| `SWELL_GDI_PROFILE_LOG`  | Path to per-GDI-function CSV (calls, total_ns, etc.)  |
+| `SCROLL_DURATION_SEC`    | How long the Lua scroll loop runs before quitting     |
+| `SWELL_NO_VSYNC`         | `1` disables SDL renderer vsync (clean paint timing)  |
+
+## GDI API attribution
+
+`SWELL_GDI_PROFILE_LOG=/path` activates per-call instrumentation on the hot
+GDI entry points (`BitBlt`, `StretchBlt`, `SWELL_FillRect`, `SWELL_DrawText`,
+`Rectangle`, `LineTo`, `SelectObject`, `GetDC`/`ReleaseDC`, etc.). Each
+function increments a thread-safe counter + accumulates wall nanoseconds.
+The CSV is dumped on `swell.exit()` or normal process exit:
+
+```text
+name,calls,total_ns,avg_ns,total_ms
+BitBlt,14230,644542061,45294.6,644.542
+SWELL_DrawText,934,24299831,26016.9,24.300
+...
+```
+
+Use when you suspect a particular GDI primitive is the bottleneck, or to
+prove how much paint time is spent inside Swell vs inside the host's own
+wndproc internals. **Caveat:** `timeout -s KILL` skips the dump; use a
+plain `timeout` (default SIGTERM) and ensure the Lua script calls
+`swell.exit()` at the end of the scroll.
+
+For the scroll_reaper scene with REAPER, total tracked GDI time is ~780 ms
+over 10 s (~1.2 ms/frame) vs paint total of ~6900 ms (~10.3 ms/frame) —
+**~89 % of paint is REAPER wndproc internal work that does not call any
+Swell GDI primitive.** BitBlt dominates the GDI fraction at ~83 %; the
+remaining tracked GDI (DrawText, FillRect, ReleaseDC, GetTextMetrics) is
+collectively under 0.2 ms/frame. The implication: further wins on this
+scene require either changing how REAPER draws or moving the Skia surface
+to GPU.
 
 ## Scene description
 

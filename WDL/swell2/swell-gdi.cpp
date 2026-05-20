@@ -13,9 +13,15 @@
 
 #include <cstring>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <csignal>
+#include <cerrno>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
+#include <algorithm>
 
 #include <core/SkPath.h>
 #include <core/SkRRect.h>
@@ -49,6 +55,85 @@ HFONT g_swell_default_font = nullptr; // extern, may alias the static
 
 int g_swell_ui_scale = 256;
 bool g_swell_subpixel_text = true;
+
+// ---------------------------------------------------------------------------
+// GDI API instrumentation
+// ---------------------------------------------------------------------------
+
+bool g_swell_gdi_prof_enabled = false;
+static std::mutex g_swell_gdi_prof_mutex;
+static WDL_PtrList<swell_gdi_prof_stat> g_swell_gdi_prof_stats;
+static char g_swell_gdi_prof_log_path[4096] = {0};
+
+swell_gdi_prof_stat *swell_gdi_prof_register(const char *name)
+{
+  std::lock_guard<std::mutex> lock(g_swell_gdi_prof_mutex);
+  // First call wins: stable address returned for future calls is the
+  // dedicated bucket; later registrations of the same name reuse it.
+  for (int i = 0; i < g_swell_gdi_prof_stats.GetSize(); i++) {
+    swell_gdi_prof_stat *s = g_swell_gdi_prof_stats.Get(i);
+    if (s && s->name && !strcmp(s->name, name)) return s;
+  }
+  swell_gdi_prof_stat *s = new swell_gdi_prof_stat{name, 0, 0};
+  g_swell_gdi_prof_stats.Add(s);
+  return s;
+}
+
+static void swell_gdi_prof_dump()
+{
+  if (!g_swell_gdi_prof_enabled || !g_swell_gdi_prof_log_path[0]) return;
+  FILE *fp = fopen(g_swell_gdi_prof_log_path, "w");
+  if (!fp) return;
+  fprintf(fp, "name,calls,total_ns,avg_ns,total_ms\n");
+  std::lock_guard<std::mutex> lock(g_swell_gdi_prof_mutex);
+  // Sort by total nanos descending into a local vector of pointers.
+  std::vector<swell_gdi_prof_stat*> sorted;
+  for (int i = 0; i < g_swell_gdi_prof_stats.GetSize(); i++)
+    sorted.push_back(g_swell_gdi_prof_stats.Get(i));
+  std::sort(sorted.begin(), sorted.end(),
+      [](const swell_gdi_prof_stat *a, const swell_gdi_prof_stat *b) {
+        return a->nanos > b->nanos;
+      });
+  for (auto *s : sorted) {
+    if (!s || !s->calls) continue;
+    double avg = s->calls ? (double)s->nanos / (double)s->calls : 0.0;
+    fprintf(fp, "%s,%llu,%llu,%.1f,%.3f\n",
+            s->name,
+            (unsigned long long)s->calls,
+            (unsigned long long)s->nanos,
+            avg,
+            (double)s->nanos / 1e6);
+  }
+  fclose(fp);
+}
+
+void swell_gdi_prof_dump_now()
+{
+  swell_gdi_prof_dump();
+}
+
+static void swell_gdi_prof_signal_dump(int sig)
+{
+  swell_gdi_prof_dump();
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
+
+__attribute__((constructor))
+static void swell_gdi_prof_init()
+{
+  const char *p = getenv("SWELL_GDI_PROFILE_LOG");
+  if (p && *p) {
+    strncpy(g_swell_gdi_prof_log_path, p, sizeof(g_swell_gdi_prof_log_path) - 1);
+    g_swell_gdi_prof_log_path[sizeof(g_swell_gdi_prof_log_path) - 1] = 0;
+    g_swell_gdi_prof_enabled = true;
+    atexit(swell_gdi_prof_dump);
+    // Dump on SIGTERM/SIGINT too so `timeout` (without -s KILL) and Ctrl+C
+    // still produce a CSV. SIGKILL cannot be intercepted.
+    signal(SIGTERM, swell_gdi_prof_signal_dump);
+    signal(SIGINT, swell_gdi_prof_signal_dump);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Pool infrastructure
@@ -194,6 +279,7 @@ static inline bool pen_valid(HDC__ *c)
 
 HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
 {
+  SGDI_PROF(SWELL_CreateMemContext);
   (void)hdc;
   HDC__ *ctx = SWELL_GDP_CTX_NEW();
   if (!ctx) return nullptr;
@@ -230,6 +316,7 @@ HDC SWELL_CreateMemContext(HDC hdc, int w, int h)
 
 void SWELL_DeleteGfxContext(HDC ctx)
 {
+  SGDI_PROF(SWELL_DeleteGfxContext);
   if (!ctx || !HDC_VALID(ctx)) return;
   ctx->surface.reset();
   ctx->canvas = nullptr;
@@ -238,6 +325,7 @@ void SWELL_DeleteGfxContext(HDC ctx)
 
 HDC BeginPaint(HWND hwnd, PAINTSTRUCT *ps)
 {
+  SGDI_PROF(BeginPaint);
   if (!hwnd || !ps) return nullptr;
   memset(ps, 0, sizeof(PAINTSTRUCT));
   if (!hwnd->m_paintctx) return nullptr;
@@ -250,6 +338,7 @@ HDC BeginPaint(HWND hwnd, PAINTSTRUCT *ps)
 
 BOOL EndPaint(HWND hwnd, PAINTSTRUCT *ps)
 {
+  SGDI_PROF(EndPaint);
   (void)hwnd;
   (void)ps;
   return TRUE;
@@ -257,6 +346,7 @@ BOOL EndPaint(HWND hwnd, PAINTSTRUCT *ps)
 
 HDC GetDC(HWND hwnd)
 {
+  SGDI_PROF(GetDC);
   if (!hwnd) return nullptr;
 
   // Walk up to find ancestor with backing store (matching original SWELL_internalGetWindowDC).
@@ -381,6 +471,7 @@ HDC GetDC(HWND hwnd)
 // Differs from GetDC which returns client-area only (applies NCCALCSIZE on target).
 HDC GetWindowDC(HWND hwnd)
 {
+  SGDI_PROF(GetWindowDC);
   if (!hwnd) return nullptr;
 
   // Walk up to find ancestor with backing store, but do NOT
@@ -475,6 +566,7 @@ HDC GetWindowDC(HWND hwnd)
 
 void ReleaseDC(HWND hwnd, HDC ctx)
 {
+  SGDI_PROF(ReleaseDC);
   if (!ctx || !HDC_VALID(ctx)) return;
 
   // If not inside a WM_PAINT cycle, blit the dirty region to screen
@@ -512,6 +604,7 @@ void ReleaseDC(HWND hwnd, HDC ctx)
 
 HPEN CreatePen(int attr, int wid, int col)
 {
+  SGDI_PROF(CreatePen);
   (void)attr;
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) return nullptr;
@@ -525,6 +618,7 @@ HPEN CreatePen(int attr, int wid, int col)
 
 HPEN CreatePenAlpha(int attr, int wid, int col, float alpha)
 {
+  SGDI_PROF(CreatePenAlpha);
   HPEN p = CreatePen(attr, wid, col);
   if (p) p->alpha = alpha;
   return p;
@@ -532,6 +626,7 @@ HPEN CreatePenAlpha(int attr, int wid, int col, float alpha)
 
 HBRUSH CreateSolidBrush(int col)
 {
+  SGDI_PROF(CreateSolidBrush);
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) return nullptr;
   obj->type = TYPE_BRUSH;
@@ -544,6 +639,7 @@ HBRUSH CreateSolidBrush(int col)
 
 HBRUSH CreateSolidBrushAlpha(int col, float alpha)
 {
+  SGDI_PROF(CreateSolidBrushAlpha);
   HBRUSH br = CreateSolidBrush(col);
   if (br) br->alpha = alpha;
   return br;
@@ -554,6 +650,7 @@ HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation,
                  char lfCharSet, char lfOutPrecision, char lfClipPrecision,
                  char lfQuality, char lfPitchAndFamily, const char *lfFaceName)
 {
+  SGDI_PROF(CreateFont);
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) return nullptr;
   obj->type = TYPE_FONT;
@@ -588,6 +685,7 @@ HFONT CreateFont(int lfHeight, int lfWidth, int lfEscapement, int lfOrientation,
 
 HFONT CreateFontIndirect(const LOGFONT *lf)
 {
+  SGDI_PROF(CreateFontIndirect);
   if (!lf) return nullptr;
   return CreateFont(lf->lfHeight, lf->lfWidth, lf->lfEscapement, lf->lfOrientation,
                     lf->lfWeight, lf->lfItalic, lf->lfUnderline, lf->lfStrikeOut,
@@ -599,6 +697,7 @@ HFONT CreateFontIndirect(const LOGFONT *lf)
 HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
                      unsigned char *bits)
 {
+  SGDI_PROF(CreateBitmap);
   (void)numplanes;
   if (width <= 0 || height <= 0) return nullptr;
   if (!bits || bitsperpixel != 32) return nullptr;
@@ -624,6 +723,7 @@ HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
 
 HICON CreateIconIndirect(const ICONINFO *iconinfo)
 {
+  SGDI_PROF(CreateIconIndirect);
   if (!iconinfo) return nullptr;
 
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
@@ -668,6 +768,7 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
 
 HICON LoadNamedImage(const char *name, bool alphaFromMask)
 {
+  SGDI_PROF(LoadNamedImage);
   (void)alphaFromMask;
   if (!name || !name[0]) return nullptr;
 
@@ -718,6 +819,7 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
 
 HGDIOBJ SelectObject(HDC ctx, HGDIOBJ pen)
 {
+  SGDI_PROF(SelectObject);
   if (!ctx || !HDC_VALID(ctx)) return nullptr;
 
   if (!pen) return nullptr;
@@ -762,6 +864,7 @@ HGDIOBJ SelectObject(HDC ctx, HGDIOBJ pen)
 
 void DeleteObject(HGDIOBJ obj)
 {
+  SGDI_PROF(DeleteObject);
   if (!obj) return;
 
   // Never delete stock objects (null pen/brush)
@@ -791,6 +894,7 @@ void DeleteObject(HGDIOBJ obj)
 
 HGDIOBJ GetStockObject(int wh)
 {
+  SGDI_PROF(GetStockObject);
   if (wh == NULL_PEN)  return &g_null_pen_obj;
   if (wh == NULL_BRUSH) return &g_null_brush_obj;
   return nullptr;
@@ -808,6 +912,7 @@ HGDIOBJ SWELL_CloneGDIObject(HGDIOBJ a)
 
 BOOL GetObject(HICON icon, int bmsz, void *_bm)
 {
+  SGDI_PROF(GetObject);
   if (!icon || !_bm || bmsz < (int)sizeof(BITMAP)) return FALSE;
   if (!HGDIOBJ_VALID(icon, TYPE_BITMAP)) return FALSE;
 
@@ -834,6 +939,7 @@ BOOL GetObject(HICON icon, int bmsz, void *_bm)
 
 void Rectangle(HDC ctx, int l, int t, int r, int b)
 {
+  SGDI_PROF(Rectangle);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, l, t, r, b);
@@ -865,6 +971,7 @@ void Rectangle(HDC ctx, int l, int t, int r, int b)
 
 void Ellipse(HDC ctx, int l, int t, int r, int b)
 {
+  SGDI_PROF(Ellipse);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, l, t, r, b);
@@ -898,6 +1005,7 @@ void Ellipse(HDC ctx, int l, int t, int r, int b)
 void SWELL_DrawArc(HDC ctx, int l, int t, int r, int b,
                    float start_deg, float sweep_deg)
 {
+  SGDI_PROF(SWELL_DrawArc);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!pen_valid(ctx)) return;
   swell_DirtyContext(ctx, l, t, r, b);
@@ -924,6 +1032,7 @@ void SWELL_DrawArc(HDC ctx, int l, int t, int r, int b,
 void Arc(HDC ctx, int l, int t, int r, int b,
          int xstart, int ystart, int xend, int yend)
 {
+  SGDI_PROF(Arc);
   if (r <= l || b <= t) return;
   const float cx = ((float)l + (float)r) * 0.5f;
   const float cy = ((float)t + (float)b) * 0.5f;
@@ -979,6 +1088,7 @@ static void swell_draw_rrect_border(HDC ctx, const SkRRect &outer,
 
 void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
 {
+  SGDI_PROF(RoundRect);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   const float w = (float)(x2 - x);
@@ -1041,6 +1151,7 @@ void RoundRect(HDC ctx, int x, int y, int x2, int y2, int xrnd, int yrnd)
 void SWELL_DrawRoundRectEx(HDC ctx, int x, int y, int x2, int y2,
                            int rTL, int rTR, int rBR, int rBL)
 {
+  SGDI_PROF(SWELL_DrawRoundRectEx);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
   swell_DirtyContext(ctx, x, y, x2, y2);
@@ -1118,6 +1229,7 @@ void SWELL_DrawRoundRectEx(HDC ctx, int x, int y, int x2, int y2,
 
 void SWELL_FillRect(HDC ctx, const RECT *r, HBRUSH br)
 {
+  SGDI_PROF(SWELL_FillRect);
   if (!HDC_VALID(ctx) || !ctx->canvas || !r) return;
 
   HGDIOBJ__ *useBrush = nullptr;
@@ -1142,6 +1254,7 @@ void SWELL_FillRect(HDC ctx, const RECT *r, HBRUSH br)
 
 void SWELL_Polygon(HDC ctx, POINT *pts, int npts)
 {
+  SGDI_PROF(SWELL_Polygon);
   if (!HDC_VALID(ctx) || !ctx->canvas || !pts || npts < 2) return;
   if (!brush_valid(ctx) && !pen_valid(ctx)) return;
 
@@ -1183,6 +1296,7 @@ void SWELL_Polygon(HDC ctx, POINT *pts, int npts)
 
 void MoveToEx(HDC ctx, int x, int y, POINT *op)
 {
+  SGDI_PROF(MoveToEx);
   if (!HDC_VALID(ctx)) return;
   if (op) {
     op->x = (LONG)ctx->lastpos_x;
@@ -1194,6 +1308,7 @@ void MoveToEx(HDC ctx, int x, int y, POINT *op)
 
 void LineTo(HDC ctx, int x, int y)
 {
+  SGDI_PROF(LineTo);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (!pen_valid(ctx)) {
     ctx->lastpos_x = (float)x;
@@ -1222,6 +1337,7 @@ void LineTo(HDC ctx, int x, int y)
 
 void SetPixel(HDC ctx, int x, int y, int c)
 {
+  SGDI_PROF(SetPixel);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   swell_DirtyContext(ctx, x, y, x + 1, y + 1);
 
@@ -1233,6 +1349,7 @@ void SetPixel(HDC ctx, int x, int y, int c)
 
 void PolyBezierTo(HDC ctx, POINT *pts, int np)
 {
+  SGDI_PROF(PolyBezierTo);
   if (!HDC_VALID(ctx) || !ctx->canvas || !pts || np < 3) return;
   if (!pen_valid(ctx)) {
     ctx->lastpos_x = (float)pts[np - 1].x;
@@ -1273,6 +1390,7 @@ void PolyBezierTo(HDC ctx, POINT *pts, int np)
 
 void PolyPolyline(HDC ctx, const POINT *pts, const DWORD *cnts, int nseg)
 {
+  SGDI_PROF(PolyPolyline);
   if (!HDC_VALID(ctx) || !ctx->canvas || !pts || !cnts || nseg < 1) return;
   if (!pen_valid(ctx)) return;
 
@@ -1325,6 +1443,7 @@ void PolyPolyline(HDC ctx, const POINT *pts, const DWORD *cnts, int nseg)
 void BitBlt(HDC hdcOut, int x, int y, int w, int h,
             HDC hdcIn, int xin, int yin, int mode)
 {
+  SGDI_PROF(BitBlt);
   if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !HDC_VALID(hdcIn) || !hdcIn->canvas) return;
   if (w <= 0 || h <= 0) return;
 
@@ -1389,6 +1508,7 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h,
 void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
                 HDC hdcIn, int xin, int yin, int srcw, int srch, int mode)
 {
+  SGDI_PROF(StretchBlt);
   if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !HDC_VALID(hdcIn) || !hdcIn->canvas) return;
   if (w <= 0 || h <= 0 || srcw <= 0 || srch <= 0) return;
 
@@ -1452,6 +1572,7 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
 void StretchBltFromMem(HDC hdcOut, int x, int y, int w, int h,
                        const void *bits, int srcw, int srch, int srcspan)
 {
+  SGDI_PROF(StretchBltFromMem);
   if (!HDC_VALID(hdcOut) || !hdcOut->canvas || !bits) return;
   if (w <= 0 || h <= 0 || srcw <= 0 || srch <= 0) return;
 
@@ -1478,6 +1599,7 @@ int SWELL_GetScaling256(void)
 
 void DrawImageInRect(HDC ctx, HICON img, const RECT *r)
 {
+  SGDI_PROF(DrawImageInRect);
   if (!HDC_VALID(ctx) || !ctx->canvas || !img || !r) return;
   if (!HGDIOBJ_VALID(img, TYPE_BITMAP)) return;
 
@@ -1500,12 +1622,14 @@ void DrawImageInRect(HDC ctx, HICON img, const RECT *r)
 
 void SetTextColor(HDC ctx, int col)
 {
+  SGDI_PROF(SetTextColor);
   if (!HDC_VALID(ctx)) return;
   ctx->cur_text_color_int = SWELL_TO_SKCOLOR(col, 255);
 }
 
 int GetTextColor(HDC ctx)
 {
+  SGDI_PROF(GetTextColor);
   if (!HDC_VALID(ctx)) return 0;
   int sk = ctx->cur_text_color_int;
   return RGB(SkColorGetR(sk), SkColorGetG(sk), SkColorGetB(sk));
@@ -1513,12 +1637,14 @@ int GetTextColor(HDC ctx)
 
 void SetBkColor(HDC ctx, int col)
 {
+  SGDI_PROF(SetBkColor);
   if (!HDC_VALID(ctx)) return;
   ctx->curbkcol = SWELL_TO_SKCOLOR(col, 255);
 }
 
 void SetBkMode(HDC ctx, int col)
 {
+  SGDI_PROF(SetBkMode);
   if (!HDC_VALID(ctx)) return;
   ctx->curbkmode = col;
 }
@@ -1819,6 +1945,7 @@ static void swell_handle_prefix(const char *buf, int len,
 
 int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 {
+  SGDI_PROF(SWELL_DrawText);
   if (!HDC_VALID(ctx) || !r) return 0;
 
   if (len == -1) len = (int)strlen(buf);
@@ -2124,6 +2251,7 @@ int SWELL_DrawText(HDC ctx, const char *buf, int len, RECT *r, int align)
 
 BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 {
+  SGDI_PROF(GetTextMetrics);
   if (!HDC_VALID(ctx) || !tm) return FALSE;
 
   memset(tm, 0, sizeof(TEXTMETRIC));
@@ -2151,6 +2279,7 @@ BOOL GetTextMetrics(HDC ctx, TEXTMETRIC *tm)
 
 int GetTextFace(HDC ctx, int nCount, LPTSTR lpFaceName)
 {
+  SGDI_PROF(GetTextFace);
   if (!lpFaceName || nCount <= 0) return 0;
   lpFaceName[0] = 0;
   if (!HDC_VALID(ctx)) return 0;
@@ -2173,6 +2302,7 @@ int GetTextFace(HDC ctx, int nCount, LPTSTR lpFaceName)
 int GetGlyphIndicesW(HDC ctx, wchar_t *buf, int len, unsigned short *indices,
                      int flags)
 {
+  SGDI_PROF(GetGlyphIndicesW);
   (void)ctx; (void)buf; (void)flags;
   if (indices && len > 0) memset(indices, 0, (size_t)len * sizeof(unsigned short));
   return 0;
@@ -2184,12 +2314,14 @@ int GetGlyphIndicesW(HDC ctx, wchar_t *buf, int len, unsigned short *indices,
 
 void SWELL_PushClipRegion(HDC ctx)
 {
+  SGDI_PROF(SWELL_PushClipRegion);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   ctx->clip_save_count = ctx->canvas->save();
 }
 
 void SWELL_SetClipRegion(HDC ctx, const RECT *r)
 {
+  SGDI_PROF(SWELL_SetClipRegion);
   if (!HDC_VALID(ctx) || !ctx->canvas || !r) return;
   ctx->canvas->clipRect(
     SkRect::MakeLTRB((float)r->left, (float)r->top,
@@ -2198,6 +2330,7 @@ void SWELL_SetClipRegion(HDC ctx, const RECT *r)
 
 void SWELL_SetClipRoundRect(HDC ctx, int l, int t, int r, int b, int radius)
 {
+  SGDI_PROF(SWELL_SetClipRoundRect);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   if (r <= l || b <= t) return;
   float rad = (float)(radius < 0 ? 0 : radius);
@@ -2208,6 +2341,7 @@ void SWELL_SetClipRoundRect(HDC ctx, int l, int t, int r, int b, int radius)
 
 void SWELL_PopClipRegion(HDC ctx)
 {
+  SGDI_PROF(SWELL_PopClipRegion);
   if (!HDC_VALID(ctx) || !ctx->canvas) return;
   ctx->canvas->restoreToCount(ctx->clip_save_count);
 }
@@ -2218,6 +2352,7 @@ void SWELL_PopClipRegion(HDC ctx)
 
 int GetSysColor(int idx)
 {
+  SGDI_PROF(GetSysColor);
   // Map Win32 system color constants onto the semantic palette so legacy
   // host code keeps working. The traditional bevel highlight/shadow pair
   // collapses to a single subtle border color in flat modern UIs.
@@ -2248,6 +2383,7 @@ void *SWELL_GetCtxGC(HDC ctx)
 
 void *SWELL_GetCtxFrameBuffer(HDC ctx)
 {
+  SGDI_PROF(SWELL_GetCtxFrameBuffer);
   if (!ctx || !HDC_VALID(ctx)) return nullptr;
   HDC__ *ct = (HDC__*)ctx;
   if (!ct->surface) return nullptr;
@@ -2283,6 +2419,7 @@ int AddFontResourceEx(LPCTSTR str, DWORD fl, void *pdv)
 
 HFONT SWELL_GetDefaultFont()
 {
+  SGDI_PROF(SWELL_GetDefaultFont);
   static int s_last_font_size = 0;
   int cur_size = g_swell_theme.default_font_size;
   if (!g_swell_default_font_instance || s_last_font_size != cur_size) {
@@ -2485,6 +2622,7 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
 
 void SWELL_FillDialogBackground(HDC hdc, const RECT *r, int level)
 {
+  SGDI_PROF(SWELL_FillDialogBackground);
   (void)level;
   if (!HDC_VALID(hdc) || !hdc->canvas || !r) return;
 
