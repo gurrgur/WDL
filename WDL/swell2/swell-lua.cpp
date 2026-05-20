@@ -267,6 +267,30 @@ static int l_now_sec(lua_State *L)
   return 1;
 }
 
+static int l_get_frame_stats(lua_State *L)
+{
+  const swell_perf_frame_stats *s = swell_perf_last_frame();
+  if (!s || !s->frame_index) { lua_pushnil(L); return 1; }
+
+  lua_createtable(L, 0, 16);
+  lua_pushinteger(L, (lua_Integer)s->frame_index); lua_setfield(L, -2, "frame");
+  lua_pushnumber(L, s->frame_ms); lua_setfield(L, -2, "frame_ms");
+  lua_pushnumber(L, s->paint_ms); lua_setfield(L, -2, "paint_ms");
+  lua_pushnumber(L, s->upload_ms); lua_setfield(L, -2, "upload_ms");
+  lua_pushnumber(L, s->present_ms); lua_setfield(L, -2, "present_ms");
+  lua_pushinteger(L, s->invalidates); lua_setfield(L, -2, "invalidates");
+  lua_pushinteger(L, s->paint_windows); lua_setfield(L, -2, "paint_windows");
+  lua_pushinteger(L, s->upload_x); lua_setfield(L, -2, "dirty_x");
+  lua_pushinteger(L, s->upload_y); lua_setfield(L, -2, "dirty_y");
+  lua_pushinteger(L, s->upload_w); lua_setfield(L, -2, "dirty_w");
+  lua_pushinteger(L, s->upload_h); lua_setfield(L, -2, "dirty_h");
+  lua_pushinteger(L, s->surface_w); lua_setfield(L, -2, "surface_w");
+  lua_pushinteger(L, s->surface_h); lua_setfield(L, -2, "surface_h");
+  lua_pushinteger(L, s->upload_pixels); lua_setfield(L, -2, "upload_pixels");
+  lua_pushboolean(L, s->full_upload ? 1 : 0); lua_setfield(L, -2, "full_upload");
+  return 1;
+}
+
 static int l_sleep_ms(lua_State *L)
 {
   int ms = (int)luaL_checkinteger(L, 1);
@@ -448,6 +472,7 @@ static const luaL_Reg g_swell_bindings[] = {
   {"fullscreen",      l_fullscreen},
   {"set_window_pos",  l_set_window_pos},
   {"now_sec",         l_now_sec},
+  {"get_frame_stats", l_get_frame_stats},
   {"sleep_ms",        l_sleep_ms},
   {"print",           l_print},
   {"exit",            l_exit},

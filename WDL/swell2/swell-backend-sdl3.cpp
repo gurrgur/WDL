@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <dlfcn.h>
 
 #if __has_include(<X11/Xlib.h>) && __has_include(<X11/Xutil.h>)
@@ -510,7 +511,20 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
   const void *pixels = (const uint8_t*)pixmap.addr() +
       sdlr.y * pixmap.rowBytes() + sdlr.x * 4;
 
+  double upload_ms = 0.0;
+  double present_ms = 0.0;
+  const bool perf_active = swell_perf_is_active();
+  std::chrono::steady_clock::time_point upload_start, upload_end, present_start;
+  if (perf_active) upload_start = std::chrono::steady_clock::now();
+
   SDL_UpdateTexture(e->texture, &sdlr, pixels, pixmap.rowBytes());
+
+  if (perf_active) {
+    upload_end = std::chrono::steady_clock::now();
+    upload_ms = std::chrono::duration<double, std::milli>(
+        upload_end - upload_start).count();
+    present_start = upload_end;
+  }
 
   // Render full texture — partial updates only touch sub-region,
   // the texture retains old content elsewhere. No clear needed:
@@ -519,6 +533,14 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
   SDL_FRect full = { 0, 0, (float)pw, (float)ph };
   SDL_RenderTexture(e->renderer, e->texture, &full, &full);
   SDL_RenderPresent(e->renderer);
+
+  if (perf_active) {
+    auto present_end = std::chrono::steady_clock::now();
+    present_ms = std::chrono::duration<double, std::milli>(
+        present_end - present_start).count();
+    swell_perf_note_upload_rect(sdlr.x, sdlr.y, sdlr.w, sdlr.h,
+                                pw, ph, upload_ms, present_ms);
+  }
 }
 
 // ---------------------------------------------------------------------------

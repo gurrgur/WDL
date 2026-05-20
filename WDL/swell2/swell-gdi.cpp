@@ -2293,6 +2293,8 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
     forceref = true;
 
   if (forceref || hwnd->m_child_invalidated) {
+    swell_perf_note_paint_window(hwnd);
+
     // Clear old dirty state before sending paint messages. Any invalidation
     // caused by input or app code during paint remains set for the next frame.
     hwnd->m_invalidated = false;

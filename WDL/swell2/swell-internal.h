@@ -154,6 +154,7 @@ struct HWND__ {
   bool m_child_invalidated;
   RECT m_dirty_rect;
   bool m_dirty_rect_valid;
+  int m_perf_invalidates;
   bool m_visible;
   bool m_enabled;
   bool m_wantfocus;
@@ -652,6 +653,31 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r);
 void swell_oswindow_maximize(HWND hwnd);
 HWND  swell_oswindow_to_hwnd(SWELL_OSWINDOW osw);
 SWELL_OSWINDOW swell_oswindow_from_hwnd(HWND hwnd);
+
+// Lightweight frame profiler. Enabled for CSV logging by SWELL_PROFILE_LOG=path.
+struct swell_perf_frame_stats {
+  unsigned long long frame_index;
+  double frame_ms;
+  double paint_ms;
+  double upload_ms;
+  double present_ms;
+  int invalidates;
+  int paint_windows;
+  int upload_x, upload_y, upload_w, upload_h;
+  int surface_w, surface_h;
+  int upload_pixels;
+  bool full_upload;
+};
+
+bool swell_perf_is_active();
+void swell_perf_frame_begin(HWND hwnd);
+void swell_perf_note_paint_window(HWND hwnd);
+void swell_perf_note_paint_time(double paint_ms);
+void swell_perf_note_upload_rect(int x, int y, int w, int h,
+                                 int surface_w, int surface_h,
+                                 double upload_ms, double present_ms);
+void swell_perf_frame_end(HWND hwnd, double frame_ms, bool painted);
+const swell_perf_frame_stats *swell_perf_last_frame();
 
 // swell-wnd.cpp internal
 void SWELL_Internal_PostMessage_Init();

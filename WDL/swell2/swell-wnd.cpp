@@ -6,6 +6,7 @@
 
 #include "swell-internal.h"
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <sys/time.h>
@@ -35,6 +36,118 @@ int g_pmq_count = 0;
 static const int MAX_PMQ_SIZE = 1024;
 
 // ===========================================================================
+// Frame profiling
+// ===========================================================================
+
+static bool g_swell_perf_checked = false;
+static bool g_swell_perf_active = false;
+static FILE *g_swell_perf_log = NULL;
+static unsigned long long g_swell_perf_next_frame = 0;
+static swell_perf_frame_stats g_swell_perf_frame = {};
+static swell_perf_frame_stats g_swell_perf_last = {};
+
+static void swell_perf_init()
+{
+  if (g_swell_perf_checked) return;
+  g_swell_perf_checked = true;
+
+  const char *path = getenv("SWELL_PROFILE_LOG");
+  if (!path || !path[0] || !strcmp(path, "0")) return;
+
+  g_swell_perf_log = fopen(path, "w");
+  if (!g_swell_perf_log) {
+    fprintf(stderr, "SWELL profile: failed to open %s\n", path);
+    return;
+  }
+
+  g_swell_perf_active = true;
+  fprintf(g_swell_perf_log,
+          "frame,hwnd,class,frame_ms,paint_ms,upload_ms,present_ms,"
+          "invalidates,paint_windows,dirty_x,dirty_y,dirty_w,dirty_h,"
+          "surface_w,surface_h,upload_pixels,full_upload\n");
+  fflush(g_swell_perf_log);
+}
+
+bool swell_perf_is_active()
+{
+  swell_perf_init();
+  return g_swell_perf_active;
+}
+
+void swell_perf_frame_begin(HWND hwnd)
+{
+  swell_perf_init();
+  memset(&g_swell_perf_frame, 0, sizeof(g_swell_perf_frame));
+  g_swell_perf_frame.frame_index = ++g_swell_perf_next_frame;
+  if (hwnd) {
+    g_swell_perf_frame.invalidates = hwnd->m_perf_invalidates;
+    hwnd->m_perf_invalidates = 0;
+  }
+}
+
+void swell_perf_note_paint_window(HWND)
+{
+  g_swell_perf_frame.paint_windows++;
+}
+
+void swell_perf_note_paint_time(double paint_ms)
+{
+  g_swell_perf_frame.paint_ms += paint_ms;
+}
+
+void swell_perf_note_upload_rect(int x, int y, int w, int h,
+                                 int surface_w, int surface_h,
+                                 double upload_ms, double present_ms)
+{
+  g_swell_perf_frame.upload_ms += upload_ms;
+  g_swell_perf_frame.present_ms += present_ms;
+  g_swell_perf_frame.upload_x = x;
+  g_swell_perf_frame.upload_y = y;
+  g_swell_perf_frame.upload_w = w;
+  g_swell_perf_frame.upload_h = h;
+  g_swell_perf_frame.surface_w = surface_w;
+  g_swell_perf_frame.surface_h = surface_h;
+  g_swell_perf_frame.upload_pixels += w * h;
+  g_swell_perf_frame.full_upload =
+      (x == 0 && y == 0 && w == surface_w && h == surface_h);
+}
+
+void swell_perf_frame_end(HWND hwnd, double frame_ms, bool painted)
+{
+  (void)painted;
+  g_swell_perf_frame.frame_ms = frame_ms;
+  g_swell_perf_last = g_swell_perf_frame;
+
+  if (!g_swell_perf_active || !g_swell_perf_log) return;
+
+  fprintf(g_swell_perf_log,
+          "%llu,%p,%s,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+          g_swell_perf_frame.frame_index,
+          (void *)hwnd,
+          (hwnd && hwnd->m_classname) ? hwnd->m_classname : "",
+          g_swell_perf_frame.frame_ms,
+          g_swell_perf_frame.paint_ms,
+          g_swell_perf_frame.upload_ms,
+          g_swell_perf_frame.present_ms,
+          g_swell_perf_frame.invalidates,
+          g_swell_perf_frame.paint_windows,
+          g_swell_perf_frame.upload_x,
+          g_swell_perf_frame.upload_y,
+          g_swell_perf_frame.upload_w,
+          g_swell_perf_frame.upload_h,
+          g_swell_perf_frame.surface_w,
+          g_swell_perf_frame.surface_h,
+          g_swell_perf_frame.upload_pixels,
+          g_swell_perf_frame.full_upload ? 1 : 0);
+  fflush(g_swell_perf_log);
+}
+
+const swell_perf_frame_stats *swell_perf_last_frame()
+{
+  return &g_swell_perf_last;
+}
+
+// ===========================================================================
 // HWND__ implementation
 // ===========================================================================
 
@@ -44,7 +157,7 @@ HWND__::HWND__(HWND__ *parent, int id, const RECT *r, const char *label,
     m_id(id), m_wndproc(proc), m_dlgproc(NULL), m_classname(NULL),
     m_font(NULL), m_private_data(0),
     m_invalidated(false), m_child_invalidated(false),
-    m_dirty_rect_valid(false),
+    m_dirty_rect_valid(false), m_perf_invalidates(0),
     m_visible(visible), m_enabled(true), m_wantfocus(true),
     m_focused_child(NULL), m_menu(NULL), m_paintctx(NULL),
     m_hashaddestroy(0), m_oswindow(NULL), m_userdata(0),
@@ -1621,6 +1734,7 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
 
   hwnd->m_invalidated = true;
   swell_mark_dirty_rect(h, &rect, hwnd == h && !r);
+  h->m_perf_invalidates++;
 
   // WS_CLIPSIBLINGS: invalidate later siblings that intersect us.
   // Children list is bottom-to-top; siblings at higher indices are
@@ -1680,13 +1794,18 @@ void UpdateWindow(HWND hwnd)
 
   using namespace std::chrono;
   auto t0 = steady_clock::now();
+  swell_perf_frame_begin(top);
 
   SkCanvas *canvas = top->m_backingstore->getCanvas();
   if (canvas) {
     RECT dirty_rect = top->m_dirty_rect;
     const bool dirty_rect_valid = top->m_dirty_rect_valid;
     top->m_dirty_rect_valid = false;
+    auto paint_start = steady_clock::now();
     SWELL_internalSkiaPaint(top, canvas, 0, 0, false);
+    auto paint_end = steady_clock::now();
+    swell_perf_note_paint_time(
+        duration<double, std::milli>(paint_end - paint_start).count());
 
     // Inspector highlight: red outline on selected window
     if (g_swell_inspector_highlight && canvas) {
@@ -1711,6 +1830,7 @@ void UpdateWindow(HWND hwnd)
 
   auto t1 = steady_clock::now();
   double frame_ms = duration<double, std::milli>(t1 - t0).count();
+  swell_perf_frame_end(top, frame_ms, canvas != nullptr);
   swell_lua_notify_frame(top, frame_ms, canvas != nullptr);
   if (canvas)
     swell_inspector_notify_frame(top, frame_ms);
@@ -1999,16 +2119,21 @@ void SWELL_RunMessageLoop()
 
   // Paint all dirty top-level windows (deferred from InvalidateRect calls)
   using namespace std::chrono;
-  auto frame_start = steady_clock::now();
   HWND w = g_swell_top_level_list;
   while (w) {
     if ((w->m_invalidated || w->m_child_invalidated) && w->m_backingstore) {
       SkCanvas *canvas = w->m_backingstore->getCanvas();
       if (canvas) {
+        auto frame_start = steady_clock::now();
+        swell_perf_frame_begin(w);
         RECT dirty_rect = w->m_dirty_rect;
         const bool dirty_rect_valid = w->m_dirty_rect_valid;
         w->m_dirty_rect_valid = false;
+        auto paint_start = steady_clock::now();
         SWELL_internalSkiaPaint(w, canvas, 0, 0, false);
+        auto paint_end = steady_clock::now();
+        swell_perf_note_paint_time(
+            duration<double, std::milli>(paint_end - paint_start).count());
 
         // Inspector highlight: red outline on selected window
         if (g_swell_inspector_highlight) {
@@ -2032,9 +2157,9 @@ void SWELL_RunMessageLoop()
         swell_oswindow_updatetoscreen(w, dirty_rect_valid ? &dirty_rect : NULL);
         auto frame_end = steady_clock::now();
         double frame_ms = duration<double, std::milli>(frame_end - frame_start).count();
+        swell_perf_frame_end(w, frame_ms, true);
         swell_lua_notify_frame(w, frame_ms, true);
         swell_inspector_notify_frame(w, frame_ms);
-        frame_start = steady_clock::now();
       }
     }
     w = w->m_next;
