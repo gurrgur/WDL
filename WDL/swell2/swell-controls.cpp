@@ -1185,18 +1185,32 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_SETTEXT: {
       const char *s = (const char *)lParam;
       if (s && (hwnd->m_style & ES_MULTILINE)) {
-        // strip \r, normalize \r\n to \n
-        WDL_FastString clean;
-        for (const char *p = s; *p; p++) {
-          if (*p == '\r') {
-            if (*(p+1) == '\n') continue; // skip \r before \n
-            clean.Append("\n", 1);
-          } else {
-            char cb[2] = { *p, 0 };
-            clean.Append(cb);
+        // Strip \r, normalize \r\n to \n. Previous code appended one byte
+        // at a time via WDL_FastString::Append(), which is O(N^2) on the
+        // total buffer length and turned a multi-hundred-KB changelog
+        // SetWindowText into a multi-second stall. This version preallocs
+        // the worst-case length then memcpy's spans between \r occurrences.
+        const int len = (int)strlen(s);
+        hwnd->m_title.Set("");
+        hwnd->m_title.SetLen(len, true);
+        char *dst = (char *)hwnd->m_title.Get();
+        int di = 0;
+        int span_start = 0;
+        for (int i = 0; i <= len; ++i) {
+          char c = s[i];
+          if (c == 0 || c == '\r') {
+            int span_len = i - span_start;
+            if (span_len > 0) {
+              memcpy(dst + di, s + span_start, span_len);
+              di += span_len;
+            }
+            if (c == 0) break;
+            // Emit \n unless this \r is followed by \n (CRLF -> LF).
+            if (s[i + 1] != '\n') dst[di++] = '\n';
+            span_start = i + 1;
           }
         }
-        hwnd->m_title.Set(clean.Get());
+        hwnd->m_title.SetLen(di, true);
       } else {
         hwnd->m_title.Set(s ? s : "");
       }
