@@ -712,15 +712,41 @@ static void edit_layout_logical_line(__SWELL_editControlState *st,
   bytes.Add(byte_start);
   xpos.Add(0);
 
-  int x = 0;
-  for (int b = byte_start; b < byte_end;) {
-    int clen = wdl_utf8_parsechar(txt + b, NULL);
-    if (clen < 1) clen = 1;
-    if (b + clen > byte_end) clen = byte_end - b;
-    x += edit_measure_utf8_width(font, txt + b, clen);
-    b += clen;
-    bytes.Add(b);
-    xpos.Add(x);
+  // Batch path: convert the whole line to glyphs once and fetch advances
+  // for all glyphs in a single Skia call. The previous code called
+  // SkFont::measureText per codepoint, which dominated profile on large
+  // edits (changelog scroll: ~76% of CPU in edit_ensure_layout).
+  // Skia returns one glyph per UTF-8 codepoint (no ligatures with the
+  // default no-shape path), so we can pair advances with codepoints by
+  // re-walking the UTF-8 byte stream.
+  const int run_len = byte_end - byte_start;
+  if (run_len > 0) {
+    const int max_glyphs = run_len;  // ASCII upper bound; UTF-8 multi-byte
+                                     // codepoints produce fewer glyphs
+    WDL_TypedBuf<SkGlyphID> glyphs;
+    glyphs.Resize(max_glyphs, false);
+    int nglyphs = font.textToGlyphs(txt + byte_start, (size_t)run_len,
+        SkTextEncoding::kUTF8,
+        SkSpan<SkGlyphID>(glyphs.Get(), max_glyphs));
+    if (nglyphs < 0) nglyphs = 0;
+
+    WDL_TypedBuf<SkScalar> widths;
+    widths.Resize(nglyphs, false);
+    if (nglyphs > 0)
+      font.getWidths(SkSpan<const SkGlyphID>(glyphs.Get(), nglyphs),
+                     SkSpan<SkScalar>(widths.Get(), nglyphs));
+
+    float x = 0.0f;
+    int gi = 0;
+    for (int b = byte_start; b < byte_end;) {
+      int clen = wdl_utf8_parsechar(txt + b, NULL);
+      if (clen < 1) clen = 1;
+      if (b + clen > byte_end) clen = byte_end - b;
+      if (gi < nglyphs) x += widths.Get()[gi++];
+      b += clen;
+      bytes.Add(b);
+      xpos.Add((int)(x + 0.5f));
+    }
   }
 
   const int nchars = bytes.GetSize() - 1;
@@ -764,6 +790,14 @@ static void edit_ensure_layout(HWND hwnd, __SWELL_editControlState *st,
       st->ml_cached_rowh == rowH)
     return;
 
+  // Cache miss: drop the sticky scrollbar bit since text/width/rowH or
+  // multiline state changed, and the scrollbar decision needs to be
+  // re-derived from the fresh layout.
+  if (st->ml_cached_text.GetLength() != text_len ||
+      st->ml_cached_multiline != multiline_i ||
+      st->ml_cached_rowh != rowH)
+    st->ml_known_needs_scrollbar = 0;
+
   st->ml_cached_text.Set(txt);
   st->ml_cached_w = width;
   st->ml_cached_multiline = multiline_i;
@@ -772,23 +806,49 @@ static void edit_ensure_layout(HWND hwnd, __SWELL_editControlState *st,
 
   if (!multiline) {
     edit_layout_logical_line(st, font, txt, 0, text_len, 0, 0, false);
+    // Single line: char count = number of UTF-8 codepoints in the whole
+    // buffer, which the logical-line layout already walked. Recover it
+    // from the ml_xpos array (one entry per codepoint boundary, minus the
+    // sentinel start entry).
+    st->ml_cached_text_chars = st->ml_xpos.GetSize() > 0
+        ? st->ml_xpos.GetSize() - 1 : 0;
     return;
   }
 
+  // Walk the buffer once, tracking the character index incrementally.
+  // Previous code called WDL_utf8_bytepos_to_charpos(txt, line_start) per
+  // newline, which is O(N) from the buffer head -- combined with the
+  // per-newline loop this was O(N * lines) on a multi-line edit and
+  // dominated the profile on changelog-sized text.
   int line_start = 0;
   int char_start = 0;
-  for (int i = 0;; ++i) {
-    if (txt[i] == '\n' || txt[i] == 0) {
+  int curr_char = 0;
+  for (int i = 0;; ) {
+    unsigned char c = (unsigned char)txt[i];
+    if (c == 0) {
       edit_layout_logical_line(st, font, txt, line_start, i, char_start,
                                width, true);
-      if (txt[i] == 0) break;
-      line_start = i + 1;
-      char_start = WDL_utf8_bytepos_to_charpos(txt, line_start);
+      break;
     }
+    if (c == '\n') {
+      edit_layout_logical_line(st, font, txt, line_start, i, char_start,
+                               width, true);
+      ++i;
+      ++curr_char;
+      line_start = i;
+      char_start = curr_char;
+      continue;
+    }
+    int clen = wdl_utf8_parsechar(txt + i, NULL);
+    if (clen < 1) clen = 1;
+    i += clen;
+    ++curr_char;
   }
 
   if (st->ml_dline_starts.GetSize() < 1)
     edit_layout_logical_line(st, font, txt, 0, 0, 0, width, true);
+
+  st->ml_cached_text_chars = curr_char;
 }
 
 static int edit_layout_line_from_byte(__SWELL_editControlState *st, int byte_pos)
@@ -866,15 +926,23 @@ static bool edit_prepare_layout(HWND hwnd, __SWELL_editControlState *st,
   }
 
   const bool multiline = (hwnd->m_style & ES_MULTILINE) != 0;
+  // If a prior layout already established that this text needs a scrollbar,
+  // start at the narrower (with-scrollbar) width directly. Avoids the
+  // wide-then-narrow re-layout pattern that thrashed the layout cache.
+  if (multiline && st->ml_known_needs_scrollbar)
+    tr.right -= th.scrollbar_width;
   int layout_w = tr.right - tr.left;
-  edit_ensure_layout(hwnd, st, skfont, txt, (int)strlen(txt), layout_w, rowH,
+  const int text_len = (int)strlen(txt);
+  edit_ensure_layout(hwnd, st, skfont, txt, text_len, layout_w, rowH,
                      multiline);
   const int viewH = tr.bottom - tr.top;
-  if (multiline && st->ml_dline_starts.GetSize() * rowH > viewH) {
+  if (multiline && st->ml_dline_starts.GetSize() * rowH > viewH &&
+      !st->ml_known_needs_scrollbar) {
     tr.right -= th.scrollbar_width;
     layout_w = tr.right - tr.left;
-    edit_ensure_layout(hwnd, st, skfont, txt, (int)strlen(txt), layout_w, rowH,
-                       true);
+    edit_ensure_layout(hwnd, st, skfont, txt, text_len, layout_w, rowH, true);
+    if (st->ml_dline_starts.GetSize() * rowH > viewH)
+      st->ml_known_needs_scrollbar = 1;
   }
 
   ReleaseDC(hwnd, hdc);
@@ -912,6 +980,10 @@ static int edit_pos_from_xy(HWND hwnd, int mx, int my, __SWELL_editControlState 
     tlen = pass.GetLength();
   }
 
+  // Match edit_prepare_layout's width choice so we share the cached layout
+  // slot instead of thrashing it (wide on this call, narrow on paint).
+  if (multiline && st && st->ml_known_needs_scrollbar)
+    tr.right -= th.scrollbar_width;
   int layout_w = tr.right - tr.left;
   edit_ensure_layout(hwnd, st, skfont, txt, tlen, layout_w, rowH, multiline);
 
@@ -1594,9 +1666,16 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
       const char *txt = hwnd->m_title.Get();
       int tlen = (int)strlen(txt);
-      int text_chars = WDL_utf8_get_charlen(txt);
+      // text_chars: prefer the cached value from a recent layout. If the
+      // layout cache is stale (text changed), edit_ensure_layout will be
+      // forced to re-walk and refresh it below. Falling back to
+      // WDL_utf8_get_charlen here would scan the whole buffer every frame.
+      int text_chars = 0;
       WDL_FastString disp;
       if (is_pass) {
+        // Password path needs to know the count up front to build the disp
+        // string. Use the canonical helper for this rare branch.
+        text_chars = WDL_utf8_get_charlen(txt);
         for (int i = 0; i < text_chars; i++) disp.Append("*", 1);
         txt = disp.Get();
         tlen = (int)strlen(txt);
@@ -1605,8 +1684,14 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       RECT tr = { cr.left + th.padding_edit_h, cr.top + th.padding_edit_v,
                   cr.right - th.padding_edit_h, cr.bottom - th.padding_edit_v };
 
+      // Skip the initial wide-width layout when we already know the
+      // scrollbar is needed (set by a previous paint). See the matching
+      // logic in edit_prepare_layout.
+      if (multiline && st && st->ml_known_needs_scrollbar)
+        tr.right -= th.scrollbar_width;
       int layout_w = tr.right - tr.left;
       edit_ensure_layout(hwnd, st, skfont, txt, tlen, layout_w, rowH, multiline);
+      if (!is_pass) text_chars = st ? st->ml_cached_text_chars : 0;
 
       if (multiline)
       {
@@ -1615,13 +1700,14 @@ LRESULT editWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         int totalH = ndlines * rowH;
         int viewH = tr.bottom - tr.top;
-        if (totalH > viewH) {
+        if (totalH > viewH && st && !st->ml_known_needs_scrollbar) {
           tr.right -= th.scrollbar_width;
           layout_w = tr.right - tr.left;
           edit_ensure_layout(hwnd, st, skfont, txt, tlen, layout_w, rowH, true);
-          ndlines = st ? st->ml_dline_starts.GetSize() : 0;
+          ndlines = st->ml_dline_starts.GetSize();
           if (ndlines == 0) ndlines = 1;
           totalH = ndlines * rowH;
+          if (totalH > viewH) st->ml_known_needs_scrollbar = 1;
         }
         if (st) {
           if (st->scroll_y > totalH - viewH) st->scroll_y = totalH - viewH;

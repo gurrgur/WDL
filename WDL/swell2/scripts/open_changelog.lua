@@ -19,6 +19,8 @@ local ITEM    = os.getenv("OPEN_ITEM") or "Changelog"
 local DELAY   = tonumber(os.getenv("OPEN_DELAY_SEC") or 1)
 local SCROLL_MS = tonumber(os.getenv("SCROLL_PERIOD_MS") or 8)
 local SCROLL_AMP = tonumber(os.getenv("SCROLL_AMP") or -10)
+local DUR_SEC = tonumber(os.getenv("SCROLL_DURATION_SEC") or 0)
+local t_scroll_start = 0
 
 local top_hwnd = nil
 local about_hwnd = nil
@@ -136,8 +138,13 @@ function tick()
       local cls = swell.get_class(edit_hwnd) or "?"
       swell.print("found edit [" .. cls .. "]: " .. tostring(edit_hwnd))
       phase = "scroll"
+      t_scroll_start = now
     end
   elseif phase == "scroll" then
+    if DUR_SEC > 0 and now - t_scroll_start >= DUR_SEC then
+      swell.print("stopping after " .. DUR_SEC .. "s")
+      swell.exit(0)
+    end
     if now - last_scroll >= SCROLL_MS / 1000.0 then
       local cx, cy = center_of(edit_hwnd)
       swell.set_cursor_pos(cx, cy)

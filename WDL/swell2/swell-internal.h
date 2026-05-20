@@ -273,6 +273,16 @@ struct __SWELL_editControlState {
   int ml_cached_w;
   int ml_cached_multiline;
   int ml_cached_rowh;
+  // Sticky scrollbar bit: once a layout overflows the viewport we remember
+  // that the scrollbar is present, so the next edit_prepare_layout call can
+  // skip the initial wide-width layout pass and start directly at the
+  // narrower (with-scrollbar) width. Without this the layout cache slot
+  // alternates between two widths every frame and never hits.
+  int ml_known_needs_scrollbar;
+  // Cached UTF-8 character count of ml_cached_text. Recomputed only on
+  // layout cache miss. Avoids WDL_utf8_get_charlen() (linear scan of the
+  // whole edit buffer) every paint.
+  int ml_cached_text_chars;
   WDL_TypedBuf<int> ml_dline_char_starts;
   WDL_TypedBuf<int> ml_dline_char_ends;
   WDL_TypedBuf<int> ml_dline_xidx;
@@ -287,7 +297,8 @@ struct __SWELL_editControlState {
     max_height(0), max_width(0), cache_linelen_w(0),
     cache_linelen_strlen(0), m_disable_contextmenu(false),
     m_mouse_sel_active(false), m_mouse_sel_anchor(0),
-    ml_cached_w(-1), ml_cached_multiline(-1), ml_cached_rowh(0) {}
+    ml_cached_w(-1), ml_cached_multiline(-1), ml_cached_rowh(0),
+    ml_known_needs_scrollbar(0), ml_cached_text_chars(0) {}
 };
 
 class SWELL_ListView_Row;
