@@ -9,6 +9,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <vector>
 #include <dlfcn.h>
 
 #if __has_include(<X11/Xlib.h>) && __has_include(<X11/Xutil.h>)
@@ -31,6 +35,23 @@ struct SDL_WindowEntry {
   SDL_Texture *texture;
   int tex_w, tex_h;
   SDL_WindowEntry *next;
+
+  // Async upload+present worker. When SWELL_ASYNC_PRESENT=1, main thread
+  // copies the dirty backing-store region into staging[], then signals the
+  // worker which performs SDL_UpdateTexture + SDL_RenderTexture +
+  // SDL_RenderPresent on its own thread. Main thread is free to start the
+  // next paint while the worker uploads/presents the previous frame.
+  bool async_enabled;
+  std::thread render_thread;
+  std::mutex mtx;
+  std::condition_variable cv_job;
+  std::condition_variable cv_idle;
+  std::vector<uint8_t> staging;
+  size_t staging_rowbytes;
+  SDL_Rect staging_rect;
+  int staging_pw, staging_ph;
+  bool job_pending;
+  bool stop;
 };
 
 static SDL_WindowEntry *g_sdl_windows = NULL;
@@ -108,6 +129,17 @@ static SDL_WindowEntry *find_entry_by_windowID(SDL_WindowID id)
   return NULL;
 }
 
+static bool swell_async_present_requested()
+{
+  static const bool s_enabled = []() {
+    const char *e = getenv("SWELL_ASYNC_PRESENT");
+    return e && *e == '1';
+  }();
+  return s_enabled;
+}
+
+static void swell_sdl_render_worker(SDL_WindowEntry *e);
+
 static void add_entry(SDL_Window *w, HWND hwnd, SDL_Renderer *r)
 {
   SDL_WindowEntry *e = new SDL_WindowEntry();
@@ -119,14 +151,36 @@ static void add_entry(SDL_Window *w, HWND hwnd, SDL_Renderer *r)
   e->tex_w = 0;
   e->tex_h = 0;
   e->next = g_sdl_windows;
+  e->async_enabled = false;
+  e->staging_rowbytes = 0;
+  e->staging_rect = SDL_Rect{0, 0, 0, 0};
+  e->staging_pw = 0;
+  e->staging_ph = 0;
+  e->job_pending = false;
+  e->stop = false;
   g_sdl_windows = e;
+
+  if (swell_async_present_requested()) {
+    e->async_enabled = true;
+    e->render_thread = std::thread(swell_sdl_render_worker, e);
+  }
 }
 
 static void remove_entry(SDL_WindowEntry *e)
 {
   if (!e) return;
-  if (e->texture) SDL_DestroyTexture(e->texture);
-  if (e->renderer) SDL_DestroyRenderer(e->renderer);
+  if (e->async_enabled) {
+    {
+      std::lock_guard<std::mutex> lock(e->mtx);
+      e->stop = true;
+      e->cv_job.notify_all();
+    }
+    if (e->render_thread.joinable()) e->render_thread.join();
+    // Worker tore down its renderer + texture before returning.
+  } else {
+    if (e->texture) SDL_DestroyTexture(e->texture);
+    if (e->renderer) SDL_DestroyRenderer(e->renderer);
+  }
 
   SDL_WindowEntry **pp = &g_sdl_windows;
   while (*pp) {
@@ -134,6 +188,70 @@ static void remove_entry(SDL_WindowEntry *e)
     pp = &(*pp)->next;
   }
   delete e;
+}
+
+static void swell_sdl_render_worker(SDL_WindowEntry *e)
+{
+  // Create the renderer on this thread so the underlying GL context is
+  // bound to the worker. All subsequent SDL_Renderer/Texture ops happen
+  // here; main thread must never touch e->renderer or e->texture.
+  e->renderer = SDL_CreateRenderer(e->window, NULL);
+  if (!e->renderer) {
+    fprintf(stderr, "SWELL SDL3: worker SDL_CreateRenderer failed: %s\n",
+            SDL_GetError());
+    std::lock_guard<std::mutex> lock(e->mtx);
+    e->stop = true;
+    e->cv_idle.notify_all();
+    return;
+  }
+  const char *novsync = getenv("SWELL_NO_VSYNC");
+  SDL_SetRenderVSync(e->renderer, (novsync && *novsync == '1') ? 0 : 1);
+
+  for (;;) {
+    SDL_Rect rect;
+    int pw, ph;
+    size_t rowbytes;
+    {
+      std::unique_lock<std::mutex> lock(e->mtx);
+      e->cv_job.wait(lock, [&]{ return e->job_pending || e->stop; });
+      if (e->stop) break;
+      rect = e->staging_rect;
+      pw = e->staging_pw;
+      ph = e->staging_ph;
+      rowbytes = e->staging_rowbytes;
+    }
+
+    // (Re)create texture on this thread if size changed. Main thread does
+    // not touch e->texture in async mode.
+    if (!e->texture || e->tex_w != pw || e->tex_h != ph) {
+      if (e->texture) SDL_DestroyTexture(e->texture);
+      e->texture = SDL_CreateTexture(e->renderer,
+          SDL_PIXELFORMAT_BGRA32,
+          SDL_TEXTUREACCESS_STATIC,
+          pw, ph);
+      if (e->texture) {
+        e->tex_w = pw;
+        e->tex_h = ph;
+        SDL_SetTextureBlendMode(e->texture, SDL_BLENDMODE_NONE);
+      }
+    }
+
+    if (e->texture) {
+      SDL_UpdateTexture(e->texture, &rect, e->staging.data(), rowbytes);
+      SDL_FRect full = {0, 0, (float)pw, (float)ph};
+      SDL_RenderTexture(e->renderer, e->texture, &full, &full);
+      SDL_RenderPresent(e->renderer);
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(e->mtx);
+      e->job_pending = false;
+      e->cv_idle.notify_all();
+    }
+  }
+
+  if (e->texture) { SDL_DestroyTexture(e->texture); e->texture = NULL; }
+  if (e->renderer) { SDL_DestroyRenderer(e->renderer); e->renderer = NULL; }
 }
 
 // ---------------------------------------------------------------------------
@@ -249,15 +367,18 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 
   SDL_ShowWindow(sdlwin);
 
-  SDL_Renderer *rend = SDL_CreateRenderer(sdlwin, NULL);
-  if (!rend) {
-    fprintf(stderr, "SWELL SDL3: SDL_CreateRenderer failed: %s\n", SDL_GetError());
-    SDL_DestroyWindow(sdlwin);
-    return;
-  }
-  {
-    // Env override for profiling: SWELL_NO_VSYNC=1 disables vsync so
-    // frame_ms reflects true paint+upload cost without present stalls.
+  SDL_Renderer *rend = NULL;
+  if (!swell_async_present_requested()) {
+    // Sync mode: create renderer on this (main) thread. In async mode the
+    // worker thread creates the renderer so all SDL_Renderer ops run on a
+    // single thread (OpenGL backend requires same-thread GL context use;
+    // cross-thread access produces visual corruption).
+    rend = SDL_CreateRenderer(sdlwin, NULL);
+    if (!rend) {
+      fprintf(stderr, "SWELL SDL3: SDL_CreateRenderer failed: %s\n", SDL_GetError());
+      SDL_DestroyWindow(sdlwin);
+      return;
+    }
     const char *novsync = getenv("SWELL_NO_VSYNC");
     SDL_SetRenderVSync(rend, (novsync && *novsync == '1') ? 0 : 1);
   }
@@ -480,8 +601,10 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
   SkPixmap pixmap;
   if (!bs->peekPixels(&pixmap)) return;
 
-  // create/recreate texture if size changed
-  if (!e->texture || e->tex_w != pw || e->tex_h != ph) {
+  // create/recreate texture if size changed (sync mode only; in async mode
+  // the worker owns the texture lifecycle on its thread)
+  if (!e->async_enabled &&
+      (!e->texture || e->tex_w != pw || e->tex_h != ph)) {
     if (e->texture) SDL_DestroyTexture(e->texture);
     e->texture = SDL_CreateTexture(e->renderer,
         SDL_PIXELFORMAT_BGRA32,  // B,G,R,A in memory = Skia kBGRA_8888_SkColorType
@@ -521,6 +644,44 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
   const bool perf_active = swell_perf_is_active();
   std::chrono::steady_clock::time_point upload_start, upload_end, present_start;
   if (perf_active) upload_start = std::chrono::steady_clock::now();
+
+  if (e->async_enabled) {
+    // Async path: copy the dirty sub-rect into a tightly packed staging
+    // buffer, hand it to the worker, return immediately. Worker handles
+    // SDL_UpdateTexture + SDL_RenderTexture + SDL_RenderPresent in parallel
+    // with the next paint.
+    std::unique_lock<std::mutex> lock(e->mtx);
+    e->cv_idle.wait(lock, [&]{ return !e->job_pending; });
+
+    const size_t rect_rowbytes = (size_t)sdlr.w * 4;
+    const size_t needed = rect_rowbytes * (size_t)sdlr.h;
+    if (e->staging.size() < needed) e->staging.resize(needed);
+
+    const uint8_t *src = (const uint8_t*)pixels;
+    uint8_t *dst = e->staging.data();
+    for (int y = 0; y < sdlr.h; y++) {
+      memcpy(dst + (size_t)y * rect_rowbytes,
+             src + (size_t)y * pixmap.rowBytes(),
+             rect_rowbytes);
+    }
+    e->staging_rowbytes = rect_rowbytes;
+    e->staging_rect = sdlr;
+    e->staging_pw = pw;
+    e->staging_ph = ph;
+    e->job_pending = true;
+    e->cv_job.notify_one();
+
+    if (perf_active) {
+      upload_end = std::chrono::steady_clock::now();
+      upload_ms = std::chrono::duration<double, std::milli>(
+          upload_end - upload_start).count();
+      // Async: present_ms is the queue/handoff cost (~0), real present runs
+      // on the worker overlapped with the next paint.
+      swell_perf_note_upload_rect(sdlr.x, sdlr.y, sdlr.w, sdlr.h,
+                                  pw, ph, upload_ms, 0.0);
+    }
+    return;
+  }
 
   SDL_UpdateTexture(e->texture, &sdlr, pixels, pixmap.rowBytes());
 
