@@ -444,6 +444,50 @@ static int l_set_window_pos(lua_State *L)
   return 0;
 }
 
+static int l_find_menu_command(lua_State *L)
+{
+  HWND hwnd = to_hwnd(L, 1);
+  const char *menu_label = luaL_checkstring(L, 2);
+  const char *item_label = luaL_checkstring(L, 3);
+  if (!hwnd) { lua_pushnil(L); return 1; }
+
+  HMENU bar = GetMenu(hwnd);
+  if (!bar) { lua_pushnil(L); return 1; }
+
+  char buf[256];
+  MENUITEMINFO mi = {};
+  mi.cbSize = sizeof(mi);
+
+  // search menu bar for matching submenu
+  int n = GetMenuItemCount(bar);
+  for (int i = 0; i < n; i++) {
+    mi.fMask = MIIM_TYPE | MIIM_SUBMENU;
+    mi.dwTypeData = buf;
+    mi.cch = (int)sizeof(buf);
+    buf[0] = 0;
+    if (!GetMenuItemInfo(bar, i, TRUE, &mi)) continue;
+    if (!mi.hSubMenu || !strstr(buf, menu_label)) continue;
+
+    // search submenu for matching item
+    HMENU sub = mi.hSubMenu;
+    int m = GetMenuItemCount(sub);
+    for (int j = 0; j < m; j++) {
+      mi.fMask = MIIM_TYPE | MIIM_ID;
+      mi.dwTypeData = buf;
+      mi.cch = (int)sizeof(buf);
+      buf[0] = 0;
+      if (!GetMenuItemInfo(sub, j, TRUE, &mi)) continue;
+      if (strstr(buf, item_label)) {
+        lua_pushinteger(L, mi.wID);
+        return 1;
+      }
+    }
+    break; // found the right submenu but not the item
+  }
+  lua_pushnil(L);
+  return 1;
+}
+
 // ---- binding table ----
 static const luaL_Reg g_swell_bindings[] = {
   {"find_window",     l_find_window},
@@ -472,6 +516,7 @@ static const luaL_Reg g_swell_bindings[] = {
   {"screen_to_client",l_screen_to_client},
   {"fullscreen",      l_fullscreen},
   {"set_window_pos",  l_set_window_pos},
+  {"find_menu_cmd",   l_find_menu_command},
   {"now_sec",         l_now_sec},
   {"get_frame_stats", l_get_frame_stats},
   {"sleep_ms",        l_sleep_ms},
