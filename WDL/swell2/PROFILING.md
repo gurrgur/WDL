@@ -5,10 +5,9 @@
 ```bash
 # 1. Build swell2 with RelWithDebInfo (optimized + debug symbols)
 cd swell2
-cmake -S . -B . -DCMAKE_BUILD_TYPE=RelWithDebInfo -G Ninja \
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -G Ninja \
   -DSWELL2_BUILD_BENCHMARKS=OFF \
-  -DSWELL2_FRAME_POINTERS=ON \
-  -G Ninja
+  -DSWELL2_FRAME_POINTERS=ON
 cmake --build build
 
 # 2. Run the profiling scene (from WDL repo root)
@@ -16,29 +15,104 @@ cd /home/marcus/Workspace/WDL/WDL
 SCRIPT="$(pwd)/swell2/scripts/scroll_reaper.lua"
 FRAMES="$(pwd)/swell2/build/frames.csv"
 
-# 3. Profile with perf (always use timeout -s KILL!)
-  timeout -s KILL 15s bwrap \
-    --bind / / --dev /dev --dev-bind-try /dev/dri /dev/dri \
-    --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
-    --proc /proc --tmpfs /tmp \
-    --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
-    --bind "$XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR" \
-    --bind "$(pwd)/swell2/build/libSwell.so" /usr/lib/REAPER/libSwell.so \
-    --setenv SWELL_PROF_SCRIPT "$SCRIPT" \
-    --setenv SWELL_PROFILE_LOG "$FRAMES" \
-    --setenv SCROLL_DURATION_SEC "15" \
-    perf record -F 999 --call-graph dwarf,16384 \
-    -o "$(pwd)/swell2/build/perf_baseline.data" -- \
-    reaper /home/marcus/Audio/REAPER/projects/testcase/testcase.RPP
+# 3a. Pure timing run (no perf overhead — best for frame_ms baseline)
+#     SWELL_NO_VSYNC=1 disables vsync so frame_ms reflects true paint+
+#     upload cost without SDL_RenderPresent stalls.
+timeout -s KILL 14s bwrap \
+  --bind / / --dev /dev --dev-bind-try /dev/dri /dev/dri \
+  --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
+  --proc /proc --tmpfs /tmp \
+  --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
+  --bind "$XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR" \
+  --bind "$(pwd)/swell2/build/libSwell.so" /usr/lib/REAPER/libSwell.so \
+  --setenv SWELL_PROF_SCRIPT "$SCRIPT" \
+  --setenv SWELL_PROFILE_LOG "$FRAMES" \
+  --setenv SCROLL_DURATION_SEC "12" \
+  --setenv SWELL_NO_VSYNC "1" \
+  reaper /home/marcus/Audio/REAPER/projects/testcase/testcase.RPP
 
-# 4. Analyze hotspots
-perf report -i swell2/build/perf_baseline.data --stdio --children
+# 3b. perf record run (for hotspot attribution — adds ~5% sampling overhead)
+timeout -s KILL 15s bwrap \
+  --bind / / --dev /dev --dev-bind-try /dev/dri /dev/dri \
+  --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
+  --proc /proc --tmpfs /tmp \
+  --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
+  --bind "$XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR" \
+  --bind "$(pwd)/swell2/build/libSwell.so" /usr/lib/REAPER/libSwell.so \
+  --setenv SWELL_PROF_SCRIPT "$SCRIPT" \
+  --setenv SWELL_PROFILE_LOG "$FRAMES" \
+  --setenv SCROLL_DURATION_SEC "12" \
+  --setenv SWELL_NO_VSYNC "1" \
+  perf record -F 999 --call-graph dwarf,16384 \
+  -o "$(pwd)/swell2/build/perf.data" -- \
+  reaper /home/marcus/Audio/REAPER/projects/testcase/testcase.RPP
 
-# 5. Analyze frame counters
+# 4. Aggregate frame counters
+awk -F, 'NR>1 && NF>4 {
+  n++; sum+=$4; ps+=$5; us+=$6; prs+=$7;
+  if($4>max)max=$4
+} END{
+  printf "n=%d frame_avg=%.3f paint=%.3f upload=%.3f present=%.3f max=%.3f\n",
+         n, sum/n, ps/n, us/n, prs/n, max
+}' "$FRAMES"
+
+# 5. Hotspot attribution
+perf report -i swell2/build/perf.data --stdio --no-children | head -30
+perf report -i swell2/build/perf.data --stdio --no-children --dso=libSwell.so | head -30
+perf report -i swell2/build/perf.data --stdio --children --dso=libSwell.so | head -30
+
+# 6. Inspect frame CSV (slowest first)
+sort -t, -k4 -g -r "$FRAMES" | head -10
 column -s, -t < "$FRAMES" | less -S
-
-# 6. Optimize
 ```
+
+## Methodology notes
+
+**Always run multiple iterations (3+).** Frame timings are noisy — single
+runs can swing ±5%. Run baseline and post-change 3 times each, compare
+medians:
+
+```bash
+for i in 1 2 3; do
+  FRAMES="$(pwd)/swell2/build/frames_r$i.csv"
+  rm -f "$FRAMES"
+  timeout -s KILL 14s bwrap ... reaper ...
+  awk -F, 'NR>1 && NF>4 {n++; sum+=$4} END{printf "r%s frame=%.3f\n", '$i', sum/n}' "$FRAMES"
+done
+```
+
+**Stash for clean A/B compare.** Compare patched vs baseline without
+contamination:
+
+```bash
+git stash && cmake --build build      # measure baseline
+git stash pop && cmake --build build  # measure patched
+```
+
+**Disable vsync for paint optimization work.** With `SWELL_NO_VSYNC=1`,
+`present_ms` drops from ~2 ms (with outliers up to 50 ms) to ~0.2 ms.
+Frame outliers caused by missed vsync vanish, and `frame_ms` reflects
+true paint+upload cost. Leave vsync on when measuring perceived smoothness.
+
+**Watch the frame_ms distribution, not just the average.** A handful of
+50 ms vsync stalls pulls the average up by ~1 ms while the typical
+frame is unchanged. `sort -t, -k4 -g -r frames.csv | head` exposes outliers.
+
+**Bucket by phase.** `paint_ms` >> `upload_ms` >> `present_ms` (typical
+scroll scene). If a change moves `paint_ms`, it's a real GDI/Skia win.
+If only `frame_ms` moves and the phases don't, it's likely vsync or
+scheduler noise.
+
+**Unsymbolized REAPER addresses dominate.** ~40 %+ of CPU is in REAPER's
+own `wndproc` (no debug symbols in the shipped binary). These are
+opaque — focus optimization on libSwell.so and Skia symbols. Use
+`perf report --dso=libSwell.so` to filter to the surface we control.
+
+**DWARF unwinding misses frames into stripped REAPER code.** Callgraph
+attribution stops at the first un-symbolized REAPER frame; you'll see
+hex addresses with no resolved callers. The flat profile and the
+`--dso=libSwell.so` filter are more useful than the call tree for
+diff-based optimization.
 
 ## Frame counter CSV
 
@@ -56,7 +130,17 @@ surface_w,surface_h,upload_pixels,full_upload
 `present_ms` wraps `SDL_RenderTexture()` + `SDL_RenderPresent()`.
 `invalidates` counts invalidations batched into that frame. `paint_windows`
 counts HWNDs repainted by recursive SWELL paint. `upload_pixels` is the
-clamped texture upload area.
+clamped texture upload area. `full_upload=1` when the dirty region covered
+the whole surface (partial-upload optimization didn't trigger).
+
+## Environment toggles
+
+| Env var               | Effect                                                |
+|-----------------------|-------------------------------------------------------|
+| `SWELL_PROF_SCRIPT`   | Lua script run on startup (e.g. scroll_reaper.lua)    |
+| `SWELL_PROFILE_LOG`   | Path to per-frame CSV log                             |
+| `SCROLL_DURATION_SEC` | How long the Lua scroll loop runs before quitting     |
+| `SWELL_NO_VSYNC`      | `1` disables SDL renderer vsync (clean paint timing)  |
 
 ## Scene description
 
@@ -69,3 +153,31 @@ The profile captures the full loop:
 Lua tick → PostMessage → Flush → SendMessage → REAPER wndproc
   → invalidation → Skia paint → SDL texture upload → present
 ```
+
+The dirty region during scroll typically covers most of the track window
+(~3 M pixels per frame). Wins come from making Skia raster ops cheaper
+(BitBlt fast path, sprite blitter), not from reducing paint scope.
+
+## Known hotspots (post Pass 1)
+
+- `__memmove_avx512_unaligned_erms` (~14 % flat): split between
+  `BitBlt` writePixels memcpy, `SDL_UpdateTexture` driver copy, and
+  REAPER-internal buffer copies.
+- REAPER `wndproc` internals (40 %+ unsymbolized): track layout, MIDI
+  rendering, item drawing. Out of scope for swell2.
+- Skia raster pipeline (`sse2::lowp::*`, `rect_memcpy`, `rect_memset32`):
+  the cost of every fill / blit / text run REAPER issues.
+
+## Past optimization passes
+
+1. **Sub-rect snapshots → full-surface snapshots in BitBlt/StretchBlt**
+   (`perf(swell2): avoid subset blit snapshots`). Full snapshots are COW
+   on raster surfaces; subset snapshots forced a pixel copy. Net: small.
+
+2. **writePixels fast path + kFast_SrcRectConstraint in BitBlt/StretchBlt.**
+   For SRCCOPY 1:1 raster→raster with an integer-translate canvas matrix
+   and the dst rect inside the clip, bypass `drawImageRect` entirely and
+   call `SkSurface::writePixels` (per-row memcpy). Frame avg dropped from
+   ~18.0 ms to ~17.4 ms (vsync on) and from ~13.0 ms to ~12.5 ms (vsync
+   off). Removes `sse2::lowp::gather_8888` + `matrix_translate` from
+   the profile.

@@ -255,7 +255,12 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
     SDL_DestroyWindow(sdlwin);
     return;
   }
-  SDL_SetRenderVSync(rend, 1);
+  {
+    // Env override for profiling: SWELL_NO_VSYNC=1 disables vsync so
+    // frame_ms reflects true paint+upload cost without present stalls.
+    const char *novsync = getenv("SWELL_NO_VSYNC");
+    SDL_SetRenderVSync(rend, (novsync && *novsync == '1') ? 0 : 1);
+  }
 
   add_entry(sdlwin, hwnd, rend);
   hwnd->m_oswindow = sdlwin;
