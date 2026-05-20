@@ -1335,10 +1335,10 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h,
 
   int sx = xin + hdcIn->surface_offs.x;
   int sy = yin + hdcIn->surface_offs.y;
-  SkIRect srcIRect = SkIRect::MakeXYWH(sx, sy, w, h);
-  sk_sp<SkImage> img = srcSurf->makeImageSnapshot(srcIRect);
+  sk_sp<SkImage> img = srcSurf->makeImageSnapshot();
   if (!img) return;
 
+  SkRect srcRect = SkRect::MakeXYWH((float)sx, (float)sy, (float)w, (float)h);
   SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
 
   SkPaint paint;
@@ -1348,8 +1348,9 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h,
     paint.setBlendMode(SkBlendMode::kSrcOver);
   }
 
-  hdcOut->canvas->drawImage(img, (float)x, (float)y,
-                            SkSamplingOptions(), &paint);
+  hdcOut->canvas->drawImageRect(img, srcRect, dstRect,
+                                SkSamplingOptions(), &paint,
+                                SkCanvas::kStrict_SrcRectConstraint);
 }
 
 void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
@@ -1365,10 +1366,11 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
 
   int sx = xin + hdcIn->surface_offs.x;
   int sy = yin + hdcIn->surface_offs.y;
-  SkIRect srcIRect = SkIRect::MakeXYWH(sx, sy, srcw, srch);
-  sk_sp<SkImage> img = srcSurf->makeImageSnapshot(srcIRect);
+  sk_sp<SkImage> img = srcSurf->makeImageSnapshot();
   if (!img) return;
 
+  SkRect srcRect = SkRect::MakeXYWH((float)sx, (float)sy,
+                                    (float)srcw, (float)srch);
   SkRect dstRect = SkRect::MakeXYWH((float)x, (float)y, (float)w, (float)h);
 
   SkPaint paint;
@@ -1378,8 +1380,9 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
     paint.setBlendMode(SkBlendMode::kSrcOver);
   }
 
-  hdcOut->canvas->drawImageRect(img, dstRect, SkSamplingOptions(),
-                                &paint);
+  hdcOut->canvas->drawImageRect(img, srcRect, dstRect,
+                                SkSamplingOptions(), &paint,
+                                SkCanvas::kStrict_SrcRectConstraint);
 }
 
 #ifndef SWELL_TARGET_OSX

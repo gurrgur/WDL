@@ -42,6 +42,15 @@ endif()
 # ---- swell2 library ----
 add_library(Swell SHARED ${SWELL2_SOURCES})
 
+option(SWELL2_FRAME_POINTERS "Build swell2 with frame pointers for profiling" OFF)
+if(SWELL2_FRAME_POINTERS AND
+    (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang"))
+  target_compile_options(Swell PRIVATE
+    -fno-omit-frame-pointer
+    -mno-omit-leaf-frame-pointer
+  )
+endif()
+
 target_include_directories(Swell PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/..
