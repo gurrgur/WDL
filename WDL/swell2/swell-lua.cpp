@@ -570,6 +570,8 @@ static void swell_lua_setup_globals(lua_State *L)
   push_const("WM_MOVE",          0x0003);
   push_const("WM_CLOSE",         0x0010);
   push_const("WM_DESTROY",       0x0002);
+  push_const("WM_VSCROLL",       0x0115);
+  push_const("WM_HSCROLL",       0x0114);
 
   push_const("VK_CONTROL",       0x11);
   push_const("VK_SHIFT",         0x10);
