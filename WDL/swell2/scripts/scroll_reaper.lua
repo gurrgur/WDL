@@ -1,31 +1,31 @@
 -- scroll_reaper.lua
--- Wait for REAPERTrackListWindow, pause 3s, then send continuous
--- sinusoidal scroll events (zoom via WM_MOUSEWHEEL, hscroll via WM_MOUSEHWHEEL).
+-- Wait for REAPERTrackListWindow + REAPERTCPDisplay, maximize parent,
+-- pause 1s, then send continuous sinusoidal vertical scroll
+-- (WM_MOUSEWHEEL) to both at 120Hz. Moves cursor to each target
+-- before posting so reaper routes the wheel event correctly.
 --
 -- Usage: SWELL_PROF_SCRIPT=scripts/scroll_reaper.lua ./reaper
 --
 -- Config via env:
---   SCROLL_ZOOM_FREQ=0.5    -- sin frequency (Hz) for vertical scroll
---   SCROLL_H_FREQ=0.7       -- cos frequency (Hz) for horizontal scroll
---   SCROLL_ZOOM_AMP=120     -- wheel delta amplitude
---   SCROLL_H_AMP=120        -- hwheel delta amplitude
---   SCROLL_PERIOD_MS=16     -- event interval (~60fps)
+--   SCROLL_ZOOM_FREQ=0.5    -- sin frequency (Hz)
+--   SCROLL_ZOOM_AMP=20      -- wheel delta amplitude
+--   SCROLL_PERIOD_MS=8      -- event interval (~120Hz)
 --   SCROLL_DURATION_SEC=0   -- stop after N seconds (0 = run forever)
 
-local CLASS = os.getenv("SCROLL_TARGET_CLASS") or "REAPERTrackListWindow"
+local TARGETS = {
+  {class = "REAPERTrackListWindow", hwnd = nil},
+  {class = "REAPERTCPDisplay",      hwnd = nil},
+}
 local zoom_freq  = tonumber(os.getenv("SCROLL_ZOOM_FREQ") or 0.5)
-local h_freq     = tonumber(os.getenv("SCROLL_H_FREQ")  or 0.7)
-local zoom_amp   = tonumber(os.getenv("SCROLL_ZOOM_AMP") or 20)
-local h_amp      = tonumber(os.getenv("SCROLL_H_AMP")   or 120)
+local zoom_amp   = tonumber(os.getenv("SCROLL_ZOOM_AMP")  or 20)
 local period_ms  = tonumber(os.getenv("SCROLL_PERIOD_MS") or 8)
 local dur_sec    = tonumber(os.getenv("SCROLL_DURATION_SEC") or 0)
 
-local target = nil
 local phase = "wait"
 local t_found = 0
 local last_event = 0
+local maximized = false
 
--- Recursive search across full HWND tree
 local function find_class(hwnd, class)
   if hwnd then
     local cls = swell.get_class(hwnd)
@@ -38,32 +38,66 @@ local function find_class(hwnd, class)
   return nil
 end
 
--- re-find target window if lost
-local function ensure_target()
-  if not target then
-    local kids = swell.get_children(nil)
-    for _, top in ipairs(kids) do
-      target = find_class(top, CLASS)
-      if target then break end
-    end
+local function top_level(hwnd)
+  local p = hwnd
+  while p do
+    local par = swell.get_parent(p)
+    if not par then return p end
+    p = par
   end
-  return target
+end
+
+local function center_of(hwnd)
+  local r = swell.get_rect(hwnd)
+  if not r then return 0, 0 end
+  return r.x + r.w // 2, r.y + r.h // 2
+end
+
+local function make_wheel_wp(delta, keys)
+  keys = keys or 0
+  local d = (delta // 1) & 0xFFFF
+  return (d << 16) | (keys & 0xFFFF)
+end
+
+local function all_found()
+  for _, t in ipairs(TARGETS) do
+    if not t.hwnd then
+      local kids = swell.get_children(nil)
+      for _, top in ipairs(kids) do
+        t.hwnd = find_class(top, t.class)
+        if t.hwnd then
+          swell.print("found " .. t.class .. " at " .. tostring(t.hwnd))
+          break
+        end
+      end
+    end
+    if not t.hwnd then return false end
+  end
+  return true
 end
 
 function tick()
   local now = swell.now_sec()
 
   if phase == "wait" then
-    if ensure_target() then
-      swell.print("found " .. CLASS .. " at " .. tostring(target))
+    if all_found() then
+      -- maximize once
+      if not maximized then
+        local tl = top_level(TARGETS[1].hwnd)
+        if tl then
+          swell.show_window(tl, swell.SW_SHOWMAXIMIZED)
+          swell.print("maximized top-level " .. tostring(tl))
+          -- -- fallback: force fullscreen if maximize ignored
+          -- swell.fullscreen(tl, true)
+          maximized = true
+        end
+      end
       t_found = now
       phase = "pause"
     end
   elseif phase == "pause" then
-    if not ensure_target() then
-      phase = "wait"
-    elseif now - t_found >= 1 then
-      swell.print("starting scroll events on " .. tostring(target))
+    if now - t_found >= 1 then
+      swell.print("starting scroll events")
       phase = "scroll"
     end
   elseif phase == "scroll" then
@@ -71,27 +105,18 @@ function tick()
       swell.print("stopping after " .. dur_sec .. "s")
       swell.exit(0)
     end
-    if not ensure_target() then
+    if not all_found() then
       swell.print("target window lost, re-waiting")
       phase = "wait"
     elseif now - last_event >= period_ms / 1000.0 then
-      local t = now - (t_found + 3)
+      local t = now - (t_found + 1)
       local zoom = math.sin(2 * math.pi * zoom_freq * t) * zoom_amp
-      local hscr = math.cos(2 * math.pi * h_freq     * t) * h_amp
-
-      -- WM_MOUSEWHEEL wParam = MAKEWPARAM(fwKeys, zDelta)
-      -- zDelta (signed short) in HIWORD, modifier keys in LOWORD.
-      -- Cast delta to integer and pack: (delta << 16) | keys
-      local function make_wheel_wp(delta, keys)
-        keys = keys or 0
-        local d = (delta // 1) & 0xFFFF  -- truncate to int for bitwise
-        return (d << 16) | (keys & 0xFFFF)
+      local wp = make_wheel_wp(zoom, 0)
+      for _, target in ipairs(TARGETS) do
+        local cx, cy = center_of(target.hwnd)
+        swell.set_cursor_pos(cx, cy)
+        swell.send_message(target.hwnd, swell.WM_MOUSEWHEEL, wp, 0)
       end
-
-      swell.post_message(target, swell.WM_MOUSEWHEEL,
-                         make_wheel_wp(zoom, 0), 0)
-      -- swell.post_message(target, swell.WM_MOUSEHWHEEL,
-      --                    make_wheel_wp(hscr, 0), 1)
       last_event = now
     end
   end

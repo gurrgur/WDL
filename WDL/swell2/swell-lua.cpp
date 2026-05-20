@@ -151,7 +151,7 @@ static int l_has_focus(lua_State *L)
 static int l_get_parent(lua_State *L)
 {
   HWND h = to_hwnd(L, 1);
-  if (!h) { lua_pushnil(L); return 1; }
+  if (!h || !h->m_parent) { lua_pushnil(L); return 1; }
   push_hwnd(L, h->m_parent);
   return 1;
 }
@@ -338,6 +338,87 @@ static int l_get_window_rect_screen(lua_State *L)
   return 1;
 }
 
+static int l_get_cursor_pos(lua_State *L)
+{
+  POINT pt;
+  GetCursorPos(&pt);
+  lua_createtable(L, 0, 2);
+  lua_pushinteger(L, pt.x); lua_setfield(L, -2, "x");
+  lua_pushinteger(L, pt.y); lua_setfield(L, -2, "y");
+  return 1;
+}
+
+static int l_set_cursor_pos(lua_State *L)
+{
+  int x = (int)luaL_checkinteger(L, 1);
+  int y = (int)luaL_checkinteger(L, 2);
+  SetCursorPos(x, y);
+  return 0;
+}
+
+static int l_get_client_rect(lua_State *L)
+{
+  HWND h = to_hwnd(L, 1);
+  if (!h) { lua_pushnil(L); return 1; }
+  RECT r;
+  GetClientRect(h, &r);
+  lua_createtable(L, 0, 4);
+  lua_pushinteger(L, r.left);  lua_setfield(L, -2, "x");
+  lua_pushinteger(L, r.top);   lua_setfield(L, -2, "y");
+  lua_pushinteger(L, r.right);  lua_setfield(L, -2, "w");
+  lua_pushinteger(L, r.bottom); lua_setfield(L, -2, "h");
+  return 1;
+}
+
+static int l_client_to_screen(lua_State *L)
+{
+  HWND h = to_hwnd(L, 1);
+  int x = (int)luaL_checkinteger(L, 2);
+  int y = (int)luaL_checkinteger(L, 3);
+  if (!h) { lua_pushnil(L); return 1; }
+  POINT pt = {x, y};
+  ClientToScreen(h, &pt);
+  lua_createtable(L, 0, 2);
+  lua_pushinteger(L, pt.x); lua_setfield(L, -2, "x");
+  lua_pushinteger(L, pt.y); lua_setfield(L, -2, "y");
+  return 1;
+}
+
+static int l_screen_to_client(lua_State *L)
+{
+  HWND h = to_hwnd(L, 1);
+  int x = (int)luaL_checkinteger(L, 2);
+  int y = (int)luaL_checkinteger(L, 3);
+  if (!h) { lua_pushnil(L); return 1; }
+  POINT pt = {x, y};
+  ScreenToClient(h, &pt);
+  lua_createtable(L, 0, 2);
+  lua_pushinteger(L, pt.x); lua_setfield(L, -2, "x");
+  lua_pushinteger(L, pt.y); lua_setfield(L, -2, "y");
+  return 1;
+}
+
+static int l_fullscreen(lua_State *L)
+{
+  HWND h = to_hwnd(L, 1);
+  bool on = lua_toboolean(L, 2);
+  if (h)
+    SWELL_ExtendedAPI(on ? "FULLSCREEN" : "-FULLSCREEN", h);
+  return 0;
+}
+
+static int l_set_window_pos(lua_State *L)
+{
+  HWND h = to_hwnd(L, 1);
+  int x = (int)luaL_optinteger(L, 2, 0);
+  int y = (int)luaL_optinteger(L, 3, 0);
+  int w = (int)luaL_optinteger(L, 4, 0);
+  int hh = (int)luaL_optinteger(L, 5, 0);
+  int flags = (int)luaL_optinteger(L, 6, 0);
+  if (h) SetWindowPos(h, nullptr, x, y, w, hh, flags|SWP_NOZORDER);
+  return 0;
+}
+
 // ---- binding table ----
 static const luaL_Reg g_swell_bindings[] = {
   {"find_window",     l_find_window},
@@ -359,6 +440,13 @@ static const luaL_Reg g_swell_bindings[] = {
   {"invalidate",      l_invalidate},
   {"post_message",    l_post_message},
   {"send_message",    l_send_message},
+  {"get_cursor_pos",  l_get_cursor_pos},
+  {"set_cursor_pos",  l_set_cursor_pos},
+  {"get_client_rect", l_get_client_rect},
+  {"client_to_screen",l_client_to_screen},
+  {"screen_to_client",l_screen_to_client},
+  {"fullscreen",      l_fullscreen},
+  {"set_window_pos",  l_set_window_pos},
   {"now_sec",         l_now_sec},
   {"sleep_ms",        l_sleep_ms},
   {"print",           l_print},
@@ -388,6 +476,13 @@ static void swell_lua_setup_globals(lua_State *L)
   push_const("SW_SHOWMAXIMIZED", 3);
   push_const("SW_SHOWMINIMIZED", 2);
   push_const("SW_RESTORE",       5);
+
+  push_const("SWP_NOSIZE",       0x0001);
+  push_const("SWP_NOMOVE",       0x0002);
+  push_const("SWP_NOZORDER",     0x0004);
+  push_const("SWP_NOREDRAW",     0x0008);
+  push_const("SWP_NOACTIVATE",   0x0010);
+  push_const("SWP_SHOWWINDOW",   0x0040);
 
   push_const("WM_KEYDOWN",       0x0100);
   push_const("WM_KEYUP",         0x0101);
