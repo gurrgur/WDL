@@ -479,7 +479,7 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
     if (e->texture) SDL_DestroyTexture(e->texture);
     e->texture = SDL_CreateTexture(e->renderer,
         SDL_PIXELFORMAT_BGRA32,  // B,G,R,A in memory = Skia kBGRA_8888_SkColorType
-        SDL_TEXTUREACCESS_STREAMING,
+        SDL_TEXTUREACCESS_STATIC,
         pw, ph);
     if (!e->texture) return;
     e->tex_w = pw;
@@ -1412,9 +1412,6 @@ void SWELL_initargs(int *argc, char ***argv)
   (void)argc;
   (void)argv;
   swell_sdl_apply_app_metadata();
-#if defined(__linux__)
-  SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "wayland,x11", SDL_HINT_DEFAULT);
-#endif
   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
   if (!SDL_WasInit(SDL_INIT_VIDEO) && !SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "SWELL SDL3: SDL_Init failed: %s\n", SDL_GetError());

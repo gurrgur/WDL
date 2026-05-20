@@ -22,7 +22,7 @@ SCRIPT="$(pwd)/swell2/scripts/scroll_reaper.lua"
     --bind "$(pwd)/swell2/build/libSwell.so" /usr/lib/REAPER/libSwell.so \
     --setenv SWELL_INSPECTOR "1" \
     --setenv SWELL_PROF_SCRIPT "$SCRIPT" \
-    perf record -F 999 -g -o /tmp/perf_baseline.data -- \
+    perf record -F 999 -g -o "$(pwd)/swell2/build/perf_baseline.data" -- \
     reaper /home/marcus/Audio/REAPER/projects/testcase/testcase.RPP
 
 # 4. Analyze hotspots

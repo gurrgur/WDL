@@ -152,6 +152,8 @@ struct HWND__ {
   INT_PTR m_private_data;
   bool m_invalidated;
   bool m_child_invalidated;
+  RECT m_dirty_rect;
+  bool m_dirty_rect_valid;
   bool m_visible;
   bool m_enabled;
   bool m_wantfocus;

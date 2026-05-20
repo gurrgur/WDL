@@ -44,6 +44,7 @@ HWND__::HWND__(HWND__ *parent, int id, const RECT *r, const char *label,
     m_id(id), m_wndproc(proc), m_dlgproc(NULL), m_classname(NULL),
     m_font(NULL), m_private_data(0),
     m_invalidated(false), m_child_invalidated(false),
+    m_dirty_rect_valid(false),
     m_visible(visible), m_enabled(true), m_wantfocus(true),
     m_focused_child(NULL), m_menu(NULL), m_paintctx(NULL),
     m_hashaddestroy(0), m_oswindow(NULL), m_userdata(0),
@@ -52,6 +53,7 @@ HWND__::HWND__(HWND__ *parent, int id, const RECT *r, const char *label,
     refcnt(1)
 {
   memset(m_extra, 0, sizeof(m_extra));
+  memset(&m_dirty_rect, 0, sizeof(m_dirty_rect));
   if (r) m_position = *r;
   else memset(&m_position, 0, sizeof(m_position));
   if (label) m_title.Set(label);
@@ -1551,6 +1553,33 @@ HWND WindowFromPoint(POINT p)
 // Invalidation
 // ===========================================================================
 
+static void swell_mark_dirty_rect(HWND hwnd, const RECT *r, bool full)
+{
+  if (!hwnd) return;
+
+  RECT dirty;
+  if (full || !r) {
+    dirty.left = 0;
+    dirty.top = 0;
+    dirty.right = hwnd->m_position.right - hwnd->m_position.left;
+    dirty.bottom = hwnd->m_position.bottom - hwnd->m_position.top;
+  } else {
+    dirty = *r;
+  }
+
+  RECT bounds = { 0, 0,
+    hwnd->m_position.right - hwnd->m_position.left,
+    hwnd->m_position.bottom - hwnd->m_position.top };
+  if (!WinIntersectRect(&dirty, &dirty, &bounds)) return;
+
+  if (hwnd->m_dirty_rect_valid)
+    WinUnionRect(&hwnd->m_dirty_rect, &hwnd->m_dirty_rect, &dirty);
+  else {
+    hwnd->m_dirty_rect = dirty;
+    hwnd->m_dirty_rect_valid = true;
+  }
+}
+
 BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
 {
   if (!hwnd || !hwnd->m_visible) return FALSE;
@@ -1591,6 +1620,7 @@ BOOL InvalidateRect(HWND hwnd, const RECT *r, int eraseBk)
   }
 
   hwnd->m_invalidated = true;
+  swell_mark_dirty_rect(h, &rect, hwnd == h && !r);
 
   // WS_CLIPSIBLINGS: invalidate later siblings that intersect us.
   // Children list is bottom-to-top; siblings at higher indices are
@@ -1653,6 +1683,9 @@ void UpdateWindow(HWND hwnd)
 
   SkCanvas *canvas = top->m_backingstore->getCanvas();
   if (canvas) {
+    RECT dirty_rect = top->m_dirty_rect;
+    const bool dirty_rect_valid = top->m_dirty_rect_valid;
+    top->m_dirty_rect_valid = false;
     SWELL_internalSkiaPaint(top, canvas, 0, 0, false);
 
     // Inspector highlight: red outline on selected window
@@ -1673,7 +1706,7 @@ void UpdateWindow(HWND hwnd)
       }
     }
 
-    swell_oswindow_updatetoscreen(top, NULL);
+    swell_oswindow_updatetoscreen(top, dirty_rect_valid ? &dirty_rect : NULL);
   }
 
   auto t1 = steady_clock::now();
@@ -1972,6 +2005,9 @@ void SWELL_RunMessageLoop()
     if ((w->m_invalidated || w->m_child_invalidated) && w->m_backingstore) {
       SkCanvas *canvas = w->m_backingstore->getCanvas();
       if (canvas) {
+        RECT dirty_rect = w->m_dirty_rect;
+        const bool dirty_rect_valid = w->m_dirty_rect_valid;
+        w->m_dirty_rect_valid = false;
         SWELL_internalSkiaPaint(w, canvas, 0, 0, false);
 
         // Inspector highlight: red outline on selected window
@@ -1993,7 +2029,7 @@ void SWELL_RunMessageLoop()
           }
         }
 
-        swell_oswindow_updatetoscreen(w, NULL);
+        swell_oswindow_updatetoscreen(w, dirty_rect_valid ? &dirty_rect : NULL);
         auto frame_end = steady_clock::now();
         double frame_ms = duration<double, std::milli>(frame_end - frame_start).count();
         swell_lua_notify_frame(w, frame_ms, true);
