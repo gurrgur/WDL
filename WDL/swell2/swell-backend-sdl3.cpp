@@ -131,9 +131,10 @@ static SDL_WindowEntry *find_entry_by_windowID(SDL_WindowID id)
 
 static bool swell_async_present_requested()
 {
+  // Default ON. SWELL_ASYNC_PRESENT=0 disables.
   static const bool s_enabled = []() {
     const char *e = getenv("SWELL_ASYNC_PRESENT");
-    return e && *e == '1';
+    return !(e && *e == '0');
   }();
   return s_enabled;
 }
