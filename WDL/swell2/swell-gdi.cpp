@@ -1335,6 +1335,39 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h,
 
   int sx = xin + hdcIn->surface_offs.x;
   int sy = yin + hdcIn->surface_offs.y;
+
+  // Fast path: SRCCOPY 1:1, raster src + dst, canvas is integer-translate
+  // only, no clip narrower than dst rect → use SkSurface::writePixels to
+  // bypass the Skia raster pipeline entirely (no sprite blitter, no
+  // shader, just a per-row memcpy).
+  if (mode == SRCCOPY) {
+    SkPixmap srcPm;
+    SkSurface *dstSurf = hdcOut->canvas->getSurface();
+    if (dstSurf && srcSurf->peekPixels(&srcPm)) {
+      const SkMatrix &m = hdcOut->canvas->getTotalMatrix();
+      if (m.isTranslate()) {
+        float tx = m.getTranslateX();
+        float ty = m.getTranslateY();
+        int itx = (int)tx, ity = (int)ty;
+        if ((float)itx == tx && (float)ity == ty) {
+          int dx = x + itx;
+          int dy = y + ity;
+          SkIRect clipBounds;
+          if (hdcOut->canvas->getDeviceClipBounds(&clipBounds) &&
+              clipBounds.contains(SkIRect::MakeXYWH(dx, dy, w, h)) &&
+              sx >= 0 && sy >= 0 &&
+              sx + w <= srcPm.width() && sy + h <= srcPm.height()) {
+            SkPixmap sub;
+            if (srcPm.extractSubset(&sub, SkIRect::MakeXYWH(sx, sy, w, h))) {
+              dstSurf->writePixels(sub, dx, dy);
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
+
   sk_sp<SkImage> img = srcSurf->makeImageSnapshot();
   if (!img) return;
 
@@ -1350,7 +1383,7 @@ void BitBlt(HDC hdcOut, int x, int y, int w, int h,
 
   hdcOut->canvas->drawImageRect(img, srcRect, dstRect,
                                 SkSamplingOptions(), &paint,
-                                SkCanvas::kStrict_SrcRectConstraint);
+                                SkCanvas::kFast_SrcRectConstraint);
 }
 
 void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
@@ -1366,6 +1399,36 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
 
   int sx = xin + hdcIn->surface_offs.x;
   int sy = yin + hdcIn->surface_offs.y;
+
+  // 1:1 StretchBlt = BitBlt; route to writePixels fast path.
+  if (mode == SRCCOPY && w == srcw && h == srch) {
+    SkPixmap srcPm;
+    SkSurface *dstSurf = hdcOut->canvas->getSurface();
+    if (dstSurf && srcSurf->peekPixels(&srcPm)) {
+      const SkMatrix &m = hdcOut->canvas->getTotalMatrix();
+      if (m.isTranslate()) {
+        float tx = m.getTranslateX();
+        float ty = m.getTranslateY();
+        int itx = (int)tx, ity = (int)ty;
+        if ((float)itx == tx && (float)ity == ty) {
+          int dx = x + itx;
+          int dy = y + ity;
+          SkIRect clipBounds;
+          if (hdcOut->canvas->getDeviceClipBounds(&clipBounds) &&
+              clipBounds.contains(SkIRect::MakeXYWH(dx, dy, w, h)) &&
+              sx >= 0 && sy >= 0 &&
+              sx + w <= srcPm.width() && sy + h <= srcPm.height()) {
+            SkPixmap sub;
+            if (srcPm.extractSubset(&sub, SkIRect::MakeXYWH(sx, sy, w, h))) {
+              dstSurf->writePixels(sub, dx, dy);
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
+
   sk_sp<SkImage> img = srcSurf->makeImageSnapshot();
   if (!img) return;
 
@@ -1382,7 +1445,7 @@ void StretchBlt(HDC hdcOut, int x, int y, int w, int h,
 
   hdcOut->canvas->drawImageRect(img, srcRect, dstRect,
                                 SkSamplingOptions(), &paint,
-                                SkCanvas::kStrict_SrcRectConstraint);
+                                SkCanvas::kFast_SrcRectConstraint);
 }
 
 #ifndef SWELL_TARGET_OSX
