@@ -57,6 +57,7 @@ struct SDL_WindowEntry {
 static SDL_WindowEntry *g_sdl_windows = NULL;
 static SDL_Surface *s_program_icon_surface = NULL;
 int g_swell_sdl_current_event_type = 0;
+static SDL_Event *s_swell_cur_sdl_event = NULL;
 
 static void swell_sdl_apply_app_metadata()
 {
@@ -70,6 +71,88 @@ static void swell_sdl_apply_app_metadata()
 }
 
 #ifdef SWELL_SDL3_HAVE_X11_HEADERS
+
+// X11 loaded dynamically via dlopen — swell2 does not link libX11. Functions
+// are needed for x11 video driver class hints and for XBridge windows (both
+// x11 and wayland video drivers, the latter via XWayland).
+struct swell_x11_api {
+  bool ok;
+  Display *(*XOpenDisplay)(const char *);
+  int (*XCloseDisplay)(Display *);
+  Window (*XCreateWindow)(Display *, Window, int, int, unsigned int,
+                          unsigned int, unsigned int, int, unsigned int,
+                          Visual *, unsigned long, XSetWindowAttributes *);
+  int (*XDestroyWindow)(Display *, Window);
+  int (*XReparentWindow)(Display *, Window, Window, int, int);
+  int (*XMapWindow)(Display *, Window);
+  int (*XMapRaised)(Display *, Window);
+  int (*XUnmapWindow)(Display *, Window);
+  int (*XMoveResizeWindow)(Display *, Window, int, int,
+                           unsigned int, unsigned int);
+  int (*XResizeWindow)(Display *, Window, unsigned int, unsigned int);
+  int (*XMoveWindow)(Display *, Window, int, int);
+  int (*XSelectInput)(Display *, Window, long);
+  int (*XSync)(Display *, int);
+  int (*XFlush)(Display *);
+  int (*XFree)(void *);
+  int (*XQueryTree)(Display *, Window, Window *, Window *,
+                    Window **, unsigned int *);
+  XSizeHints *(*XAllocSizeHints)(void);
+  int (*XGetWMNormalHints)(Display *, Window, XSizeHints *, long *);
+  int (*XGetWindowAttributes)(Display *, Window, XWindowAttributes *);
+  XErrorHandler (*XSetErrorHandler)(XErrorHandler);
+  int (*XPending)(Display *);
+  int (*XNextEvent)(Display *, XEvent *);
+  int (*XSetClassHint)(Display *, Window, XClassHint *);
+  int (*XConnectionNumber)(Display *);
+};
+
+static swell_x11_api *swell_x11_load()
+{
+  static swell_x11_api api;
+  static bool checked;
+  if (checked) return api.ok ? &api : NULL;
+  checked = true;
+
+  void *h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_LOCAL);
+  if (!h) h = dlopen("libX11.so", RTLD_LAZY | RTLD_LOCAL);
+  if (!h) return NULL;
+
+#define SWELL_X11_LOAD(name) \
+  api.name = (decltype(api.name))dlsym(h, #name)
+  SWELL_X11_LOAD(XOpenDisplay);
+  SWELL_X11_LOAD(XCloseDisplay);
+  SWELL_X11_LOAD(XCreateWindow);
+  SWELL_X11_LOAD(XDestroyWindow);
+  SWELL_X11_LOAD(XReparentWindow);
+  SWELL_X11_LOAD(XMapWindow);
+  SWELL_X11_LOAD(XMapRaised);
+  SWELL_X11_LOAD(XUnmapWindow);
+  SWELL_X11_LOAD(XMoveResizeWindow);
+  SWELL_X11_LOAD(XResizeWindow);
+  SWELL_X11_LOAD(XMoveWindow);
+  SWELL_X11_LOAD(XSelectInput);
+  SWELL_X11_LOAD(XSync);
+  SWELL_X11_LOAD(XFlush);
+  SWELL_X11_LOAD(XFree);
+  SWELL_X11_LOAD(XQueryTree);
+  SWELL_X11_LOAD(XAllocSizeHints);
+  SWELL_X11_LOAD(XGetWMNormalHints);
+  SWELL_X11_LOAD(XGetWindowAttributes);
+  SWELL_X11_LOAD(XSetErrorHandler);
+  SWELL_X11_LOAD(XPending);
+  SWELL_X11_LOAD(XNextEvent);
+  SWELL_X11_LOAD(XSetClassHint);
+  SWELL_X11_LOAD(XConnectionNumber);
+#undef SWELL_X11_LOAD
+
+  api.ok = api.XOpenDisplay && api.XCreateWindow && api.XDestroyWindow &&
+           api.XReparentWindow && api.XMapWindow && api.XUnmapWindow &&
+           api.XMoveResizeWindow && api.XResizeWindow && api.XSelectInput &&
+           api.XSync && api.XFlush && api.XFree && api.XQueryTree;
+  return api.ok ? &api : NULL;
+}
+
 static void swell_sdl_set_x11_class(SDL_Window *window)
 {
   if (!window || !g_swell_appname || !*g_swell_appname) return;
@@ -81,27 +164,14 @@ static void swell_sdl_set_x11_class(SDL_Window *window)
       props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
   if (!display || !xid) return;
 
-  typedef int (*XSetClassHintFunc)(Display *, Window, XClassHint *);
-  typedef int (*XFlushFunc)(Display *);
-  static void *s_x11;
-  static XSetClassHintFunc s_set_class_hint;
-  static XFlushFunc s_flush;
-  static bool s_checked;
-  if (!s_checked) {
-    s_checked = true;
-    s_x11 = dlopen("libX11.so.6", RTLD_LAZY | RTLD_LOCAL);
-    if (s_x11) {
-      s_set_class_hint = (XSetClassHintFunc)dlsym(s_x11, "XSetClassHint");
-      s_flush = (XFlushFunc)dlsym(s_x11, "XFlush");
-    }
-  }
-  if (!s_set_class_hint) return;
+  swell_x11_api *x = swell_x11_load();
+  if (!x || !x->XSetClassHint) return;
 
   XClassHint class_hint;
   class_hint.res_name = (char *)g_swell_appname;
   class_hint.res_class = (char *)g_swell_appname;
-  s_set_class_hint(display, xid, &class_hint);
-  if (s_flush) s_flush(display);
+  x->XSetClassHint(display, xid, &class_hint);
+  x->XFlush(display);
 }
 
 #else
@@ -1528,9 +1598,12 @@ static void swell_sdlDispatchEvent(SDL_Event *evt)
 {
   g_swell_event_dispatch_depth++;
   const int old_event_type = g_swell_sdl_current_event_type;
+  SDL_Event * const old_evt = s_swell_cur_sdl_event;
   g_swell_sdl_current_event_type = evt ? (int)evt->type : 0;
+  s_swell_cur_sdl_event = evt;
   if (!swell_menu_sdl_handle_event(evt))
     swell_sdlEventHandler(evt);
+  s_swell_cur_sdl_event = old_evt;
   g_swell_sdl_current_event_type = old_event_type;
   g_swell_event_dispatch_depth--;
 }
@@ -1718,29 +1791,476 @@ void swell_scaling_init(bool no_auto_hidpi)
 
 // ---------------------------------------------------------------------------
 // SWELL_CreateXBridgeWindow, SWELL_GetOSWindow, SWELL_GetOSEvent
+//
+// XBridge windows embed a native X11 window (typically a plug-in GUI created
+// over the XEmbed protocol) inside a SWELL HWND. The plug-in creates its own
+// X window as a child of `native_w`; this code keeps `native_w` positioned
+// and sized to match the SWELL HWND, and reparents it into the parent
+// top-level when necessary.
+//
+//   * x11 video driver: SDL_Window owns an X11 xid. We reparent `native_w`
+//     into that xid. Bridge moves with the SDL window automatically.
+//   * wayland video driver: SDL_Window is a wl_surface; XWayland cannot
+//     reparent into wayland surfaces. We open an independent XWayland
+//     connection and create `native_w` as a top-level X11 window. Size is
+//     mirrored from the SWELL HWND; screen position is not (wayland does
+//     not expose absolute parent coords), so the WM places it.
 // ---------------------------------------------------------------------------
 
 #ifndef SWELL_TARGET_OSX
+
+#ifdef SWELL_SDL3_HAVE_X11_HEADERS
+
+static const char * const swell_sdl_bridge_classname = "__swell_xbridgewndclass";
+
+struct swell_sdl_bridge_state {
+  Display *display;
+  Window native_w;
+  Window cur_parent_xid;     // 0 = no reparent target (XWayland top-level)
+  HWND hwnd_child;
+  bool need_reparent;
+  bool lastvis;
+  bool owned_display;        // true if we XOpenDisplay'd it (wayland case)
+  RECT lastrect;
+};
+
+static WDL_PtrList<swell_sdl_bridge_state> s_swell_bridges;
+
+// Cached XWayland-side Display* for the wayland video driver. Opened lazily,
+// shared across all bridges, closed on process exit (intentionally leaked —
+// XCloseDisplay during static destruction races with plug-in threads).
+static Display *s_swell_xwayland_display = NULL;
+
+static int swell_sdl_x11_ignore_error(Display *, XErrorEvent *) { return 0; }
+
+class swell_sdl_x11_error_guard {
+public:
+  swell_sdl_x11_error_guard(swell_x11_api *x, Display *d)
+    : m_x(x), m_d(d), m_prev(NULL)
+  {
+    if (m_x && m_d) m_prev = m_x->XSetErrorHandler(swell_sdl_x11_ignore_error);
+  }
+  ~swell_sdl_x11_error_guard()
+  {
+    if (m_x && m_d) {
+      m_x->XSync(m_d, False);
+      m_x->XSetErrorHandler(m_prev);
+    }
+  }
+private:
+  swell_x11_api *m_x;
+  Display *m_d;
+  XErrorHandler m_prev;
+};
+
+// Resolve a SWELL HWND ancestry chain to the X11 (Display*, Window) of the
+// SDL3 top-level. Returns false if the chain has no SDL_Window or if SDL3
+// is not on the x11 video driver.
+static bool swell_sdl_x11_parent_for_hwnd(HWND viewpar,
+                                          Display **out_disp,
+                                          Window *out_xid,
+                                          HWND *out_hwnd)
+{
+  if (out_disp) *out_disp = NULL;
+  if (out_xid) *out_xid = 0;
+  if (out_hwnd) *out_hwnd = NULL;
+
+  if (!swell_sdl_current_driver_is("x11")) return false;
+
+  HWND h = viewpar;
+  while (h) {
+    if (h->m_oswindow) {
+      SDL_PropertiesID props = SDL_GetWindowProperties(
+          (SDL_Window *)h->m_oswindow);
+      Display *d = (Display *)SDL_GetPointerProperty(
+          props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+      Window xid = (Window)SDL_GetNumberProperty(
+          props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+      if (!d || !xid) return false;
+      if (out_disp) *out_disp = d;
+      if (out_xid) *out_xid = xid;
+      if (out_hwnd) *out_hwnd = h;
+      return true;
+    }
+    h = h->m_parent;
+  }
+  return false;
+}
+
+// Returns the X11 Display* from any currently-open SDL3 x11 window.
+// Used as fallback when the bridge's parent chain has no SDL_Window yet.
+static Display *swell_sdl_x11_any_display()
+{
+  for (SDL_WindowEntry *e = g_sdl_windows; e; e = e->next) {
+    if (!e->window) continue;
+    SDL_PropertiesID props = SDL_GetWindowProperties(e->window);
+    Display *d = (Display *)SDL_GetPointerProperty(
+        props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+    if (d) return d;
+  }
+  return NULL;
+}
+
+static Display *swell_sdl_xwayland_display(swell_x11_api *x)
+{
+  if (!x) return NULL;
+  if (s_swell_xwayland_display) return s_swell_xwayland_display;
+  // XWayland exports the same $DISPLAY env var as a native X server.
+  Display *d = x->XOpenDisplay(NULL);
+  if (d) s_swell_xwayland_display = d;
+  return d;
+}
+
+static void swell_sdl_xbridge_detach_children(swell_x11_api *x, Display *d,
+                                              Window native_w)
+{
+  if (!x || !d || !native_w) return;
+  Window root = 0, par = 0, *list = NULL;
+  unsigned int nlist = 0;
+  if (x->XQueryTree(d, native_w, &root, &par, &list, &nlist) && list) {
+    for (unsigned int i = 0; i < nlist; i++) {
+      x->XUnmapWindow(d, list[i]);
+      x->XReparentWindow(d, list[i], root, 0, 0);
+    }
+    x->XFree(list);
+  }
+}
+
+static void swell_sdl_xbridge_fit_child(swell_sdl_bridge_state *bs,
+                                        HWND hwnd, bool apply_hints)
+{
+  swell_x11_api *x = swell_x11_load();
+  if (!x || !bs || !bs->display || !bs->native_w) return;
+
+  RECT r;
+  GetClientRect(hwnd, &r);
+  if (r.right <= 0 || r.bottom <= 0) return;
+
+  swell_sdl_x11_error_guard guard(x, bs->display);
+  Window root, par, *list = NULL;
+  unsigned int nlist = 0;
+  if (!x->XQueryTree(bs->display, bs->native_w, &root, &par, &list, &nlist))
+    return;
+  if (!list || !nlist) {
+    if (list) x->XFree(list);
+    return;
+  }
+
+  if (apply_hints && x->XAllocSizeHints && x->XGetWMNormalHints) {
+    XSizeHints *hints = x->XAllocSizeHints();
+    if (hints) {
+      long got = 0;
+      x->XGetWMNormalHints(bs->display, list[0], hints, &got);
+      if (hints->flags & PMinSize) {
+        if (r.right < hints->min_width) r.right = hints->min_width;
+        if (r.bottom < hints->min_height) r.bottom = hints->min_height;
+      }
+      if (hints->flags & PMaxSize) {
+        if (hints->max_width > 0 && r.right > hints->max_width)
+          r.right = hints->max_width;
+        if (hints->max_height > 0 && r.bottom > hints->max_height)
+          r.bottom = hints->max_height;
+      }
+      x->XFree(hints);
+    }
+  }
+
+  x->XMapWindow(bs->display, list[0]);
+  x->XMoveResizeWindow(bs->display, list[0], 0, 0,
+                       (unsigned)r.right, (unsigned)r.bottom);
+  x->XFlush(bs->display);
+  x->XFree(list);
+}
+
+static LRESULT swell_sdl_xbridge_proc(HWND hwnd, UINT uMsg,
+                                      WPARAM wParam, LPARAM lParam)
+{
+  swell_x11_api *x = swell_x11_load();
+
+  switch (uMsg) {
+    case WM_DESTROY:
+      if (hwnd && hwnd->m_private_data) {
+        swell_sdl_bridge_state *bs =
+            (swell_sdl_bridge_state *)hwnd->m_private_data;
+        hwnd->m_private_data = 0;
+        s_swell_bridges.DeletePtr(bs);
+        if (x && bs->display && bs->native_w) {
+          swell_sdl_x11_error_guard guard(x, bs->display);
+          swell_sdl_xbridge_detach_children(x, bs->display, bs->native_w);
+          x->XDestroyWindow(bs->display, bs->native_w);
+        }
+        delete bs;
+      }
+      break;
+
+    case WM_TIMER:
+      if (wParam == 1010) {
+        // One-shot: child plug-in finally exists, resize it to fit our client.
+        swell_sdl_xbridge_fit_child(
+            (swell_sdl_bridge_state *)hwnd->m_private_data, hwnd, true);
+        KillTimer(hwnd, wParam);
+        break;
+      }
+      if (wParam != 1) break;
+      // fallthrough: timer id 1 acts as periodic reposition tick
+    case WM_MOVE:
+    case WM_SIZE:
+      if (hwnd && hwnd->m_private_data && x) {
+        swell_sdl_bridge_state *bs =
+            (swell_sdl_bridge_state *)hwnd->m_private_data;
+
+        // Walk parent chain to compute child rect in top-level OS coords.
+        HWND h = hwnd->m_parent;
+        RECT tr = hwnd->m_position;
+        while (h) {
+          RECT cr = h->m_position;
+          if (h->m_oswindow) {
+            cr.right -= cr.left;
+            cr.bottom -= cr.top;
+            cr.left = cr.top = 0;
+          }
+          if (h->m_wndproc) {
+            NCCALCSIZE_PARAMS p = {{ cr }};
+            h->m_wndproc(h, WM_NCCALCSIZE, 0, (LPARAM)&p);
+            cr = p.rgrc[0];
+          }
+          tr.left += cr.left;
+          tr.top += cr.top;
+          tr.right += cr.left;
+          tr.bottom += cr.top;
+          if (tr.left < cr.left) tr.left = cr.left;
+          if (tr.top < cr.top) tr.top = cr.top;
+          if (tr.right > cr.right) tr.right = cr.right;
+          if (tr.bottom > cr.bottom) tr.bottom = cr.bottom;
+          if (h->m_oswindow) break;
+          h = h->m_parent;
+        }
+
+        const bool vis = IsWindowVisible(hwnd) &&
+                         tr.right > tr.left && tr.bottom > tr.top;
+
+        // Re-resolve the X11 parent xid from the current SDL window chain.
+        // Three cases:
+        //   * wayland (owned_display=false, cur_parent_xid=0): no parent,
+        //     nothing to resolve — top-level XWayland window.
+        //   * x11, deferred (cur_parent_xid=0, need_reparent=true): SDL window
+        //     may now exist; try to find it so we can reparent.
+        //   * x11, normal (cur_parent_xid != 0): check if SDL window was
+        //     recreated with a new xid.
+        Window parent_xid = bs->cur_parent_xid;
+        if (!bs->owned_display) {
+          // owned_display is only set for... nothing currently (wayland uses
+          // shared display). Use cur_parent_xid==0 with need_reparent as the
+          // deferred-x11 signal vs wayland. For wayland: need_reparent stays
+          // false on creation, so we use that to distinguish.
+          // Simpler heuristic: if x11 driver, always try to resolve.
+          if (swell_sdl_current_driver_is("x11")) {
+            Display *cur_d = NULL; Window cur_xid = 0;
+            if (swell_sdl_x11_parent_for_hwnd(h ? h : hwnd->m_parent,
+                                              &cur_d, &cur_xid, NULL)) {
+              if (cur_d == bs->display && cur_xid != bs->cur_parent_xid) {
+                parent_xid = cur_xid;
+                bs->need_reparent = true;
+              }
+            }
+          }
+        }
+
+        if (uMsg == WM_TIMER && wParam == 1 && vis)
+          swell_sdl_xbridge_fit_child(bs, hwnd, false);
+
+        if (bs->need_reparent || vis != bs->lastvis ||
+            (vis && memcmp(&tr, &bs->lastrect, sizeof(RECT)))) {
+          swell_sdl_x11_error_guard guard(x, bs->display);
+          if (bs->lastvis && !vis) {
+            x->XUnmapWindow(bs->display, bs->native_w);
+            bs->lastvis = false;
+          }
+
+          if (bs->need_reparent && parent_xid) {
+            x->XReparentWindow(bs->display, bs->native_w, parent_xid,
+                               tr.left, tr.top);
+            x->XResizeWindow(bs->display, bs->native_w,
+                             (unsigned)(tr.right - tr.left),
+                             (unsigned)(tr.bottom - tr.top));
+            bs->lastrect = tr;
+            bs->cur_parent_xid = parent_xid;
+            bs->need_reparent = false;
+          } else if (memcmp(&tr, &bs->lastrect, sizeof(RECT))) {
+            bs->lastrect = tr;
+            if (parent_xid) {
+              x->XMoveResizeWindow(bs->display, bs->native_w,
+                                   tr.left, tr.top,
+                                   (unsigned)(tr.right - tr.left),
+                                   (unsigned)(tr.bottom - tr.top));
+            } else {
+              // Top-level XWayland: only sync size; WM owns position.
+              x->XResizeWindow(bs->display, bs->native_w,
+                               (unsigned)(tr.right - tr.left),
+                               (unsigned)(tr.bottom - tr.top));
+            }
+          }
+
+          if (vis && !bs->lastvis) {
+            x->XMapRaised(bs->display, bs->native_w);
+            swell_sdl_xbridge_fit_child(bs, hwnd, false);
+            bs->lastvis = true;
+          }
+        }
+      }
+      break;
+
+    case WM_USER + 1000:  // query native plug-in child window size
+      if (hwnd && hwnd->m_private_data && wParam && lParam && x) {
+        swell_sdl_bridge_state *bs =
+            (swell_sdl_bridge_state *)hwnd->m_private_data;
+        if (bs->display && bs->native_w) {
+          Window root, par, *list = NULL;
+          unsigned int nlist = 0;
+          if (x->XQueryTree(bs->display, bs->native_w,
+                            &root, &par, &list, &nlist)) {
+            if (!list || !nlist) { if (list) x->XFree(list); return 0; }
+            XWindowAttributes attr; memset(&attr, 0, sizeof(attr));
+            if (x->XGetWindowAttributes &&
+                x->XGetWindowAttributes(bs->display, list[0], &attr) &&
+                attr.width && attr.height) {
+              *((int *)(INT_PTR)wParam) = attr.width;
+              *((int *)(INT_PTR)lParam) = attr.height;
+            }
+            x->XFree(list);
+          }
+        }
+      }
+      break;
+  }
+  return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
+#endif  // SWELL_SDL3_HAVE_X11_HEADERS
+
 HWND SWELL_CreateXBridgeWindow(HWND viewpar, void **wref, const RECT *r)
 {
-  (void)viewpar; (void)wref; (void)r;
+  if (wref) *wref = NULL;
+  if (!wref || !r) return NULL;
+
+#ifdef SWELL_SDL3_HAVE_X11_HEADERS
+  swell_x11_api *x = swell_x11_load();
+  if (!x) return NULL;
+
+  Display *display = NULL;
+  Window parent_xid = 0;
+  HWND parent_hwnd = NULL;
+  bool owned_display = false;
+  bool need_reparent = false;
+
+  if (swell_sdl_x11_parent_for_hwnd(viewpar, &display, &parent_xid,
+                                    &parent_hwnd)) {
+    // SDL3 on x11 — embed bridge in parent SDL window's xid.
+  } else if (swell_sdl_current_driver_is("x11")) {
+    // SDL3 on x11, but parent chain has no SDL_Window yet (dialog not shown).
+    // Create native_w under root and reparent into the correct parent once
+    // the SDL_Window appears (handled by need_reparent=true in WM_SIZE).
+    display = swell_sdl_x11_any_display();
+    if (!display) return NULL;
+    parent_xid = 0;
+    need_reparent = true;
+  } else if (swell_sdl_current_driver_is("wayland")) {
+    // SDL3 on wayland — open dedicated XWayland connection. Bridge is a
+    // top-level X window placed by the WM (no reparent target available).
+    display = swell_sdl_xwayland_display(x);
+    if (!display) return NULL;
+    // s_swell_xwayland_display is shared/leaked, so owned_display=false.
+    owned_display = false;
+    parent_xid = 0;
+  } else {
+    return NULL;
+  }
+
+  const int w = wdl_max(r->right - r->left, 1);
+  const int h = wdl_max(r->bottom - r->top, 1);
+
+  // On wayland (no parent_xid) create against the X display root.
+  Window create_parent = parent_xid ? parent_xid : DefaultRootWindow(display);
+
+  Window native_w = x->XCreateWindow(display, create_parent, 0, 0,
+                                     (unsigned)w, (unsigned)h, 0,
+                                     CopyFromParent, InputOutput,
+                                     (Visual *)CopyFromParent, 0, NULL);
+  if (!native_w) return NULL;
+
+  HWND hwnd = new HWND__(viewpar, 0, r, NULL, true, swell_sdl_xbridge_proc);
+  swell_sdl_bridge_state *bs = new swell_sdl_bridge_state();
+  bs->display = display;
+  bs->native_w = native_w;
+  bs->cur_parent_xid = parent_xid;
+  bs->hwnd_child = hwnd;
+  bs->need_reparent = need_reparent;
+  bs->lastvis = false;
+  bs->owned_display = owned_display;
+  memset(&bs->lastrect, 0, sizeof(bs->lastrect));
+  s_swell_bridges.Add(bs);
+
+  hwnd->m_classname = swell_sdl_bridge_classname;
+  hwnd->m_private_data = (INT_PTR)bs;
+
+  *wref = (void *)(uintptr_t)native_w;
+  x->XSelectInput(display, native_w,
+                  StructureNotifyMask | SubstructureNotifyMask);
+  x->XSync(display, False);
+
+  SetTimer(hwnd, 1, 100, NULL);
+  if (parent_xid) SendMessage(hwnd, WM_SIZE, SIZE_RESTORED, 0);
+  return hwnd;
+#else
+  (void)viewpar;
   return NULL;
+#endif
 }
 
 void *SWELL_GetOSWindow(HWND hwnd, const char *type)
 {
   if (!hwnd || !type) return NULL;
-  if (strcmp(type, "!sdl") == 0)
-    return (void*)hwnd->m_oswindow;
+  if (!strcmp(type, "!sdl"))
+    return (void *)hwnd->m_oswindow;
+
+#ifdef SWELL_SDL3_HAVE_X11_HEADERS
+  // X11 accessors for XBridge windows. Bridge HWNDs identify by classname
+  // (matched by pointer; the const char* is stored verbatim).
+  if (hwnd->m_classname == swell_sdl_bridge_classname && hwnd->m_private_data) {
+    swell_sdl_bridge_state *bs =
+        (swell_sdl_bridge_state *)hwnd->m_private_data;
+    if (!strcmp(type, "X11Display") || !strcmp(type, "Display"))
+      return (void *)bs->display;
+    if (!strcmp(type, "X11Window") || !strcmp(type, "Window"))
+      return (void *)(uintptr_t)bs->native_w;
+  }
+
+  // X11 accessors for top-level SDL HWNDs on the x11 driver. Returns the
+  // SDL_Window's underlying X11 xid / Display* so host code can interop.
+  if (hwnd->m_oswindow && swell_sdl_current_driver_is("x11")) {
+    SDL_PropertiesID props = SDL_GetWindowProperties(
+        (SDL_Window *)hwnd->m_oswindow);
+    if (!strcmp(type, "X11Display") || !strcmp(type, "Display"))
+      return SDL_GetPointerProperty(props,
+          SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+    if (!strcmp(type, "X11Window") || !strcmp(type, "Window")) {
+      uintptr_t xid = (uintptr_t)SDL_GetNumberProperty(props,
+          SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+      return xid ? (void *)xid : NULL;
+    }
+  }
+#endif
+
   return NULL;
 }
 
 void *SWELL_GetOSEvent(const char *type)
 {
-  (void)type;
+  if (!type) return NULL;
+  if (!strcmp(type, "SDL_Event")) return s_swell_cur_sdl_event;
   return NULL;
 }
-#endif
+#endif  // !SWELL_TARGET_OSX
 
 // ---------------------------------------------------------------------------
 // SWELL_GetViewPort: query actual display dimensions via SDL3
