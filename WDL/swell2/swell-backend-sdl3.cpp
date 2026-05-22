@@ -1703,7 +1703,7 @@ void SWELL_initargs(int *argc, char ***argv)
   swell_sdl_apply_app_metadata();
   if (!SDL_WasInit(SDL_INIT_VIDEO) &&
       !getenv("SDL_VIDEO_DRIVER") && !getenv("SDL_VIDEODRIVER")) {
-    SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "wayland,x11",
+    SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11",
                             SDL_HINT_DEFAULT);
   }
   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
