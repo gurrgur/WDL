@@ -981,7 +981,13 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         sk_sp<SkSurface> bs = e->hwnd->m_backingstore;
         SkCanvas *canvas = bs ? bs->getCanvas() : nullptr;
         if (canvas) {
-          SWELL_internalSkiaPaint(e->hwnd, canvas, 0, 0, true);
+          // On Wayland, EXPOSED fires frequently (e.g. on CSD title bar hover).
+          // Only force-repaint when the window has pending dirty state; otherwise
+          // just re-upload the existing backing store to avoid spurious full repaints.
+          if (e->hwnd->m_invalidated || e->hwnd->m_child_invalidated) {
+            SWELL_internalSkiaPaint(e->hwnd, canvas, 0, 0, true);
+            swell_draw_repaint_flashes(e->hwnd, canvas);
+          }
           swell_oswindow_updatetoscreen(e->hwnd, NULL);
         }
       }
@@ -1103,6 +1109,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         SkCanvas *canvas = bs ? bs->getCanvas() : nullptr;
         if (canvas) {
           SWELL_internalSkiaPaint(e->hwnd, canvas, 0, 0, true);
+          swell_draw_repaint_flashes(e->hwnd, canvas);
           swell_oswindow_updatetoscreen(e->hwnd, NULL);
         }
       }
