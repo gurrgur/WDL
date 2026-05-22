@@ -599,6 +599,8 @@ struct MenuWindow {
 
 static MenuWindow *g_active_menu = NULL;
 
+bool SWELL_IsMenuTracking() { return g_active_menu != NULL; }
+
 static Uint32 menu_scroll_timer_event_type()
 {
   static Uint32 s_type = 0;

@@ -968,22 +968,74 @@ static float swell_sdlMinScrollDelta()
   return delta > 1.0f ? delta : 1.0f;
 }
 
+static const char *swell_sdl_event_name(Uint32 type)
+{
+  switch (type) {
+    case SDL_EVENT_WINDOW_SHOWN:           return "WINDOW_SHOWN";
+    case SDL_EVENT_WINDOW_HIDDEN:          return "WINDOW_HIDDEN";
+    case SDL_EVENT_WINDOW_EXPOSED:         return "WINDOW_EXPOSED";
+    case SDL_EVENT_WINDOW_MOVED:           return "WINDOW_MOVED";
+    case SDL_EVENT_WINDOW_RESIZED:         return "WINDOW_RESIZED";
+    case SDL_EVENT_WINDOW_MINIMIZED:       return "WINDOW_MINIMIZED";
+    case SDL_EVENT_WINDOW_MAXIMIZED:       return "WINDOW_MAXIMIZED";
+    case SDL_EVENT_WINDOW_RESTORED:        return "WINDOW_RESTORED";
+    case SDL_EVENT_WINDOW_MOUSE_ENTER:     return "WINDOW_MOUSE_ENTER";
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:     return "WINDOW_MOUSE_LEAVE";
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:    return "WINDOW_FOCUS_GAINED";
+    case SDL_EVENT_WINDOW_FOCUS_LOST:      return "WINDOW_FOCUS_LOST";
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED: return "WINDOW_CLOSE_REQUESTED";
+    case SDL_EVENT_MOUSE_MOTION:           return "MOUSE_MOTION";
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:      return "MOUSE_BUTTON_DOWN";
+    case SDL_EVENT_MOUSE_BUTTON_UP:        return "MOUSE_BUTTON_UP";
+    case SDL_EVENT_MOUSE_WHEEL:            return "MOUSE_WHEEL";
+    case SDL_EVENT_KEY_DOWN:               return "KEY_DOWN";
+    case SDL_EVENT_KEY_UP:                 return "KEY_UP";
+    default:                               return NULL;
+  }
+}
+
 static void swell_sdlEventHandler(SDL_Event *evt)
 {
+  if (!!getenv("SWELL_LOG_SDL_EVENTS")) {
+    const char *name = swell_sdl_event_name(evt->type);
+    if (name) {
+      SDL_WindowEntry *e = NULL;
+      if (evt->type >= SDL_EVENT_WINDOW_FIRST && evt->type <= SDL_EVENT_WINDOW_LAST)
+        e = find_entry_by_windowID(evt->window.windowID);
+      else if (evt->type == SDL_EVENT_MOUSE_MOTION)
+        e = find_entry_by_windowID(evt->motion.windowID);
+      else if (evt->type == SDL_EVENT_MOUSE_BUTTON_DOWN || evt->type == SDL_EVENT_MOUSE_BUTTON_UP)
+        e = find_entry_by_windowID(evt->button.windowID);
+      const char *title = (e && e->hwnd) ? e->hwnd->m_title.Get() : "?";
+      printf("SDL %s win=%s depth=%d\n", name, title, g_swell_event_dispatch_depth);
+      fflush(stdout);
+    }
+  }
+
   switch (evt->type) {
 
     // ---- window events ----
 
-    case SDL_EVENT_WINDOW_EXPOSED:
+    case SDL_EVENT_WINDOW_EXPOSED: {
+      // EXPOSED = compositor requests surface re-upload, not a content change.
+      // Backing store is already current; just re-upload. Content will be
+      // refreshed in the next SWELL_RunMessageLoop paint pass if dirty.
+      // Do NOT repaint here: on Wayland, EXPOSED fires during popup creation
+      // (inside TrackPopupMenu's SWELL_RunEvents loop) and a full repaint at
+      // that point blocks menu appearance until all children finish painting.
+      SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
+      if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2)
+        swell_oswindow_updatetoscreen(e->hwnd, NULL);
+      break;
+    }
     case SDL_EVENT_WINDOW_SHOWN: {
+      // SHOWN may fire before the first SWELL_RunMessageLoop paint; force-paint
+      // only if dirty so the window isn't blank on first display.
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd && e->hwnd->m_hashaddestroy < 2) {
         sk_sp<SkSurface> bs = e->hwnd->m_backingstore;
         SkCanvas *canvas = bs ? bs->getCanvas() : nullptr;
         if (canvas) {
-          // On Wayland, EXPOSED fires frequently (e.g. on CSD title bar hover).
-          // Only force-repaint when the window has pending dirty state; otherwise
-          // just re-upload the existing backing store to avoid spurious full repaints.
           if (e->hwnd->m_invalidated || e->hwnd->m_child_invalidated) {
             SWELL_internalSkiaPaint(e->hwnd, canvas, 0, 0, true);
             swell_draw_repaint_flashes(e->hwnd, canvas);
@@ -1140,7 +1192,11 @@ static void swell_sdlEventHandler(SDL_Event *evt)
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
         g_swell_focused_oswindow_hwnd = e->hwnd;
-        SendMessage(e->hwnd, WM_ACTIVATEAPP, TRUE, 0);
+        // Suppress WM_ACTIVATEAPP during menu tracking: on Wayland, focus
+        // bounces between the main window and menu popup windows on each
+        // menubar item switch. Win32 menus never cause WM_ACTIVATEAPP.
+        if (!SWELL_IsMenuTracking())
+          SendMessage(e->hwnd, WM_ACTIVATEAPP, TRUE, 0);
         HWND foc = GetFocus();
         if (foc) SendMessage(foc, WM_SETFOCUS, 0, 0);
       }
@@ -1154,7 +1210,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
           g_swell_focused_oswindow_hwnd = NULL;
         HWND foc = GetFocus();
         if (foc) SendMessage(foc, WM_KILLFOCUS, 0, 0);
-        SendMessage(e->hwnd, WM_ACTIVATEAPP, FALSE, 0);
+        if (!SWELL_IsMenuTracking())
+          SendMessage(e->hwnd, WM_ACTIVATEAPP, FALSE, 0);
       }
       break;
     }
