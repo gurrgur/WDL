@@ -805,6 +805,11 @@ void swell_lua_tick();
 void swell_lua_notify_frame(HWND hwnd, double frame_ms, bool painted);
 void swell_lua_shutdown();
 
+// swell-gdi.cpp: repaint highlight flash (SWELL_HIGHLIGHT_REPAINTS)
+extern bool g_swell_flash_repaint_in_progress;
+bool swell_needs_flash_repaint(HWND top);
+void swell_draw_repaint_flashes(HWND top, SkCanvas *canvas);
+
 // swell-inspector.cpp: interactive HWND tree inspector
 extern HWND g_swell_inspector_highlight;
 void swell_inspector_init();

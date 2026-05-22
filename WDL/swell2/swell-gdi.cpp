@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <csignal>
 #include <cerrno>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -49,6 +50,19 @@
 swell_theme g_swell_theme;
 int g_swell_theme_mode = SWELL_THEME_LIGHT;
 const char *g_swell_deffont_face = "Arial";
+
+static const bool g_swell_highlight_repaints = !!getenv("SWELL_HIGHLIGHT_REPAINTS");
+bool g_swell_flash_repaint_in_progress = false;
+
+static constexpr double kRepaintFlashMs = 350.0;
+
+struct swell_repaint_flash {
+  HWND top;
+  RECT rect;      // top-level canvas pixels, client area of repainted hwnd
+  SkColor color;
+  std::chrono::steady_clock::time_point when;
+};
+static std::vector<swell_repaint_flash> g_repaint_flashes;
 
 static HFONT g_swell_default_font_instance = nullptr;
 HFONT g_swell_default_font = nullptr; // extern, may alias the static
@@ -2610,10 +2624,82 @@ void SWELL_internalSkiaPaint(HWND hwnd, SkCanvas *canvas,
       if (canvas) canvas->restoreToCount(saveCount);
     }
 
+    // Record repaint flash entry (drawn + faded in swell_draw_repaint_flashes).
+    // g_swell_flash_repaint_in_progress suppresses recording during animation frames.
+    if (forceref && g_swell_highlight_repaints && !g_swell_flash_repaint_in_progress) {
+      static const SkColor s_repaint_colors[] = {
+        SkColorSetARGB(100, 255,  80,   0),  // orange
+        SkColorSetARGB(100,   0, 200,  60),  // green
+        SkColorSetARGB(100,  40, 120, 255),  // blue
+        SkColorSetARGB(100, 200,   0, 200),  // purple
+        SkColorSetARGB(100, 220, 200,   0),  // yellow
+        SkColorSetARGB(100, 255,  20,  80),  // red-pink
+      };
+      constexpr int kN = (int)(sizeof(s_repaint_colors) / sizeof(s_repaint_colors[0]));
+      uintptr_t ci = ((uintptr_t)hwnd / sizeof(*hwnd)) % (uintptr_t)kN;
+      HWND top = hwnd;
+      while (top->m_parent) top = (HWND)top->m_parent;
+      RECT r = {
+        ctx_local.ctx.surface_offs.x,
+        ctx_local.ctx.surface_offs.y,
+        ctx_local.ctx.surface_offs.x + ctx_local.clipr.right,
+        ctx_local.ctx.surface_offs.y + ctx_local.clipr.bottom,
+      };
+      g_repaint_flashes.push_back({top, r, s_repaint_colors[ci],
+          std::chrono::steady_clock::now()});
+    }
+
     // Undo the NC translation for child recursion
     if (canvas && (nc_left || nc_top))
       canvas->restoreToCount(nc_save);
   }
+}
+
+// ---------------------------------------------------------------------------
+// swell_draw_repaint_flashes
+// ---------------------------------------------------------------------------
+
+bool swell_needs_flash_repaint(HWND top)
+{
+  if (!g_swell_highlight_repaints) return false;
+  using namespace std::chrono;
+  auto now = steady_clock::now();
+  for (auto &f : g_repaint_flashes) {
+    if (f.top == top &&
+        duration<double, std::milli>(now - f.when).count() < kRepaintFlashMs)
+      return true;
+  }
+  return false;
+}
+
+void swell_draw_repaint_flashes(HWND top, SkCanvas *canvas)
+{
+  if (!g_swell_highlight_repaints || !canvas) return;
+
+  using namespace std::chrono;
+  auto now = steady_clock::now();
+
+  for (auto &f : g_repaint_flashes) {
+    if (f.top != top) continue;
+    double age = duration<double, std::milli>(now - f.when).count();
+    if (age >= kRepaintFlashMs) continue;
+    float t = 1.0f - (float)(age / kRepaintFlashMs);
+    uint8_t a = (uint8_t)(t * (float)SkColorGetA(f.color));
+    SkPaint hp;
+    hp.setColor(SkColorSetA(f.color, a));
+    hp.setStyle(SkPaint::kFill_Style);
+    canvas->drawRect(SkRect::MakeLTRB(
+        (float)f.rect.left, (float)f.rect.top,
+        (float)f.rect.right, (float)f.rect.bottom), hp);
+  }
+
+  g_repaint_flashes.erase(
+    std::remove_if(g_repaint_flashes.begin(), g_repaint_flashes.end(),
+      [&](const swell_repaint_flash &f) {
+        return f.top == top &&
+               duration<double, std::milli>(now - f.when).count() >= kRepaintFlashMs;
+      }),
+    g_repaint_flashes.end());
 }
 
 // ---------------------------------------------------------------------------

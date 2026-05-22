@@ -1825,6 +1825,8 @@ void UpdateWindow(HWND hwnd)
       }
     }
 
+    swell_draw_repaint_flashes(top, canvas);
+
     swell_oswindow_updatetoscreen(top, dirty_rect_valid ? &dirty_rect : NULL);
   }
 
@@ -2121,7 +2123,8 @@ void SWELL_RunMessageLoop()
   using namespace std::chrono;
   HWND w = g_swell_top_level_list;
   while (w) {
-    if ((w->m_invalidated || w->m_child_invalidated) && w->m_backingstore) {
+    const bool needs_paint = w->m_invalidated || w->m_child_invalidated;
+    if ((needs_paint || swell_needs_flash_repaint(w)) && w->m_backingstore) {
       SkCanvas *canvas = w->m_backingstore->getCanvas();
       if (canvas) {
         auto frame_start = steady_clock::now();
@@ -2130,7 +2133,11 @@ void SWELL_RunMessageLoop()
         const bool dirty_rect_valid = w->m_dirty_rect_valid;
         w->m_dirty_rect_valid = false;
         auto paint_start = steady_clock::now();
-        SWELL_internalSkiaPaint(w, canvas, 0, 0, false);
+        // flash-only frames: full repaint (to clear old overlay) without
+        // recording new flashes — g_swell_flash_repaint_in_progress suppresses that
+        if (!needs_paint) g_swell_flash_repaint_in_progress = true;
+        SWELL_internalSkiaPaint(w, canvas, 0, 0, !needs_paint);
+        g_swell_flash_repaint_in_progress = false;
         auto paint_end = steady_clock::now();
         swell_perf_note_paint_time(
             duration<double, std::milli>(paint_end - paint_start).count());
@@ -2154,10 +2161,13 @@ void SWELL_RunMessageLoop()
           }
         }
 
-        swell_oswindow_updatetoscreen(w, dirty_rect_valid ? &dirty_rect : NULL);
+        swell_draw_repaint_flashes(w, canvas);
+
+        swell_oswindow_updatetoscreen(w,
+            needs_paint && dirty_rect_valid ? &dirty_rect : NULL);
         auto frame_end = steady_clock::now();
         double frame_ms = duration<double, std::milli>(frame_end - frame_start).count();
-        swell_perf_frame_end(w, frame_ms, true);
+        swell_perf_frame_end(w, frame_ms, needs_paint);
         swell_lua_notify_frame(w, frame_ms, true);
         swell_inspector_notify_frame(w, frame_ms);
       }
