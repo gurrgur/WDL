@@ -475,13 +475,26 @@ extern bool g_swell_subpixel_text;       // subpixel positioning + LCD AA
 #define SWELL_UI_SCALE(x) (((x)*g_swell_ui_scale)/256)
 void swell_scaling_init(bool no_auto_hidpi); // auto-detect DPI via hidden SDL test window
 
-// SDL3 uses logical pixels (CSS pixels) for window positions, sizes, and
-// mouse coordinates. swell keeps everything in physical device pixels.
-// g_swell_ui_scale is the DPI scale * 256 (256=1.0x, 512=2.0x).
-// Physical = Logical * g_swell_ui_scale / 256
-// Logical  = Physical * 256 / g_swell_ui_scale
-inline float swell_phys_to_log(float phys) { return (phys * 256.0) / g_swell_ui_scale; }
-inline float swell_log_to_phys(float log)   { return (log * g_swell_ui_scale) / 256.0; }
+// swell keeps public coordinates in physical device pixels. SDL backends are
+// not uniform here: Wayland reports logical/CSS pixels, while X11 reports
+// physical pixels even when display scale is not 100%.
+inline bool swell_sdl_uses_logical_coords()
+{
+#ifdef SWELL_TARGET_SDL3
+  const char *driver = SDL_GetCurrentVideoDriver();
+  return !driver || strcmp(driver, "x11");
+#else
+  return true;
+#endif
+}
+
+inline float swell_phys_to_log(float phys) {
+  return swell_sdl_uses_logical_coords() ? (phys * 256.0f) / g_swell_ui_scale : phys;
+}
+
+inline float swell_log_to_phys(float log) {
+  return swell_sdl_uses_logical_coords() ? (log * g_swell_ui_scale) / 256.0f : log;
+}
 
 inline void swell_phys_rect_to_log(const RECT *phys, RECT *log) {
   log->left = swell_phys_to_log(phys->left);

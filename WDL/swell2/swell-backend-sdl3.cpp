@@ -129,12 +129,20 @@ static SDL_WindowEntry *find_entry_by_windowID(SDL_WindowID id)
   return NULL;
 }
 
+static bool swell_sdl_current_driver_is(const char *name)
+{
+  const char *driver = SDL_GetCurrentVideoDriver();
+  return driver && name && !strcmp(driver, name);
+}
+
 static bool swell_async_present_requested()
 {
-  // Default ON. SWELL_ASYNC_PRESENT=0 disables.
+  // Default ON except for X11, where SDL video/renderer calls from a worker
+  // thread can enter Xlib/XCB concurrently and abort in _XAllocID().
   static const bool s_enabled = []() {
     const char *e = getenv("SWELL_ASYNC_PRESENT");
-    return !(e && *e == '0');
+    if (e && *e) return *e != '0';
+    return !swell_sdl_current_driver_is("x11");
   }();
   return s_enabled;
 }
@@ -284,7 +292,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   if (pw < 1) pw = 400;
   if (ph < 1) ph = 300;
 
-  // Convert physical → logical for SDL3
+  // Convert swell physical coords to SDL backend coords.
   int lw = swell_phys_to_log(pw);
   int lh = swell_phys_to_log(ph);
   int lx = swell_phys_to_log(pr.left);
@@ -1006,7 +1014,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_WINDOW_RESIZED: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
-        // SDL3 reports logical pixels; swell works in physical
+        // SDL backend coords may be logical (Wayland) or physical (X11).
         int nw = swell_log_to_phys(evt->window.data1);
         int nh = swell_log_to_phys(evt->window.data2);
         int ow = e->hwnd->m_position.right - e->hwnd->m_position.left;
@@ -1225,9 +1233,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: {
-      // SDL3 reports mouse coords in logical pixels; swell uses physical
-      float mx = swell_log_to_phys((int)evt->button.x);
-      float my = swell_log_to_phys((int)evt->button.y);
+      // SDL backend coords may be logical (Wayland) or physical (X11).
+      float mx = swell_log_to_phys(evt->button.x);
+      float my = swell_log_to_phys(evt->button.y);
       Uint8 btn = evt->button.button;
       Uint8 clicks = evt->button.clicks;
       bool down = evt->button.down;
@@ -1346,9 +1354,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     }
 
     case SDL_EVENT_MOUSE_MOTION: {
-      // SDL3 reports mouse coords in logical pixels; swell uses physical
-      float mx = swell_log_to_phys((int)evt->motion.x);
-      float my = swell_log_to_phys((int)evt->motion.y);
+      // SDL backend coords may be logical (Wayland) or physical (X11).
+      float mx = swell_log_to_phys(evt->motion.x);
+      float my = swell_log_to_phys(evt->motion.y);
       bool in_nc = false;
 
       HWND cap = GetCapture();
@@ -1396,9 +1404,9 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_MOUSE_WHEEL: {
       float wx = evt->wheel.x;
       float wy = evt->wheel.y;
-      // SDL3 reports mouse coords in logical pixels; swell uses physical
-      int wmx = swell_log_to_phys((int)evt->wheel.mouse_x);
-      int wmy = swell_log_to_phys((int)evt->wheel.mouse_y);
+      // SDL backend coords may be logical (Wayland) or physical (X11).
+      int wmx = swell_log_to_phys(evt->wheel.mouse_x);
+      int wmy = swell_log_to_phys(evt->wheel.mouse_y);
       SDL_WindowEntry *e = find_entry_by_windowID(evt->wheel.windowID);
       HWND target = NULL;
       if (e && e->hwnd) {
@@ -1601,6 +1609,11 @@ void SWELL_initargs(int *argc, char ***argv)
   (void)argc;
   (void)argv;
   swell_sdl_apply_app_metadata();
+  if (!SDL_WasInit(SDL_INIT_VIDEO) &&
+      !getenv("SDL_VIDEO_DRIVER") && !getenv("SDL_VIDEODRIVER")) {
+    SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "wayland,x11",
+                            SDL_HINT_DEFAULT);
+  }
   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
   if (!SDL_WasInit(SDL_INIT_VIDEO) && !SDL_Init(SDL_INIT_VIDEO)) {
     fprintf(stderr, "SWELL SDL3: SDL_Init failed: %s\n", SDL_GetError());
@@ -1677,7 +1690,7 @@ void SWELL_GetViewPort(RECT *r, const RECT *sourcerect, bool wantWork)
 
   SDL_DisplayID display = SDL_GetPrimaryDisplay();
   if (sourcerect) {
-    // sourcerect is physical; SDL_GetDisplayForRect expects logical
+    // sourcerect is physical; SDL_GetDisplayForRect expects SDL backend coords.
     RECT lr;
     swell_phys_rect_to_log(sourcerect, &lr);
     SDL_Rect sr = { lr.left, lr.top, lr.right - lr.left, lr.bottom - lr.top };
