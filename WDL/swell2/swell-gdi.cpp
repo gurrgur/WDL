@@ -805,7 +805,26 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
   }
   SWELL_LV_LOG("LoadNamedImage name='%s' alphaFromMask=%d", name, alphaFromMask ? 1 : 0);
 
-  sk_sp<SkData> data = SkData::MakeFromFileName(name);
+  sk_sp<SkData> data;
+  std::string loaded_path;
+  if (strchr(name, '/')) {
+    loaded_path = name;
+    data = SkData::MakeFromFileName(loaded_path.c_str());
+  } else {
+    char module_path[4096];
+    if (GetModuleFileName(NULL, module_path, sizeof(module_path)) > 0) {
+      char *slash = strrchr(module_path, '/');
+      if (slash) *slash = 0;
+      const char *exts[] = { ".png", ".ico", ".bmp" };
+      for (int i = 0; i < 3 && (!data || data->size() == 0); i++) {
+        loaded_path = module_path;
+        loaded_path += "/Resources/";
+        loaded_path += name;
+        loaded_path += exts[i];
+        data = SkData::MakeFromFileName(loaded_path.c_str());
+      }
+    }
+  }
   if (!data || data->size() == 0) {
     SWELL_LV_LOG("LoadNamedImage name='%s' file read failed -> NULL", name);
     return nullptr;
@@ -833,7 +852,8 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
     }
   }
   if (!codec) {
-    SWELL_LV_LOG("LoadNamedImage name='%s' no decoder -> NULL", name);
+    SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' no decoder -> NULL",
+                 name, loaded_path.c_str());
     return nullptr;
   }
 
@@ -843,27 +863,30 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
   SkBitmap *bm = new SkBitmap();
   if (!bm->tryAllocPixels(info)) {
     delete bm;
-    SWELL_LV_LOG("LoadNamedImage name='%s' bitmap alloc failed -> NULL", name);
+    SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' bitmap alloc failed -> NULL",
+                 name, loaded_path.c_str());
     return nullptr;
   }
 
   SkCodec::Result res = codec->getPixels(bm->info(), bm->getPixels(), bm->rowBytes());
   if (res != SkCodec::kSuccess && res != SkCodec::kIncompleteInput) {
     delete bm;
-    SWELL_LV_LOG("LoadNamedImage name='%s' decode failed res=%d -> NULL", name, (int)res);
+    SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' decode failed res=%d -> NULL",
+                 name, loaded_path.c_str(), (int)res);
     return nullptr;
   }
 
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) {
     delete bm;
-    SWELL_LV_LOG("LoadNamedImage name='%s' object alloc failed -> NULL", name);
+    SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' object alloc failed -> NULL",
+                 name, loaded_path.c_str());
     return nullptr;
   }
   obj->type     = TYPE_BITMAP;
   obj->typedata = bm;
-  SWELL_LV_LOG("LoadNamedImage name='%s' -> icon=%p size=%dx%d",
-               name, (void *)obj, bm->width(), bm->height());
+  SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' -> icon=%p size=%dx%d",
+               name, loaded_path.c_str(), (void *)obj, bm->width(), bm->height());
   return (HICON)obj;
 }
 
