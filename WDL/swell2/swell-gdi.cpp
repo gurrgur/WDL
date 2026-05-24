@@ -42,6 +42,23 @@
 #include <codec/SkGifDecoder.h>
 #include <codec/SkWebpDecoder.h>
 
+static bool swell_listview_log_enabled()
+{
+  static int s_enabled = -1;
+  if (s_enabled < 0) {
+    const char *v = getenv("SWELL2_LISTVIEW_LOG");
+    s_enabled = (v && *v && strcmp(v, "0")) ? 1 : 0;
+  }
+  return s_enabled != 0;
+}
+
+#define SWELL_LV_LOG(...) do { \
+  if (swell_listview_log_enabled()) { \
+    fprintf(stderr, "[swell2:listview] " __VA_ARGS__); \
+    fprintf(stderr, "\n"); \
+  } \
+} while (0)
+
 // ---------------------------------------------------------------------------
 // Global state
 // ---------------------------------------------------------------------------
@@ -725,10 +742,19 @@ HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
 HICON CreateIconIndirect(const ICONINFO *iconinfo)
 {
   SGDI_PROF(CreateIconIndirect);
-  if (!iconinfo) return nullptr;
+  if (!iconinfo) {
+    SWELL_LV_LOG("CreateIconIndirect iconinfo=NULL -> NULL");
+    return nullptr;
+  }
+  SWELL_LV_LOG("CreateIconIndirect fIcon=%d color=%p mask=%p",
+               iconinfo->fIcon ? 1 : 0, (void *)iconinfo->hbmColor,
+               (void *)iconinfo->hbmMask);
 
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
-  if (!obj) return nullptr;
+  if (!obj) {
+    SWELL_LV_LOG("CreateIconIndirect alloc object failed -> NULL");
+    return nullptr;
+  }
   obj->type = TYPE_BITMAP;
 
   int w = 0, h = 0;
@@ -750,6 +776,7 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
   if (!bm->tryAllocN32Pixels(w, h)) {
     delete bm;
     GDP_OBJECT_DELETE(obj);
+    SWELL_LV_LOG("CreateIconIndirect bitmap alloc failed w=%d h=%d -> NULL", w, h);
     return nullptr;
   }
 
@@ -764,6 +791,7 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
 
   obj->typedata = bm;
   obj->additional_refcnt = 0;
+  SWELL_LV_LOG("CreateIconIndirect -> icon=%p size=%dx%d", (void *)obj, w, h);
   return obj;
 }
 
@@ -771,10 +799,17 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
 {
   SGDI_PROF(LoadNamedImage);
   (void)alphaFromMask;
-  if (!name || !name[0]) return nullptr;
+  if (!name || !name[0]) {
+    SWELL_LV_LOG("LoadNamedImage name=%p empty -> NULL", (const void *)name);
+    return nullptr;
+  }
+  SWELL_LV_LOG("LoadNamedImage name='%s' alphaFromMask=%d", name, alphaFromMask ? 1 : 0);
 
   sk_sp<SkData> data = SkData::MakeFromFileName(name);
-  if (!data || data->size() == 0) return nullptr;
+  if (!data || data->size() == 0) {
+    SWELL_LV_LOG("LoadNamedImage name='%s' file read failed -> NULL", name);
+    return nullptr;
+  }
 
   // Try decoders in order of popularity for REAPER assets
   using DecodeFn = std::unique_ptr<SkCodec> (*)(sk_sp<const SkData>,
@@ -797,24 +832,38 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
       codec.reset();
     }
   }
-  if (!codec) return nullptr;
+  if (!codec) {
+    SWELL_LV_LOG("LoadNamedImage name='%s' no decoder -> NULL", name);
+    return nullptr;
+  }
 
   SkImageInfo info = codec->getInfo()
                           .makeColorType(kBGRA_8888_SkColorType)
                           .makeAlphaType(kPremul_SkAlphaType);
   SkBitmap *bm = new SkBitmap();
-  if (!bm->tryAllocPixels(info)) { delete bm; return nullptr; }
+  if (!bm->tryAllocPixels(info)) {
+    delete bm;
+    SWELL_LV_LOG("LoadNamedImage name='%s' bitmap alloc failed -> NULL", name);
+    return nullptr;
+  }
 
   SkCodec::Result res = codec->getPixels(bm->info(), bm->getPixels(), bm->rowBytes());
   if (res != SkCodec::kSuccess && res != SkCodec::kIncompleteInput) {
     delete bm;
+    SWELL_LV_LOG("LoadNamedImage name='%s' decode failed res=%d -> NULL", name, (int)res);
     return nullptr;
   }
 
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
-  if (!obj) { delete bm; return nullptr; }
+  if (!obj) {
+    delete bm;
+    SWELL_LV_LOG("LoadNamedImage name='%s' object alloc failed -> NULL", name);
+    return nullptr;
+  }
   obj->type     = TYPE_BITMAP;
   obj->typedata = bm;
+  SWELL_LV_LOG("LoadNamedImage name='%s' -> icon=%p size=%dx%d",
+               name, (void *)obj, bm->width(), bm->height());
   return (HICON)obj;
 }
 

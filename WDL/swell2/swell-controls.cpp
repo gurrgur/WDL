@@ -2139,8 +2139,11 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (item->mask & LVIF_TEXT && item->pszText) {
         row->m_cols.Resize(1, false);
         row->m_cols.Get()[0].txt = strdup(item->pszText);
+        row->m_cols.Get()[0].image_idx = 0;
       } else {
         row->m_cols.Resize(1, false);
+        row->m_cols.Get()[0].txt = NULL;
+        row->m_cols.Get()[0].image_idx = 0;
       }
       if (item->mask & LVIF_IMAGE)
         row->set_img_idx(0, item->iImage + 1);
@@ -2192,7 +2195,10 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (col >= r->m_cols.GetSize()) {
           int old = r->m_cols.GetSize();
           r->m_cols.Resize(col+1, false);
-          for (int i = old; i <= col; i++) r->m_cols.Get()[i].txt = NULL;
+          for (int i = old; i <= col; i++) {
+            r->m_cols.Get()[i].txt = NULL;
+            r->m_cols.Get()[i].image_idx = 0;
+          }
         }
         r->set_img_idx(col, item->iImage + 1);
       }
@@ -2201,7 +2207,10 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (col >= r->m_cols.GetSize()) {
           int old = r->m_cols.GetSize();
           r->m_cols.Resize(col+1, false);
-          for (int i = old; i <= col; i++) r->m_cols.Get()[i].txt = NULL;
+          for (int i = old; i <= col; i++) {
+            r->m_cols.Get()[i].txt = NULL;
+            r->m_cols.Get()[i].image_idx = 0;
+          }
         }
         free(r->m_cols.Get()[col].txt);
         r->m_cols.Get()[col].txt = strdup(item->pszText);
@@ -2417,7 +2426,10 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (col >= r->m_cols.GetSize()) {
         int old = r->m_cols.GetSize();
         r->m_cols.Resize(col+1, false);
-        for (int i = old; i <= col; i++) r->m_cols.Get()[i].txt = NULL;
+        for (int i = old; i <= col; i++) {
+          r->m_cols.Get()[i].txt = NULL;
+          r->m_cols.Get()[i].image_idx = 0;
+        }
       }
       free(r->m_cols.Get()[col].txt);
       r->m_cols.Get()[col].txt = item->pszText ? strdup(item->pszText) : NULL;
@@ -2698,6 +2710,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       SWELL_ListView_Row *row = new SWELL_ListView_Row();
       row->m_cols.Resize(1, false);
       row->m_cols.Get()[0].txt = strdup(s ? s : "");
+      row->m_cols.Get()[0].image_idx = 0;
       st->m_data.Insert(pos, row);
       InvalidateRect(hwnd, NULL, FALSE);
       return pos;
