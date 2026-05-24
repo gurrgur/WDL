@@ -31,6 +31,23 @@
 #include <SDL3/SDL.h>
 #endif
 
+static bool swell_listview_log_enabled()
+{
+  static int s_enabled = -1;
+  if (s_enabled < 0) {
+    const char *v = getenv("SWELL2_LISTVIEW_LOG");
+    s_enabled = (v && *v && strcmp(v, "0")) ? 1 : 0;
+  }
+  return s_enabled != 0;
+}
+
+#define SWELL_LV_LOG(...) do { \
+  if (swell_listview_log_enabled()) { \
+    fprintf(stderr, "[swell2:listview] " __VA_ARGS__); \
+    fprintf(stderr, "\n"); \
+  } \
+} while (0)
+
 // ============================================================================
 // Rect utilities
 // ============================================================================
@@ -1697,11 +1714,15 @@ int SWELL_ShowCursor(BOOL bShow)
 
 HIMAGELIST ImageList_CreateEx()
 {
-  return (HIMAGELIST) new HIMAGELIST__();
+  HIMAGELIST list = (HIMAGELIST) new HIMAGELIST__();
+  SWELL_LV_LOG("ImageList_CreateEx -> list=%p", (void *)list);
+  return list;
 }
 
 BOOL ImageList_Remove(HIMAGELIST list, int idx)
 {
+  SWELL_LV_LOG("ImageList_Remove list=%p idx=%d entries_before=%d",
+               (void *)list, idx, list ? list->m_entries.GetSize() : -1);
   if (!list || idx >= list->m_entries.GetSize()) return FALSE;
   if (idx < 0) {
     for (int i = list->m_entries.GetSize() - 1; i >= 0; i--) {
@@ -1725,6 +1746,9 @@ BOOL ImageList_Remove(HIMAGELIST list, int idx)
 
 int ImageList_ReplaceIcon(HIMAGELIST list, int offset, HICON image)
 {
+  SWELL_LV_LOG("ImageList_ReplaceIcon list=%p offset=%d image=%p entries_before=%d",
+               (void *)list, offset, (void *)image,
+               list ? list->m_entries.GetSize() : -1);
   if (!list || !image)
     return -1;
   if (offset < 0 || offset >= list->m_entries.GetSize()) {
@@ -1732,7 +1756,10 @@ int ImageList_ReplaceIcon(HIMAGELIST list, int offset, HICON image)
     e->image = (HGDIOBJ__*)SWELL_CloneGDIObject((HGDIOBJ)image);
     e->mask = NULL;
     list->m_entries.Add(e);
-    return list->m_entries.GetSize() - 1;
+    int rv = list->m_entries.GetSize() - 1;
+    SWELL_LV_LOG("ImageList_ReplaceIcon append list=%p -> offset=%d entries_after=%d image=%p",
+                 (void *)list, rv, list->m_entries.GetSize(), (void *)e->image);
+    return rv;
   }
   HIMAGELIST__::Entry *e = list->m_entries.Get(offset);
   if (!e) return -1;
@@ -1740,21 +1767,32 @@ int ImageList_ReplaceIcon(HIMAGELIST list, int offset, HICON image)
   if (e->mask) DeleteObject((HGDIOBJ)e->mask);
   e->image = (HGDIOBJ__*)SWELL_CloneGDIObject((HGDIOBJ)image);
   e->mask  = NULL;
+  SWELL_LV_LOG("ImageList_ReplaceIcon replace list=%p -> offset=%d entries_after=%d image=%p",
+               (void *)list, offset, list->m_entries.GetSize(), (void *)e->image);
   return offset;
 }
 
 int ImageList_Add(HIMAGELIST list, HBITMAP image, HBITMAP mask)
 {
+  SWELL_LV_LOG("ImageList_Add list=%p image=%p mask=%p entries_before=%d",
+               (void *)list, (void *)image, (void *)mask,
+               list ? list->m_entries.GetSize() : -1);
   if (!list || !image) return -1;
   HIMAGELIST__::Entry *e = new HIMAGELIST__::Entry();
   e->image = (HGDIOBJ__*)SWELL_CloneGDIObject((HGDIOBJ)image);
   e->mask  = mask ? (HGDIOBJ__*)SWELL_CloneGDIObject((HGDIOBJ)mask) : NULL;
   list->m_entries.Add(e);
-  return list->m_entries.GetSize();
+  int rv = list->m_entries.GetSize();
+  SWELL_LV_LOG("ImageList_Add result list=%p return=%d entries_after=%d stored_image=%p stored_mask=%p",
+               (void *)list, rv, list->m_entries.GetSize(),
+               (void *)e->image, (void *)e->mask);
+  return rv;
 }
 
 void ImageList_Destroy(HIMAGELIST list)
 {
+  SWELL_LV_LOG("ImageList_Destroy list=%p entries=%d",
+               (void *)list, list ? list->m_entries.GetSize() : -1);
   if (!list) return;
   for (int i = list->m_entries.GetSize() - 1; i >= 0; i--) {
     HIMAGELIST__::Entry *e = list->m_entries.Get(i);
