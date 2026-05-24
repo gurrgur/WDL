@@ -2327,6 +2327,8 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         for (int i = 0; i < nitems; i++) {
           if (item->stateMask & LVIS_SELECTED)
             st->set_sel(i, (item->state & LVIS_SELECTED) != 0);
+          if ((item->stateMask & LVIS_STATEIMAGEMASK) && i < st->m_data.GetSize())
+            st->m_data.Get(i)->set_img_idx(0, STATEIMAGEMASKTOINDEX(item->state));
         }
         if ((item->stateMask & LVIS_SELECTED) && !(item->state & LVIS_SELECTED))
           st->m_selitem = -1;
@@ -2822,6 +2824,37 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int ypos = my - hdr + st->m_scroll_y;
       int row = ypos >= 0 ? ypos / rh : -1;
       if (row >= 0 && row < n) {
+        int subitem_col = 0;
+        int subitem = 0;
+        int xpt = mx + st->m_scroll_x;
+        int xpos = st->hasStatusImage() ? rh : 0;
+        for (int c = 0; c < st->m_cols.GetSize(); c++) {
+          int xwid = st->m_cols.Get()[c].xwid;
+          if (xpt >= xpos && xpt < xpos + xwid) {
+            subitem_col = st->m_cols.Get()[c].col_index;
+            subitem = c;
+            break;
+          }
+          xpos += xwid;
+        }
+
+        bool state_image_click = st->m_status_imagelist && xpt < rh;
+        bool fast_click = subitem_col >= 0 && subitem_col < 32 &&
+                          (st->m_fastclick_mask & (1u << subitem_col));
+        if (!st->m_is_listbox && (state_image_click || fast_click)) {
+          NMLISTVIEW nm = {};
+          nm.hdr.hwndFrom = hwnd;
+          nm.hdr.idFrom = hwnd->m_id;
+          nm.hdr.code = (msg == WM_LBUTTONDBLCLK) ? NM_DBLCLK : NM_CLICK;
+          nm.iItem = row;
+          nm.iSubItem = st->GetColumnIndex(subitem);
+          nm.ptAction.x = mx;
+          nm.ptAction.y = my;
+          HWND par = GetParent(hwnd);
+          if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
+          return 0;
+        }
+
         int oldsel = st->m_selitem;
         bool changed = false;
         if (!st->m_is_multisel) {

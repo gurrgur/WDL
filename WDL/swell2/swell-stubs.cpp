@@ -330,7 +330,8 @@ int SWELL_GetListViewHeaderHeight(HWND h)
 
 void SWELL_SetListViewFastClickMask(HWND hList, int mask)
 {
-  (void)hList; (void)mask;
+  listViewState *lvs = hList ? (listViewState *)hList->m_private_data : NULL;
+  if (lvs) lvs->m_fastclick_mask = mask;
 }
 
 void ListView_SetBkColor(HWND hwnd, int color)
