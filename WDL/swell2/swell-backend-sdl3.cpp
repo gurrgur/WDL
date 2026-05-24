@@ -284,7 +284,7 @@ static void swell_sdl_render_worker(SDL_WindowEntry *e)
     return;
   }
   const char *novsync = getenv("SWELL_NO_VSYNC");
-  SDL_SetRenderVSync(e->renderer, (novsync && *novsync == '1') ? 0 : 1);
+  SDL_SetRenderVSync(e->renderer, (novsync && *novsync == '1') ? 0 : SDL_RENDERER_VSYNC_ADAPTIVE);
 
   for (;;) {
     SDL_Rect rect;
@@ -459,7 +459,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
       return;
     }
     const char *novsync = getenv("SWELL_NO_VSYNC");
-    SDL_SetRenderVSync(rend, (novsync && *novsync == '1') ? 0 : 1);
+    SDL_SetRenderVSync(rend, (novsync && *novsync == '1') ? 0 : SDL_RENDERER_VSYNC_ADAPTIVE);
   }
 
   add_entry(sdlwin, hwnd, rend);
