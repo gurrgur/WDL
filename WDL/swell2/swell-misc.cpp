@@ -1702,20 +1702,42 @@ HIMAGELIST ImageList_CreateEx()
 
 BOOL ImageList_Remove(HIMAGELIST list, int idx)
 {
-  if (!list || idx < 0 || idx >= list->m_entries.GetSize()) return FALSE;
+  if (!list || idx >= list->m_entries.GetSize()) return FALSE;
+  if (idx < 0) {
+    for (int i = list->m_entries.GetSize() - 1; i >= 0; i--) {
+      HIMAGELIST__::Entry *e = list->m_entries.Get(i);
+      if (e) {
+        if (e->image) DeleteObject((HGDIOBJ)e->image);
+        if (e->mask)  DeleteObject((HGDIOBJ)e->mask);
+      }
+    }
+    list->m_entries.Empty(true);
+    return TRUE;
+  }
   HIMAGELIST__::Entry *e = list->m_entries.Get(idx);
-  if (e->image) DeleteObject((HGDIOBJ)e->image);
-  if (e->mask)  DeleteObject((HGDIOBJ)e->mask);
+  if (e) {
+    if (e->image) DeleteObject((HGDIOBJ)e->image);
+    if (e->mask)  DeleteObject((HGDIOBJ)e->mask);
+  }
   list->m_entries.Delete(idx, true);
   return TRUE;
 }
 
 int ImageList_ReplaceIcon(HIMAGELIST list, int offset, HICON image)
 {
-  if (!list || offset < 0 || offset >= list->m_entries.GetSize() || !image)
+  if (!list || !image)
     return -1;
+  if (offset < 0 || offset >= list->m_entries.GetSize()) {
+    HIMAGELIST__::Entry *e = new HIMAGELIST__::Entry();
+    e->image = (HGDIOBJ__*)SWELL_CloneGDIObject((HGDIOBJ)image);
+    e->mask = NULL;
+    list->m_entries.Add(e);
+    return list->m_entries.GetSize() - 1;
+  }
   HIMAGELIST__::Entry *e = list->m_entries.Get(offset);
+  if (!e) return -1;
   if (e->image) DeleteObject((HGDIOBJ)e->image);
+  if (e->mask) DeleteObject((HGDIOBJ)e->mask);
   e->image = (HGDIOBJ__*)SWELL_CloneGDIObject((HGDIOBJ)image);
   e->mask  = NULL;
   return offset;
@@ -1728,7 +1750,7 @@ int ImageList_Add(HIMAGELIST list, HBITMAP image, HBITMAP mask)
   e->image = (HGDIOBJ__*)SWELL_CloneGDIObject((HGDIOBJ)image);
   e->mask  = mask ? (HGDIOBJ__*)SWELL_CloneGDIObject((HGDIOBJ)mask) : NULL;
   list->m_entries.Add(e);
-  return list->m_entries.GetSize() - 1;
+  return list->m_entries.GetSize();
 }
 
 void ImageList_Destroy(HIMAGELIST list)
