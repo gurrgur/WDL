@@ -233,23 +233,43 @@ static bool swell_sdl_current_driver_is(const char *name)
   return driver && name && !strcmp(driver, name);
 }
 
+static bool swell_sdl_seen_hwnd(const std::vector<HWND> &seen, HWND hwnd)
+{
+  for (size_t i = 0; i < seen.size(); i++)
+    if (seen[i] == hwnd) return true;
+  return false;
+}
+
+static HWND swell_sdl_toplevel(HWND hwnd)
+{
+  HWND top = hwnd;
+  for (int n = 0; top && top->m_parent && n < 1024; n++)
+    top = (HWND)top->m_parent;
+  return top;
+}
+
 static HWND swell_sdl_find_oswindow_owner(HWND hwnd)
 {
   HWND own = hwnd ? (HWND)hwnd->m_owner : NULL;
-  while (own && !own->m_oswindow)
+  std::vector<HWND> seen;
+  while (own && !own->m_oswindow && !swell_sdl_seen_hwnd(seen, own)) {
+    seen.push_back(own);
     own = own->m_parent ? (HWND)own->m_parent : (HWND)own->m_owner;
+  }
   return own && own->m_oswindow ? own : NULL;
 }
 
-static void swell_sdl_raise_with_owned(HWND hwnd, bool raise_owner_chain)
+static void swell_sdl_raise_with_owned_impl(HWND hwnd, bool raise_owner_chain,
+                                            std::vector<HWND> &seen)
 {
   if (!hwnd) return;
 
-  HWND top = hwnd;
-  while (top->m_parent) top = (HWND)top->m_parent;
+  HWND top = swell_sdl_toplevel(hwnd);
+  if (!top || swell_sdl_seen_hwnd(seen, top)) return;
+  seen.push_back(top);
 
   if (raise_owner_chain && top->m_owner)
-    swell_sdl_raise_with_owned((HWND)top->m_owner, true);
+    swell_sdl_raise_with_owned_impl((HWND)top->m_owner, true, seen);
 
   if (top->m_oswindow)
     SDL_RaiseWindow((SDL_Window *)top->m_oswindow);
@@ -257,8 +277,14 @@ static void swell_sdl_raise_with_owned(HWND hwnd, bool raise_owner_chain)
   for (int i = 0; i < top->m_owned.GetSize(); i++) {
     HWND ow = top->m_owned.Get(i);
     if (ow && ow->m_visible)
-      swell_sdl_raise_with_owned(ow, false);
+      swell_sdl_raise_with_owned_impl(ow, false, seen);
   }
+}
+
+static void swell_sdl_raise_with_owned(HWND hwnd, bool raise_owner_chain)
+{
+  std::vector<HWND> seen;
+  swell_sdl_raise_with_owned_impl(hwnd, raise_owner_chain, seen);
 }
 
 static void swell_sdl_update_owned_relations(HWND owner);
@@ -319,15 +345,24 @@ void swell_oswindow_update_owner(HWND hwnd)
   }
 }
 
-static void swell_sdl_update_owned_relations(HWND owner)
+static void swell_sdl_update_owned_relations_impl(HWND owner,
+                                                  std::vector<HWND> &seen)
 {
-  if (!owner) return;
+  if (!owner || swell_sdl_seen_hwnd(seen, owner)) return;
+  seen.push_back(owner);
+
   for (int i = 0; i < owner->m_owned.GetSize(); i++) {
     HWND ow = owner->m_owned.Get(i);
     if (!ow) continue;
     swell_oswindow_update_owner(ow);
-    swell_sdl_update_owned_relations(ow);
+    swell_sdl_update_owned_relations_impl(ow, seen);
   }
+}
+
+static void swell_sdl_update_owned_relations(HWND owner)
+{
+  std::vector<HWND> seen;
+  swell_sdl_update_owned_relations_impl(owner, seen);
 }
 
 static void remove_entry(SDL_WindowEntry *e)

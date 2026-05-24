@@ -1305,9 +1305,12 @@ LONG_PTR SetWindowLong(HWND hwnd, int idx, LONG_PTR val)
     case GWL_HWNDPARENT:
       old = (LONG_PTR)hwnd->m_owner;
       if (val != old) {
+        HWND newOwner = (HWND)val;
+        if (newOwner == hwnd || IsChild(hwnd, newOwner))
+          newOwner = NULL;
         if (hwnd->m_owner && hwnd->m_owner->m_owned.Find(hwnd) >= 0)
           hwnd->m_owner->m_owned.Delete(hwnd->m_owner->m_owned.Find(hwnd), false);
-        hwnd->m_owner = (HWND__*)val;
+        hwnd->m_owner = (HWND__*)newOwner;
         if (hwnd->m_owner && hwnd->m_owner->m_owned.Find(hwnd) < 0)
           hwnd->m_owner->m_owned.Add(hwnd);
         swell_oswindow_update_owner(hwnd);
