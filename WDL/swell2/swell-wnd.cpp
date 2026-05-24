@@ -999,10 +999,25 @@ HWND GetFocus()
 
 void SetForegroundWindow(HWND hwnd)
 {
-  g_swell_foreground = hwnd;
-  if (hwnd) {
-    SetFocus(hwnd);
+  if (!hwnd) return;
+
+  HWND oldFoc = GetFocus();
+
+  HWND w = hwnd;
+  while (w->m_parent && !w->m_oswindow) {
+    w->m_parent->m_focused_child = w;
+    w = (HWND)w->m_parent;
   }
+
+  g_swell_foreground = w;
+  g_swell_focused_oswindow_hwnd = w;
+  swell_oswindow_focus(w);
+
+  HWND foc = GetFocus();
+  if (oldFoc && oldFoc != foc)
+    SendMessage(oldFoc, WM_KILLFOCUS, (WPARAM)foc, 0);
+  if (foc && foc != oldFoc)
+    SendMessage(foc, WM_SETFOCUS, (WPARAM)oldFoc, 0);
 }
 
 HWND GetForegroundWindow()
@@ -1293,8 +1308,9 @@ LONG_PTR SetWindowLong(HWND hwnd, int idx, LONG_PTR val)
         if (hwnd->m_owner && hwnd->m_owner->m_owned.Find(hwnd) >= 0)
           hwnd->m_owner->m_owned.Delete(hwnd->m_owner->m_owned.Find(hwnd), false);
         hwnd->m_owner = (HWND__*)val;
-        if (hwnd->m_owner)
+        if (hwnd->m_owner && hwnd->m_owner->m_owned.Find(hwnd) < 0)
           hwnd->m_owner->m_owned.Add(hwnd);
+        swell_oswindow_update_owner(hwnd);
       }
       return old;
     default:
@@ -1544,22 +1560,53 @@ void SetWindowPos(HWND hwnd, HWND zorder, int x, int y, int cx, int cy, int flag
   // Z-order reordering (matching original SWELL semantics):
   // Children list is bottom-to-top. HWND_BOTTOM → index 0.
   // HWND_TOP → end of list. Specific HWND → insert after it.
-  if (!(flags & SWP_NOZORDER) && hwnd->m_parent && zorder != hwnd) {
-    HWND par = (HWND)hwnd->m_parent;
-    int myIdx = par->m_children.Find(hwnd);
-    if (myIdx >= 0) {
-      par->m_children.Delete(myIdx, false);
-      if (zorder == HWND_BOTTOM) {
-        par->m_children.Insert(0, hwnd);
-      } else if (zorder == HWND_TOP) {
-        par->m_children.Add(hwnd);
-      } else {
-        int zIdx = par->m_children.Find(zorder);
-        if (zIdx >= 0) {
-          par->m_children.Insert(zIdx + 1, hwnd);
-        } else {
+  if (!(flags & SWP_NOZORDER) && zorder != hwnd) {
+    if (hwnd->m_parent) {
+      HWND par = (HWND)hwnd->m_parent;
+      int myIdx = par->m_children.Find(hwnd);
+      if (myIdx >= 0) {
+        par->m_children.Delete(myIdx, false);
+        if (zorder == HWND_BOTTOM) {
+          par->m_children.Insert(0, hwnd);
+        } else if (zorder == HWND_TOP || zorder == HWND_TOPMOST ||
+                   zorder == HWND_NOTOPMOST) {
           par->m_children.Add(hwnd);
+        } else {
+          int zIdx = par->m_children.Find(zorder);
+          if (zIdx >= 0) {
+            par->m_children.Insert(zIdx + 1, hwnd);
+          } else {
+            par->m_children.Add(hwnd);
+          }
         }
+      }
+    } else {
+      if (hwnd->m_prev) hwnd->m_prev->m_next = hwnd->m_next;
+      else g_swell_top_level_list = hwnd->m_next;
+      if (hwnd->m_next) hwnd->m_next->m_prev = hwnd->m_prev;
+      else g_swell_top_level_list_end = hwnd->m_prev;
+
+      hwnd->m_prev = NULL;
+      hwnd->m_next = NULL;
+
+      if (zorder == HWND_BOTTOM) {
+        hwnd->m_next = g_swell_top_level_list;
+        if (hwnd->m_next) hwnd->m_next->m_prev = hwnd;
+        else g_swell_top_level_list_end = hwnd;
+        g_swell_top_level_list = hwnd;
+      } else if (zorder && zorder != HWND_TOP && zorder != HWND_TOPMOST &&
+                 zorder != HWND_NOTOPMOST && !zorder->m_parent) {
+        HWND after = zorder;
+        hwnd->m_prev = after;
+        hwnd->m_next = after->m_next;
+        if (hwnd->m_next) hwnd->m_next->m_prev = hwnd;
+        else g_swell_top_level_list_end = hwnd;
+        after->m_next = hwnd;
+      } else {
+        hwnd->m_prev = g_swell_top_level_list_end;
+        if (hwnd->m_prev) hwnd->m_prev->m_next = hwnd;
+        else g_swell_top_level_list = hwnd;
+        g_swell_top_level_list_end = hwnd;
       }
     }
   }
@@ -1638,7 +1685,7 @@ static HWND windowfrompoint_check_owned(HWND owner, POINT p)
 
 HWND WindowFromPoint(POINT p)
 {
-  HWND w = g_swell_top_level_list;
+  HWND w = g_swell_top_level_list_end;
   while (w) {
     RECT r = w->m_position;
     if (p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom) {
@@ -1657,7 +1704,7 @@ HWND WindowFromPoint(POINT p)
       HWND ch = windowfrompoint_recurse(w, cp);
       return ch ? ch : w;
     }
-    w = w->m_next;
+    w = w->m_prev;
   }
   return NULL;
 }

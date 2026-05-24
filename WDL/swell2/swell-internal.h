@@ -709,6 +709,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus);
 void swell_oswindow_destroy(HWND hwnd);
 void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r);
 void swell_oswindow_focus(HWND hwnd);
+void swell_oswindow_update_owner(HWND hwnd);
 void swell_oswindow_update_style(HWND hwnd, DWORD oldstyle);
 void swell_oswindow_update_enable(HWND hwnd);
 void swell_oswindow_update_text(HWND hwnd);

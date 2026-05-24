@@ -104,6 +104,7 @@ struct swell_x11_api {
   int (*XPending)(Display *);
   int (*XNextEvent)(Display *, XEvent *);
   int (*XSetClassHint)(Display *, Window, XClassHint *);
+  int (*XSetTransientForHint)(Display *, Window, Window);
   int (*XConnectionNumber)(Display *);
 };
 
@@ -143,6 +144,7 @@ static swell_x11_api *swell_x11_load()
   SWELL_X11_LOAD(XPending);
   SWELL_X11_LOAD(XNextEvent);
   SWELL_X11_LOAD(XSetClassHint);
+  SWELL_X11_LOAD(XSetTransientForHint);
   SWELL_X11_LOAD(XConnectionNumber);
 #undef SWELL_X11_LOAD
 
@@ -174,8 +176,34 @@ static void swell_sdl_set_x11_class(SDL_Window *window)
   x->XFlush(display);
 }
 
+static void swell_sdl_set_x11_transient_for(SDL_Window *window,
+                                            SDL_Window *parent)
+{
+  if (!window || !parent) return;
+
+  swell_x11_api *x = swell_x11_load();
+  if (!x || !x->XSetTransientForHint) return;
+
+  SDL_PropertiesID props = SDL_GetWindowProperties(window);
+  Display *display = (Display *)SDL_GetPointerProperty(
+      props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+  const Window xid = (Window)SDL_GetNumberProperty(
+      props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+
+  SDL_PropertiesID pprops = SDL_GetWindowProperties(parent);
+  Display *pdisplay = (Display *)SDL_GetPointerProperty(
+      pprops, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+  const Window pxid = (Window)SDL_GetNumberProperty(
+      pprops, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+
+  if (!display || !xid || !pxid || display != pdisplay) return;
+  x->XSetTransientForHint(display, xid, pxid);
+  x->XFlush(display);
+}
+
 #else
 static void swell_sdl_set_x11_class(SDL_Window *) {}
+static void swell_sdl_set_x11_transient_for(SDL_Window *, SDL_Window *) {}
 #endif
 
 static SDL_WindowEntry *find_entry_by_window(SDL_Window *w)
@@ -204,6 +232,36 @@ static bool swell_sdl_current_driver_is(const char *name)
   const char *driver = SDL_GetCurrentVideoDriver();
   return driver && name && !strcmp(driver, name);
 }
+
+static HWND swell_sdl_find_oswindow_owner(HWND hwnd)
+{
+  HWND own = hwnd ? (HWND)hwnd->m_owner : NULL;
+  while (own && !own->m_oswindow)
+    own = own->m_parent ? (HWND)own->m_parent : (HWND)own->m_owner;
+  return own && own->m_oswindow ? own : NULL;
+}
+
+static void swell_sdl_raise_with_owned(HWND hwnd, bool raise_owner_chain)
+{
+  if (!hwnd) return;
+
+  HWND top = hwnd;
+  while (top->m_parent) top = (HWND)top->m_parent;
+
+  if (raise_owner_chain && top->m_owner)
+    swell_sdl_raise_with_owned((HWND)top->m_owner, true);
+
+  if (top->m_oswindow)
+    SDL_RaiseWindow((SDL_Window *)top->m_oswindow);
+
+  for (int i = 0; i < top->m_owned.GetSize(); i++) {
+    HWND ow = top->m_owned.Get(i);
+    if (ow && ow->m_visible)
+      swell_sdl_raise_with_owned(ow, false);
+  }
+}
+
+static void swell_sdl_update_owned_relations(HWND owner);
 
 static bool swell_async_present_requested()
 {
@@ -242,6 +300,33 @@ static void add_entry(SDL_Window *w, HWND hwnd, SDL_Renderer *r)
   if (swell_async_present_requested()) {
     e->async_enabled = true;
     e->render_thread = std::thread(swell_sdl_render_worker, e);
+  }
+}
+
+void swell_oswindow_update_owner(HWND hwnd)
+{
+  if (!hwnd || !hwnd->m_oswindow) return;
+
+  SDL_Window *window = (SDL_Window *)hwnd->m_oswindow;
+  HWND owner = swell_sdl_find_oswindow_owner(hwnd);
+  SDL_Window *parent = owner ? (SDL_Window *)owner->m_oswindow : NULL;
+
+  SDL_SetWindowModal(window, false);
+  SDL_SetWindowParent(window, parent);
+  if (parent) {
+    SDL_SetWindowModal(window, IsModalDialogBox(hwnd));
+    swell_sdl_set_x11_transient_for(window, parent);
+  }
+}
+
+static void swell_sdl_update_owned_relations(HWND owner)
+{
+  if (!owner) return;
+  for (int i = 0; i < owner->m_owned.GetSize(); i++) {
+    HWND ow = owner->m_owned.Get(i);
+    if (!ow) continue;
+    swell_oswindow_update_owner(ow);
+    swell_sdl_update_owned_relations(ow);
   }
 }
 
@@ -423,6 +508,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
       flags |= SDL_WINDOW_RESIZABLE;
     if (!(hwnd->m_style & WS_CAPTION))
       flags |= SDL_WINDOW_BORDERLESS;
+    if (hwnd->m_owner)
+      flags |= SDL_WINDOW_UTILITY;
     if (!wantFocus)
       flags |= SDL_WINDOW_NOT_FOCUSABLE;
     flags |= SDL_WINDOW_HIDDEN;
@@ -443,6 +530,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   }
 
   swell_sdl_set_x11_class(sdlwin);
+  hwnd->m_oswindow = sdlwin;
+  swell_oswindow_update_owner(hwnd);
 
   SDL_ShowWindow(sdlwin);
 
@@ -455,6 +544,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
     rend = SDL_CreateRenderer(sdlwin, NULL);
     if (!rend) {
       fprintf(stderr, "SWELL SDL3: SDL_CreateRenderer failed: %s\n", SDL_GetError());
+      hwnd->m_oswindow = NULL;
       SDL_DestroyWindow(sdlwin);
       return;
     }
@@ -463,7 +553,6 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
   }
 
   add_entry(sdlwin, hwnd, rend);
-  hwnd->m_oswindow = sdlwin;
 
   if (s_program_icon_surface)
     SDL_SetWindowIcon(sdlwin, s_program_icon_surface);
@@ -482,6 +571,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
     SkCanvas *c = hwnd->m_backingstore->getCanvas();
     if (c) c->clear(SK_ColorTRANSPARENT);
   }
+
+  swell_sdl_update_owned_relations(hwnd);
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +679,7 @@ void swell_oswindow_focus(HWND hwnd)
 
   if (top->m_oswindow) {
     g_swell_focused_oswindow_hwnd = top;
-    SDL_RaiseWindow((SDL_Window*)top->m_oswindow);
+    swell_sdl_raise_with_owned(top, true);
   }
 }
 
@@ -1216,6 +1307,7 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_WINDOW_FOCUS_GAINED: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
+        HWND oldFoc = GetFocus();
         g_swell_focused_oswindow_hwnd = e->hwnd;
         // Suppress WM_ACTIVATEAPP during menu tracking: on Wayland, focus
         // bounces between the main window and menu popup windows on each
@@ -1223,7 +1315,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         if (!SWELL_IsMenuTracking())
           SendMessage(e->hwnd, WM_ACTIVATEAPP, TRUE, 0);
         HWND foc = GetFocus();
-        if (foc) SendMessage(foc, WM_SETFOCUS, 0, 0);
+        if (foc && foc != oldFoc)
+          SendMessage(foc, WM_SETFOCUS, (WPARAM)oldFoc, 0);
       }
       break;
     }
@@ -1231,10 +1324,10 @@ static void swell_sdlEventHandler(SDL_Event *evt)
     case SDL_EVENT_WINDOW_FOCUS_LOST: {
       SDL_WindowEntry *e = find_entry_by_windowID(evt->window.windowID);
       if (e && e->hwnd) {
-        if (g_swell_focused_oswindow_hwnd == e->hwnd)
-          g_swell_focused_oswindow_hwnd = NULL;
         HWND foc = GetFocus();
         if (foc) SendMessage(foc, WM_KILLFOCUS, 0, 0);
+        if (g_swell_focused_oswindow_hwnd == e->hwnd)
+          g_swell_focused_oswindow_hwnd = NULL;
         if (!SWELL_IsMenuTracking())
           SendMessage(e->hwnd, WM_ACTIVATEAPP, FALSE, 0);
       }

@@ -23,6 +23,10 @@ void swell_oswindow_focus(HWND hwnd)
 {
 }
 
+void swell_oswindow_update_owner(HWND hwnd)
+{
+}
+
 void swell_oswindow_update_style(HWND hwnd, DWORD oldstyle)
 {
 }
