@@ -2118,9 +2118,13 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       }
       if (item->mask & LVIF_IMAGE)
         row->set_img_idx(0, item->iImage + 1);
-      if (item->stateMask & LVIS_STATEIMAGEMASK)
-        row->set_img_idx(0, STATEIMAGEMASKTOINDEX(item->state));
       st->m_data.Insert(pos, row);
+      if (item->mask & LVIF_STATE) {
+        if (item->stateMask & LVIS_STATEIMAGEMASK)
+          row->set_img_idx(0, STATEIMAGEMASKTOINDEX(item->state));
+        if (item->stateMask & LVIS_SELECTED)
+          st->set_sel(pos, (item->state & LVIS_SELECTED) != 0);
+      }
       InvalidateRect(hwnd, NULL, FALSE);
       return pos;
     }
@@ -3262,7 +3266,10 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
               if (logcol < row->m_cols.GetSize() && row->m_cols.Get()[logcol].txt)
                 t = row->m_cols.Get()[logcol].txt;
 
-              int image_idx = ((!c || has_subitem_image) && has_image) ? row->get_img_idx(logcol) : 0;
+              int image_idx = 0;
+              if ((!c || has_subitem_image) && has_image) {
+                image_idx = has_status_image ? row->get_img_idx(0) : row->get_img_idx(logcol);
+              }
 
               RECT ar = { xpos, ry, cr.right, ry+rh };
               if ((!c || has_subitem_image) && has_image) {
