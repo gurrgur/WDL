@@ -347,6 +347,7 @@ enum ListViewCapMode {
 struct listViewState {
   WDL_PtrList<SWELL_ListView_Row> m_data;
   WDL_TypedBuf<SWELL_ListView_Col> m_cols;
+  WDL_TypedBuf<unsigned int> m_owner_multisel_state;
   int m_owner_data_size;
   int m_selitem;
   bool m_is_multisel;
@@ -361,6 +362,77 @@ struct listViewState {
   int m_capmode_data1, m_capmode_data2;
   HIMAGELIST m_status_imagelist;
   int m_status_imagelist_type;
+  int GetNumItems() const { return m_owner_data_size >= 0 ? m_owner_data_size : m_data.GetSize(); }
+  bool IsOwnerData() const { return m_owner_data_size >= 0; }
+  int GetColumnIndex(int dispindex) const {
+    if (m_is_listbox || !m_cols.GetSize()) return 0;
+    if (dispindex >= 0 && dispindex < m_cols.GetSize()) return m_cols.Get()[dispindex].col_index;
+    return 0;
+  }
+  bool get_sel(int idx) {
+    if (idx < 0 || idx >= GetNumItems()) return false;
+    if (!m_is_multisel) return idx == m_selitem;
+    if (m_owner_data_size < 0) {
+      SWELL_ListView_Row *p = m_data.Get(idx);
+      return p && (p->m_tmp & 1);
+    }
+    const int szn = idx / 32;
+    const unsigned int mask = 1u << (idx & 31);
+    const unsigned int *p = m_owner_multisel_state.Get();
+    return p && szn < m_owner_multisel_state.GetSize() && (p[szn] & mask);
+  }
+  bool set_sel(int idx, bool v) {
+    if (idx < 0 || idx >= GetNumItems()) return false;
+    if (!m_is_multisel) {
+      const int oldsel = m_selitem;
+      if (v) m_selitem = idx;
+      else if (m_selitem == idx) m_selitem = -1;
+      return oldsel != m_selitem;
+    }
+    if (m_owner_data_size < 0) {
+      SWELL_ListView_Row *p = m_data.Get(idx);
+      if (!p) return false;
+      const int oldtmp = p->m_tmp;
+      p->m_tmp = v ? (oldtmp | 1) : (oldtmp & ~1);
+      return p->m_tmp != oldtmp;
+    }
+    const int szn = idx / 32;
+    const int oldsz = m_owner_multisel_state.GetSize();
+    unsigned int *p = m_owner_multisel_state.Get();
+    if (oldsz < szn + 1) {
+      p = m_owner_multisel_state.ResizeOK(szn + 1, false);
+      if (p) memset(p + oldsz, 0, (szn + 1 - oldsz) * sizeof(*p));
+    }
+    if (!p) return false;
+    const unsigned int mask = 1u << (idx & 31);
+    const unsigned int oldval = p[szn];
+    p[szn] = v ? (oldval | mask) : (oldval & ~mask);
+    return p[szn] != oldval;
+  }
+  bool clear_sel() {
+    if (!m_is_multisel) {
+      if (m_selitem != -1) { m_selitem = -1; return true; }
+      return false;
+    }
+    if (m_owner_data_size < 0) {
+      bool rv = false;
+      const int n = m_data.GetSize();
+      for (int x = 0; x < n; x++) {
+        SWELL_ListView_Row *p = m_data.Get(x);
+        if (p && (p->m_tmp & 1)) {
+          p->m_tmp &= ~1;
+          rv = true;
+        }
+      }
+      return rv;
+    }
+    bool rv = false;
+    for (int x = 0; x < m_owner_multisel_state.GetSize(); x++) {
+      if (m_owner_multisel_state.Get()[x]) { rv = true; break; }
+    }
+    m_owner_multisel_state.Resize(0, false);
+    return rv;
+  }
   bool hasStatusImage() const { return m_status_imagelist && m_status_imagelist_type == 1; }
   bool hasAnyImage() const { return m_status_imagelist && (m_status_imagelist_type == 2 || m_status_imagelist_type == 1); }
   int m_extended_style;

@@ -1973,6 +1973,9 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       st = new listViewState();
       hwnd->m_private_data = (INT_PTR)st;
       st->m_is_listbox = (lParam != 0);
+      st->m_is_multisel = st->m_is_listbox
+        ? ((hwnd->m_style & (LBS_EXTENDEDSEL | LBS_MULTIPLESEL)) != 0)
+        : ((hwnd->m_style & LVS_SINGLESEL) == 0);
       if (hwnd->m_style & LVS_OWNERDATA) st->m_owner_data_size = 0;
       hwnd->m_wantfocus = true;
       return 0;
@@ -2126,14 +2129,23 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st || !lParam) return FALSE;
       const LVITEM *item = (const LVITEM *)lParam;
       int row = item->iItem;
-      if (row < 0 || row >= st->m_data.GetSize()) return FALSE;
+      int nitems = st->GetNumItems();
+      if (row < 0 || row >= nitems) return FALSE;
+      if (st->IsOwnerData()) {
+        if (item->mask & LVIF_STATE) {
+          if (item->stateMask & LVIS_SELECTED) st->set_sel(row, (item->state & LVIS_SELECTED) != 0);
+          if ((item->stateMask & LVIS_FOCUSED) && (item->state & LVIS_FOCUSED)) st->m_selitem = row;
+        }
+        InvalidateRect(hwnd, NULL, FALSE);
+        return TRUE;
+      }
       SWELL_ListView_Row *r = st->m_data.Get(row);
       if (item->mask & LVIF_PARAM) r->m_param = item->lParam;
       if (item->mask & LVIF_STATE) {
-        if (item->stateMask & LVIS_SELECTED) {
-          if (item->state & LVIS_SELECTED) r->m_tmp |= 1;
-          else r->m_tmp &= ~1;
-        }
+        if (item->stateMask & LVIS_SELECTED)
+          st->set_sel(row, (item->state & LVIS_SELECTED) != 0);
+        if ((item->stateMask & LVIS_FOCUSED) && (item->state & LVIS_FOCUSED))
+          st->m_selitem = row;
         if (item->stateMask & LVIS_STATEIMAGEMASK)
           r->set_img_idx(0, STATEIMAGEMASKTOINDEX(item->state));
       }
@@ -2192,7 +2204,8 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         if (item->mask & LVIF_STATE) {
           item->state = 0;
-          if (st->m_selitem == row) item->state |= LVIS_SELECTED | LVIS_FOCUSED;
+          if (st->get_sel(row)) item->state |= LVIS_SELECTED;
+          if (st->m_selitem == row) item->state |= LVIS_FOCUSED;
         }
         return TRUE;
       }
@@ -2200,7 +2213,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (item->mask & LVIF_PARAM) item->lParam = r->m_param;
       if (item->mask & LVIF_STATE) {
         item->state = 0;
-        if (r->m_tmp & 1) item->state |= LVIS_SELECTED;
+        if (st->get_sel(row)) item->state |= LVIS_SELECTED;
         if (st->m_selitem == row) item->state |= LVIS_FOCUSED;
         if (st->hasStatusImage()) {
           int idx = r->get_img_idx(0);
@@ -2227,13 +2240,14 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int pos = (int)wParam;
       if (pos < 0 || pos >= st->m_data.GetSize()) return FALSE;
       st->m_data.Delete(pos, true);
-      if (st->m_selitem >= st->m_data.GetSize()) st->m_selitem = st->m_data.GetSize()-1;
+      if (st->m_selitem == pos) st->m_selitem = -1;
+      else if (st->m_selitem > pos) st->m_selitem--;
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
     }
 
     case LVM_DELETEALLITEMS:
-      if (st) { st->m_data.Empty(true); st->m_selitem = -1; InvalidateRect(hwnd, NULL, FALSE); }
+      if (st) { st->m_data.Empty(true); st->m_owner_multisel_state.Resize(0, false); st->m_selitem = -1; InvalidateRect(hwnd, NULL, FALSE); }
       return TRUE;
 
     case LVM_GETITEMCOUNT:
@@ -2242,6 +2256,11 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case LVM_SETITEMCOUNT:
       if (st) {
         st->m_owner_data_size = (int)wParam;
+        if (st->m_owner_data_size < 0) st->m_owner_data_size = 0;
+        int words = (st->m_owner_data_size + 31) / 32;
+        if (st->m_owner_multisel_state.GetSize() > words)
+          st->m_owner_multisel_state.Resize(words, false);
+        if (st->m_selitem >= st->m_owner_data_size) st->m_selitem = -1;
         InvalidateRect(hwnd, NULL, FALSE);
       }
       return 0;
@@ -2253,8 +2272,8 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st) return 0;
       if (!st->m_is_multisel) return (st->m_selitem >= 0) ? 1 : 0;
       int cnt = 0;
-      for (int i = 0; i < st->m_data.GetSize(); i++)
-        if (st->m_data.Get(i)->m_tmp & 1) cnt++;
+      for (int i = 0; i < st->GetNumItems(); i++)
+        if (st->get_sel(i)) cnt++;
       return cnt;
     }
 
@@ -2262,11 +2281,17 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st) return -1;
       int start = (int)wParam;
       UINT flags = (UINT)lParam;
-      int n = st->m_data.GetSize();
+      int n = st->GetNumItems();
       if (flags & LVNI_SELECTED) {
         for (int i = start+1; i < n; i++) {
-          if (st->m_selitem == i || (st->m_is_multisel && (st->m_data.Get(i)->m_tmp & 1)))
+          if (st->get_sel(i))
             return i;
+        }
+        return -1;
+      }
+      if (flags & LVNI_FOCUSED) {
+        for (int i = start+1; i < n; i++) {
+          if (st->m_selitem == i) return i;
         }
         return -1;
       }
@@ -2281,9 +2306,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (row < 0 || row >= nitems) return 0;
       int state = 0;
       if (mask & LVIS_SELECTED) {
-        if (row < st->m_data.GetSize() && (st->m_data.Get(row)->m_tmp & 1))
-          state |= LVIS_SELECTED;
-        if (st->m_selitem == row) state |= LVIS_SELECTED;
+        if (st->get_sel(row)) state |= LVIS_SELECTED;
       }
       if (mask & LVIS_FOCUSED && st->m_selitem == row) state |= LVIS_FOCUSED;
       if ((mask & LVIS_STATEIMAGEMASK) && st->hasStatusImage() && row < st->m_data.GetSize()) {
@@ -2297,26 +2320,20 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st || !lParam) return FALSE;
       const LVITEM *item = (const LVITEM *)lParam;
       int row = (int)wParam;
-      int nitems = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
+      int nitems = st->GetNumItems();
       if (row == -1) {
-        // set all
-        for (int i = 0; i < st->m_data.GetSize(); i++) {
-          if (item->stateMask & LVIS_SELECTED) {
-            if (item->state & LVIS_SELECTED) st->m_data.Get(i)->m_tmp |= 1;
-            else st->m_data.Get(i)->m_tmp &= ~1;
-          }
+        if (!st->m_is_multisel && (item->stateMask & LVIS_SELECTED) && (item->state & LVIS_SELECTED))
+          return TRUE;
+        for (int i = 0; i < nitems; i++) {
+          if (item->stateMask & LVIS_SELECTED)
+            st->set_sel(i, (item->state & LVIS_SELECTED) != 0);
         }
-        if (!(item->state & LVIS_SELECTED) && (item->stateMask & LVIS_SELECTED))
+        if ((item->stateMask & LVIS_SELECTED) && !(item->state & LVIS_SELECTED))
           st->m_selitem = -1;
       } else {
         if (row < 0 || row >= nitems) return FALSE;
         if (item->stateMask & LVIS_SELECTED) {
-          if (item->state & LVIS_SELECTED) {
-            if (row < st->m_data.GetSize()) st->m_data.Get(row)->m_tmp |= 1;
-            st->m_selitem = row;
-          } else {
-            if (row < st->m_data.GetSize()) st->m_data.Get(row)->m_tmp &= ~1;
-          }
+          st->set_sel(row, (item->state & LVIS_SELECTED) != 0);
         }
         if (item->stateMask & LVIS_FOCUSED && item->state & LVIS_FOCUSED)
           st->m_selitem = row;
@@ -2485,9 +2502,9 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int rh = st->m_last_row_height > 0 ? st->m_last_row_height : 16;
       int hdr = (!st->m_is_listbox && st->m_cols.GetSize() > 0 &&
                   !(hwnd->m_style & LVS_NOCOLUMNHEADER)) ? (rh + 2) : 0;
-      int n = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
+      int n = st->GetNumItems();
       int y = hti->pt.y - hdr + st->m_scroll_y;
-      int row = y / rh;
+      int row = y >= 0 ? y / rh : -1;
       if (row >= 0 && row < n) {
         hti->iItem = row;
         hti->flags = LVHT_ONITEM;
@@ -2625,13 +2642,14 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int pos = (int)wParam;
       if (pos < 0 || pos >= st->m_data.GetSize()) return LB_ERR;
       st->m_data.Delete(pos, true);
-      if (st->m_selitem >= st->m_data.GetSize()) st->m_selitem = st->m_data.GetSize()-1;
+      if (st->m_selitem == pos) st->m_selitem = -1;
+      else if (st->m_selitem > pos) st->m_selitem--;
       InvalidateRect(hwnd, NULL, FALSE);
       return st->m_data.GetSize();
     }
 
     case LB_RESETCONTENT:
-      if (st) { st->m_data.Empty(true); st->m_selitem = -1; InvalidateRect(hwnd, NULL, FALSE); }
+      if (st) { st->m_data.Empty(true); st->m_owner_multisel_state.Resize(0, false); st->m_selitem = -1; InvalidateRect(hwnd, NULL, FALSE); }
       return 0;
 
     case LB_GETCOUNT:
@@ -2643,6 +2661,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case LB_SETCURSEL: {
       if (!st) return LB_ERR;
       int idx = (int)wParam;
+      if (st->m_is_multisel) return LB_ERR;
       if (idx >= st->m_data.GetSize()) return LB_ERR;
       st->m_selitem = idx;
       InvalidateRect(hwnd, NULL, FALSE);
@@ -2652,15 +2671,26 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case LB_GETSEL:
       if (!st) return LB_ERR;
       { int i = (int)wParam; if (i<0||i>=st->m_data.GetSize()) return LB_ERR;
-        return (st->m_selitem == i || (st->m_data.Get(i)->m_tmp & 1)) ? 1 : 0; }
+        return st->get_sel(i) ? 1 : 0; }
 
     case LB_SETSEL:
-      if (st && (int)lParam >= 0 && (int)lParam < st->m_data.GetSize()) {
-        if (wParam) { st->m_data.Get((int)lParam)->m_tmp |= 1; st->m_selitem = (int)lParam; }
-        else st->m_data.Get((int)lParam)->m_tmp &= ~1;
+      if (!st || !st->m_is_multisel) return LB_ERR;
+      if ((int)lParam == -1) {
+        if (wParam) {
+          for (int i = 0; i < st->m_data.GetSize(); i++) st->set_sel(i, true);
+        } else {
+          st->clear_sel();
+          st->m_selitem = -1;
+        }
         InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
       }
-      return 0;
+      if ((int)lParam >= 0 && (int)lParam < st->m_data.GetSize()) {
+        if (st->set_sel((int)lParam, wParam != 0)) InvalidateRect(hwnd, NULL, FALSE);
+        if (wParam) st->m_selitem = (int)lParam;
+        return 0;
+      }
+      return LB_ERR;
 
     case LB_GETTEXT: {
       if (!st || !lParam) return LB_ERR;
@@ -2711,7 +2741,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!st) return 0;
       int cnt = 0;
       for (int i = 0; i < st->m_data.GetSize(); i++)
-        if (st->m_data.Get(i)->m_tmp & 1) cnt++;
+        if (st->get_sel(i)) cnt++;
       return cnt;
     }
 
@@ -2789,15 +2819,32 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
       }
 
-      int row = (my - hdr + st->m_scroll_y) / rh;
+      int ypos = my - hdr + st->m_scroll_y;
+      int row = ypos >= 0 ? ypos / rh : -1;
       if (row >= 0 && row < n) {
         int oldsel = st->m_selitem;
-        st->m_selitem = row;
-        if (!st->m_is_listbox && st->m_is_multisel && row < st->m_data.GetSize())
-          st->m_data.Get(row)->m_tmp |= 1;
+        bool changed = false;
+        if (!st->m_is_multisel) {
+          changed = st->set_sel(row, true);
+        } else {
+          const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+          const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+          if (!ctrl && !shift && !st->get_sel(row))
+            changed |= st->clear_sel();
+          if (shift && oldsel >= 0) {
+            int a = oldsel, b = row;
+            if (a > b) { int t = a; a = b; b = t; }
+            if (!ctrl) changed |= st->clear_sel();
+            for (int i = a; i <= b; i++) changed |= st->set_sel(i, true);
+          } else {
+            changed |= st->set_sel(row, !ctrl || !st->get_sel(row));
+          }
+          st->m_selitem = row;
+        }
         InvalidateRect(hwnd, NULL, FALSE);
         if (st->m_is_listbox) {
-          notify_parent(hwnd, msg == WM_LBUTTONDBLCLK ? LBN_DBLCLK : LBN_SELCHANGE);
+          if (changed || msg == WM_LBUTTONDBLCLK)
+            notify_parent(hwnd, msg == WM_LBUTTONDBLCLK ? LBN_DBLCLK : LBN_SELCHANGE);
         } else {
           // send NM_CLICK or NM_DBLCLK
           NMLISTVIEW nm = {};
@@ -2812,13 +2859,19 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
 
           // LVN_ITEMCHANGED
-          if (oldsel != row) {
+          if (changed || oldsel != row) {
             nm.hdr.code = LVN_ITEMCHANGED;
             nm.uChanged = LVIF_STATE;
             nm.uNewState = LVIS_SELECTED | LVIS_FOCUSED;
             nm.uOldState = 0;
             if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
           }
+        }
+      } else if (row >= n && st->m_is_multisel) {
+        if (st->clear_sel()) {
+          st->m_selitem = -1;
+          InvalidateRect(hwnd, NULL, FALSE);
+          if (st->m_is_listbox) notify_parent(hwnd, LBN_SELCHANGE);
         }
       }
       return 0;
@@ -3028,8 +3081,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (ry >= cr.bottom) break;
         if (ry + rh < cr.top + hdr) continue;
 
-        bool sel = (st->m_selitem == i) ||
-                   (i < st->m_data.GetSize() && (st->m_data.Get(i)->m_tmp & 1));
+        bool sel = st->get_sel(i);
 
         COLORREF rowbg, rowfg;
         if (sel) {
