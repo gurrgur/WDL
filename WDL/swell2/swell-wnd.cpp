@@ -1533,6 +1533,7 @@ void SetWindowPos(HWND hwnd, HWND zorder, int x, int y, int cx, int cy, int flag
 {
   if (!hwnd) return;
 
+  RECT oldpos = hwnd->m_position;
   bool moved = false, sized = false;
 
   if (!(flags & SWP_NOMOVE)) {
@@ -1625,6 +1626,9 @@ void SetWindowPos(HWND hwnd, HWND zorder, int x, int y, int cx, int cy, int flag
     SendMessage(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&ncr);
     SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
                 MAKELPARAM(ncr.right - ncr.left, ncr.bottom - ncr.top));
+    if (hwnd->m_parent)
+      InvalidateRect((HWND)hwnd->m_parent, &oldpos, FALSE);
+    InvalidateRect(hwnd, NULL, FALSE);
   }
   if (moved) {
     SendMessage(hwnd, WM_MOVE, 0, MAKELPARAM(x, y));
