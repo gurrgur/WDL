@@ -29,6 +29,7 @@ extern "C" {
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_input_device.h>
+#include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_pointer.h>
 #undef static
@@ -39,6 +40,20 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+#ifndef VK_OEM_PLUS
+#define VK_OEM_PLUS   0xBB
+#define VK_OEM_COMMA  0xBC
+#define VK_OEM_MINUS  0xBD
+#define VK_OEM_PERIOD 0xBE
+#define VK_OEM_1      0xBA
+#define VK_OEM_2      0xBF
+#define VK_OEM_3      0xC0
+#define VK_OEM_4      0xDB
+#define VK_OEM_5      0xDC
+#define VK_OEM_6      0xDD
+#define VK_OEM_7      0xDE
+#endif
 
 struct swell_wlr_backend {
   wl_display *display;
@@ -58,6 +73,8 @@ struct swell_wlr_window {
   HWND hwnd;
   HWND host_hwnd;
   wlr_output *output;
+  wl_listener request_state;
+  bool request_state_listening;
   wlr_texture *texture;
   int tex_w;
   int tex_h;
@@ -75,6 +92,12 @@ struct swell_wlr_pointer {
   wl_listener motion_absolute;
   wl_listener button;
   wl_listener axis;
+  wl_listener destroy;
+};
+
+struct swell_wlr_keyboard {
+  wlr_keyboard *keyboard;
+  wl_listener key;
   wl_listener destroy;
 };
 
@@ -239,11 +262,172 @@ static void swell_wlr_pointer_destroy(struct wl_listener *listener, void *data)
   delete ptr;
 }
 
+static int swell_wlr_keycode_to_vk(uint32_t keycode)
+{
+  if (keycode >= KEY_A && keycode <= KEY_Z)
+    return 'A' + (int)(keycode - KEY_A);
+  if (keycode >= KEY_1 && keycode <= KEY_9)
+    return '1' + (int)(keycode - KEY_1);
+  if (keycode == KEY_0) return '0';
+
+  switch (keycode) {
+    case KEY_ENTER:      return VK_RETURN;
+    case KEY_ESC:        return VK_ESCAPE;
+    case KEY_BACKSPACE:  return VK_BACK;
+    case KEY_TAB:        return VK_TAB;
+    case KEY_SPACE:      return VK_SPACE;
+    case KEY_DELETE:     return VK_DELETE;
+    case KEY_INSERT:     return VK_INSERT;
+    case KEY_HOME:       return VK_HOME;
+    case KEY_END:        return VK_END;
+    case KEY_PAGEUP:     return VK_PRIOR;
+    case KEY_PAGEDOWN:   return VK_NEXT;
+    case KEY_LEFT:       return VK_LEFT;
+    case KEY_RIGHT:      return VK_RIGHT;
+    case KEY_UP:         return VK_UP;
+    case KEY_DOWN:       return VK_DOWN;
+    case KEY_PAUSE:      return VK_PAUSE;
+    case KEY_CAPSLOCK:   return VK_CAPITAL;
+    case KEY_SYSRQ:      return VK_SNAPSHOT;
+    case KEY_LEFTSHIFT:
+    case KEY_RIGHTSHIFT: return VK_SHIFT;
+    case KEY_LEFTCTRL:
+    case KEY_RIGHTCTRL:  return VK_CONTROL;
+    case KEY_LEFTALT:
+    case KEY_RIGHTALT:   return VK_MENU;
+    case KEY_LEFTMETA:   return VK_LWIN;
+    case KEY_RIGHTMETA:  return VK_RWIN;
+    case KEY_KP0:        return VK_NUMPAD0;
+    case KEY_KP1:        return VK_NUMPAD1;
+    case KEY_KP2:        return VK_NUMPAD2;
+    case KEY_KP3:        return VK_NUMPAD3;
+    case KEY_KP4:        return VK_NUMPAD4;
+    case KEY_KP5:        return VK_NUMPAD5;
+    case KEY_KP6:        return VK_NUMPAD6;
+    case KEY_KP7:        return VK_NUMPAD7;
+    case KEY_KP8:        return VK_NUMPAD8;
+    case KEY_KP9:        return VK_NUMPAD9;
+    case KEY_KPDOT:      return VK_DECIMAL;
+    case KEY_KPSLASH:    return VK_DIVIDE;
+    case KEY_KPASTERISK: return VK_MULTIPLY;
+    case KEY_KPMINUS:    return VK_SUBTRACT;
+    case KEY_KPPLUS:     return VK_ADD;
+    case KEY_KPENTER:    return VK_RETURN;
+    case KEY_NUMLOCK:    return VK_NUMLOCK;
+    case KEY_EQUAL:      return VK_OEM_PLUS;
+    case KEY_COMMA:      return VK_OEM_COMMA;
+    case KEY_MINUS:      return VK_OEM_MINUS;
+    case KEY_DOT:        return VK_OEM_PERIOD;
+    case KEY_SEMICOLON:  return VK_OEM_1;
+    case KEY_SLASH:      return VK_OEM_2;
+    case KEY_GRAVE:      return VK_OEM_3;
+    case KEY_LEFTBRACE:  return VK_OEM_4;
+    case KEY_BACKSLASH:  return VK_OEM_5;
+    case KEY_RIGHTBRACE: return VK_OEM_6;
+    case KEY_APOSTROPHE: return VK_OEM_7;
+    default: break;
+  }
+
+  if (keycode >= KEY_F1 && keycode <= KEY_F12)
+    return VK_F1 + (int)(keycode - KEY_F1);
+  if (keycode >= KEY_F13 && keycode <= KEY_F24)
+    return VK_F13 + (int)(keycode - KEY_F13);
+  return 0;
+}
+
+static bool swell_wlr_is_mod_key(uint32_t keycode)
+{
+  return keycode == KEY_LEFTSHIFT || keycode == KEY_RIGHTSHIFT ||
+         keycode == KEY_LEFTCTRL || keycode == KEY_RIGHTCTRL ||
+         keycode == KEY_LEFTALT || keycode == KEY_RIGHTALT ||
+         keycode == KEY_LEFTMETA || keycode == KEY_RIGHTMETA;
+}
+
+static LPARAM swell_wlr_key_lparam(wlr_keyboard *kb)
+{
+  LPARAM lp = FVIRTKEY;
+  if (!kb) return lp;
+  uint32_t mods = wlr_keyboard_get_modifiers(kb);
+  if (mods & WLR_MODIFIER_SHIFT) lp |= FSHIFT;
+  if (mods & WLR_MODIFIER_CTRL) lp |= FCONTROL;
+  if (mods & WLR_MODIFIER_ALT) lp |= FALT;
+  if (mods & WLR_MODIFIER_LOGO) lp |= FLWIN;
+  return lp;
+}
+
+static HWND swell_wlr_keyboard_target()
+{
+  HWND foc = GetFocus();
+  if (foc) return foc;
+  return swell_wlr_pointer_host();
+}
+
+static void swell_wlr_keyboard_key(struct wl_listener *listener, void *data)
+{
+  swell_wlr_keyboard *kbw = NULL;
+  kbw = wl_container_of(listener, kbw, key);
+  wlr_keyboard_key_event *ev = (wlr_keyboard_key_event *)data;
+  if (!kbw || !kbw->keyboard || !ev) return;
+
+  const bool down = ev->state == WL_KEYBOARD_KEY_STATE_PRESSED;
+  const int vk = swell_wlr_keycode_to_vk(ev->keycode);
+  HWND target = swell_wlr_keyboard_target();
+  if (!target || !vk) return;
+
+  LPARAM lp = swell_wlr_key_lparam(kbw->keyboard);
+  UINT msg = down ? WM_KEYDOWN : WM_KEYUP;
+  if (swell_wlr_is_mod_key(ev->keycode))
+    msg = down ? WM_SYSKEYDOWN : WM_SYSKEYUP;
+  SendMessage(target, msg, (WPARAM)vk, lp);
+
+  if (!down || !kbw->keyboard->xkb_state) return;
+
+  const xkb_keycode_t xkb_code = ev->keycode + 8;
+  const xkb_keysym_t sym =
+      xkb_state_key_get_one_sym(kbw->keyboard->xkb_state, xkb_code);
+  if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter ||
+      sym == XKB_KEY_Tab || sym == XKB_KEY_BackSpace) {
+    int ch = 0;
+    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) ch = '\r';
+    else if (sym == XKB_KEY_Tab) ch = '\t';
+    else if (sym == XKB_KEY_BackSpace) ch = '\b';
+    if (ch) SendMessage(target, WM_CHAR, (WPARAM)ch, 0);
+    return;
+  }
+
+  uint32_t utf32 = xkb_state_key_get_utf32(kbw->keyboard->xkb_state, xkb_code);
+  if (utf32 >= 0x20)
+    SendMessage(target, WM_CHAR, (WPARAM)utf32, 0);
+}
+
+static void swell_wlr_keyboard_destroy(struct wl_listener *listener, void *data)
+{
+  (void)data;
+  swell_wlr_keyboard *kbw = NULL;
+  kbw = wl_container_of(listener, kbw, destroy);
+  wl_list_remove(&kbw->key.link);
+  wl_list_remove(&kbw->destroy.link);
+  delete kbw;
+}
+
 static void swell_wlr_new_input(struct wl_listener *listener, void *data)
 {
   (void)listener;
   wlr_input_device *dev = (wlr_input_device *)data;
-  if (!dev || dev->type != WLR_INPUT_DEVICE_POINTER) return;
+  if (!dev) return;
+
+  if (dev->type == WLR_INPUT_DEVICE_KEYBOARD) {
+    swell_wlr_keyboard *kbw = new swell_wlr_keyboard();
+    memset(kbw, 0, sizeof(*kbw));
+    kbw->keyboard = wlr_keyboard_from_input_device(dev);
+    kbw->key.notify = swell_wlr_keyboard_key;
+    wl_signal_add(&kbw->keyboard->events.key, &kbw->key);
+    kbw->destroy.notify = swell_wlr_keyboard_destroy;
+    wl_signal_add(&dev->events.destroy, &kbw->destroy);
+    return;
+  }
+
+  if (dev->type != WLR_INPUT_DEVICE_POINTER) return;
 
   swell_wlr_pointer *ptr = new swell_wlr_pointer();
   memset(ptr, 0, sizeof(*ptr));
@@ -402,6 +586,39 @@ static void swell_wlr_make_backingstore(HWND hwnd, int w, int h)
   }
 }
 
+static void swell_wlr_handle_output_request_state(struct wl_listener *listener,
+                                                  void *data)
+{
+  swell_wlr_window *win = NULL;
+  win = wl_container_of(listener, win, request_state);
+  wlr_output_event_request_state *ev = (wlr_output_event_request_state *)data;
+  if (!win || !win->hwnd || !win->output || !ev || !ev->state) return;
+
+  wlr_output_commit_state(win->output, ev->state);
+
+  int w = win->output->width;
+  int h = win->output->height;
+  if ((ev->state->committed & WLR_OUTPUT_STATE_MODE) &&
+      ev->state->mode_type == WLR_OUTPUT_STATE_MODE_CUSTOM) {
+    w = ev->state->custom_mode.width;
+    h = ev->state->custom_mode.height;
+  }
+  if (w < 1 || h < 1) return;
+
+  RECT nr = win->hwnd->m_position;
+  nr.right = nr.left + w;
+  nr.bottom = nr.top + h;
+  win->hwnd->m_position = nr;
+  swell_wlr_make_backingstore(win->hwnd, w, h);
+  if (win->texture) {
+    wlr_texture_destroy(win->texture);
+    win->texture = NULL;
+    win->tex_w = win->tex_h = 0;
+  }
+  SendMessage(win->hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(w, h));
+  InvalidateRect(win->hwnd, NULL, FALSE);
+}
+
 void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 {
   if (!hwnd) return;
@@ -437,6 +654,9 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
       delete win;
       return;
     }
+    win->request_state.notify = swell_wlr_handle_output_request_state;
+    wl_signal_add(&win->output->events.request_state, &win->request_state);
+    win->request_state_listening = true;
   }
   win->next = g_wlr_windows;
   g_wlr_windows = win;
@@ -460,6 +680,10 @@ void swell_oswindow_destroy(HWND hwnd)
   hwnd->m_backingstore.reset();
   swell_wlr_remove(win);
   if (win->texture) wlr_texture_destroy(win->texture);
+  if (win->request_state_listening) {
+    wl_list_remove(&win->request_state.link);
+    win->request_state_listening = false;
+  }
   if (win->output) wlr_output_destroy(win->output);
   delete win;
 }
