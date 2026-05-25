@@ -26,6 +26,7 @@
 #include <core/SkPath.h>
 #include <core/SkRRect.h>
 #include <core/SkFont.h>
+#include <core/SkFontTypes.h>
 #include <core/SkFontMetrics.h>
 #include <core/SkTypeface.h>
 #include <core/SkFontMgr.h>
@@ -1868,6 +1869,7 @@ static const SkFont &swell_get_cached_skfont(HDC ctx)
     f.setTypeface(swell_get_typeface(g_swell_deffont_face, FW_NORMAL, false));
   }
   f.setSize(fontSize);
+  f.setHinting(SkFontHinting::kSlight);
   if (g_swell_subpixel_text) {
     f.setSubpixel(true);
     f.setEdging(SkFont::Edging::kSubpixelAntiAlias);

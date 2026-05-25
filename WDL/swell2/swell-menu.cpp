@@ -30,6 +30,7 @@
 #include <core/SkCanvas.h>
 #include <core/SkPaint.h>
 #include <core/SkFont.h>
+#include <core/SkFontTypes.h>
 #include <core/SkFontMetrics.h>
 #include <core/SkFontMgr.h>
 #include <core/SkTypeface.h>
@@ -1254,6 +1255,7 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
 
   mw->font.setTypeface(menu_get_typeface());
   mw->font.setSize((float)menu_font_sz());
+  mw->font.setHinting(SkFontHinting::kSlight);
   if (g_swell_subpixel_text) {
     mw->font.setSubpixel(true);
     mw->font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
