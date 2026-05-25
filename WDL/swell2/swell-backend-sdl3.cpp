@@ -389,6 +389,20 @@ static void remove_entry(SDL_WindowEntry *e)
   delete e;
 }
 
+static void swell_sdl_configure_renderer_for_pixels(SDL_Renderer *renderer)
+{
+  if (!renderer) return;
+  SDL_SetRenderLogicalPresentation(renderer, 0, 0,
+                                   SDL_LOGICAL_PRESENTATION_DISABLED);
+}
+
+static void swell_sdl_configure_present_texture(SDL_Texture *texture)
+{
+  if (!texture) return;
+  SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE);
+  SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+}
+
 static void swell_sdl_render_worker(SDL_WindowEntry *e)
 {
   // Create the renderer on this thread so the underlying GL context is
@@ -403,6 +417,7 @@ static void swell_sdl_render_worker(SDL_WindowEntry *e)
     e->cv_idle.notify_all();
     return;
   }
+  swell_sdl_configure_renderer_for_pixels(e->renderer);
   SDL_SetRenderVSync(e->renderer, 0);
 
   for (;;) {
@@ -430,7 +445,7 @@ static void swell_sdl_render_worker(SDL_WindowEntry *e)
       if (e->texture) {
         e->tex_w = pw;
         e->tex_h = ph;
-        SDL_SetTextureBlendMode(e->texture, SDL_BLENDMODE_NONE);
+        swell_sdl_configure_present_texture(e->texture);
       }
     }
 
@@ -583,6 +598,7 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
       return;
     }
     const char *novsync = getenv("SWELL_NO_VSYNC");
+    swell_sdl_configure_renderer_for_pixels(rend);
     SDL_SetRenderVSync(rend, (novsync && *novsync == '1') ? 0 : SDL_RENDERER_VSYNC_ADAPTIVE);
   }
 
@@ -817,7 +833,7 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
     if (!e->texture) return;
     e->tex_w = pw;
     e->tex_h = ph;
-    SDL_SetTextureBlendMode(e->texture, SDL_BLENDMODE_NONE);
+    swell_sdl_configure_present_texture(e->texture);
   }
 
   SDL_Rect sdlr;
