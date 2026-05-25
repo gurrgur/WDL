@@ -128,6 +128,9 @@ struct swell_gdpLocalContext {
 #ifdef SWELL_TARGET_SDL3
 #include <SDL3/SDL.h>
 typedef SDL_Window *SWELL_OSWINDOW;
+#elif defined(SWELL_TARGET_WLR)
+struct swell_wlr_window;
+typedef swell_wlr_window *SWELL_OSWINDOW;
 #else
 typedef void *SWELL_OSWINDOW;
 #endif

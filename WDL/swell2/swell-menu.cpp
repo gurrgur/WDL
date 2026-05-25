@@ -25,20 +25,6 @@
 #define MIIM_CHECKMARKS 0x0008
 #endif
 
-#ifdef SWELL_TARGET_SDL3
-#include <SDL3/SDL.h>
-#include <core/SkCanvas.h>
-#include <core/SkPaint.h>
-#include <core/SkFont.h>
-#include <core/SkFontTypes.h>
-#include <core/SkFontMetrics.h>
-#include <core/SkFontMgr.h>
-#include <core/SkTypeface.h>
-#include <core/SkRRect.h>
-#include <ports/SkFontMgr_fontconfig.h>
-#include <ports/SkFontScanner_FreeType.h>
-#endif
-
 // ============================================================================
 // Default / current menu globals
 // ============================================================================
@@ -485,11 +471,42 @@ int SWELL_GenerateMenuFromList(HMENU hMenu, const void *list, int listsz)
   return idx;
 }
 
+// Strip Win32 & accelerator prefix for display, stopping at \t shortcut sep.
+// "&File\tCtrl+O" -> "File", "Save && Exit" -> "Save & Exit".
+static const char *menu_strip_accel(const char *src, WDL_FastString &buf)
+{
+  buf.Set("");
+  if (!src) return "";
+  while (*src) {
+    if (*src == '\t') break;
+    if (*src == '&') {
+      src++;
+      if (*src == '&') { buf.Append("&", 1); src++; }
+    } else {
+      buf.Append(src, 1);
+      src++;
+    }
+  }
+  return buf.Get();
+}
+
 // ============================================================================
 // TrackPopupMenu
 // ============================================================================
 
 #ifdef SWELL_TARGET_SDL3
+
+#include <SDL3/SDL.h>
+#include <core/SkCanvas.h>
+#include <core/SkPaint.h>
+#include <core/SkFont.h>
+#include <core/SkFontTypes.h>
+#include <core/SkFontMetrics.h>
+#include <core/SkFontMgr.h>
+#include <core/SkTypeface.h>
+#include <core/SkRRect.h>
+#include <ports/SkFontMgr_fontconfig.h>
+#include <ports/SkFontScanner_FreeType.h>
 
 // ---------------------------------------------------------------------------
 // Font helpers for menu rendering
@@ -619,31 +636,6 @@ static Uint32 SDLCALL menu_scroll_timer_cb(void *, SDL_TimerID, Uint32 interval)
     SDL_PushEvent(&evt);
   }
   return interval;
-}
-
-// ---------------------------------------------------------------------------
-// Strip Win32 & accelerator prefix for display, stopping at \t shortcut sep.
-// "&File\tCtrl+O" -> "File", "Save && Exit" -> "Save & Exit"
-// Returns label text before \t (or full string if no \t). Any text after \t
-// is the shortcut — use menu_get_shortcut() to retrieve it.
-// Not thread-safe; only call from main thread (as all menu code is).
-// ---------------------------------------------------------------------------
-static const char *menu_strip_accel(const char *src, WDL_FastString &buf)
-{
-  buf.Set("");
-  if (!src) return "";
-  while (*src) {
-    if (*src == '\t') break;
-    if (*src == '&') {
-      src++;
-      if (*src == '&') { buf.Append("&", 1); src++; }
-      // else: bare & — skip it, next char is accelerator (keep in output)
-    } else {
-      buf.Append(src, 1);
-      src++;
-    }
-  }
-  return buf.Get();
 }
 
 // Return the shortcut text after \t in a menu label, or nullptr if none.

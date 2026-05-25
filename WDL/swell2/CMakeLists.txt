@@ -9,8 +9,11 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SKIA REQUIRED IMPORTED_TARGET skia)
 
-# ---- find SDL3 (optional) ----
+# ---- find backends ----
+set(SWELL2_BACKEND "auto" CACHE STRING "OS backend: auto, wlr, sdl3, headless")
+set_property(CACHE SWELL2_BACKEND PROPERTY STRINGS auto wlr sdl3 headless)
 pkg_check_modules(SDL3 IMPORTED_TARGET sdl3)
+pkg_check_modules(WLROOTS IMPORTED_TARGET wlroots-0.20)
 
 # ---- swell2 sources ----
 set(SWELL2_SOURCES
@@ -29,7 +32,31 @@ set(SWELL2_SOURCES
 )
 
 # ---- backend selection ----
-if(SDL3_FOUND)
+if(SWELL2_BACKEND STREQUAL "wlr")
+  if(NOT WLROOTS_FOUND)
+    message(FATAL_ERROR "SWELL2_BACKEND=wlr requires pkg-config package wlroots-0.20")
+  endif()
+  message(STATUS "wlroots found — building wlroots OS backend")
+  list(APPEND SWELL2_SOURCES swell-backend-wlr.cpp)
+  set(SWELL2_BACKEND_DEFINE SWELL_TARGET_WLR WLR_USE_UNSTABLE)
+  set(SWELL2_BACKEND_LIBS PkgConfig::WLROOTS)
+elseif(SWELL2_BACKEND STREQUAL "sdl3")
+  if(NOT SDL3_FOUND)
+    message(FATAL_ERROR "SWELL2_BACKEND=sdl3 requires pkg-config package sdl3")
+  endif()
+  message(STATUS "SDL3 found — building SDL3 OS backend")
+  list(APPEND SWELL2_SOURCES swell-backend-sdl3.cpp)
+  set(SWELL2_BACKEND_DEFINE SWELL_TARGET_SDL3)
+  set(SWELL2_BACKEND_LIBS PkgConfig::SDL3)
+elseif(SWELL2_BACKEND STREQUAL "headless")
+  message(STATUS "building headless OS backend")
+  list(APPEND SWELL2_SOURCES swell-backend-headless.cpp)
+elseif(WLROOTS_FOUND)
+  message(STATUS "wlroots found — building wlroots OS backend")
+  list(APPEND SWELL2_SOURCES swell-backend-wlr.cpp)
+  set(SWELL2_BACKEND_DEFINE SWELL_TARGET_WLR WLR_USE_UNSTABLE)
+  set(SWELL2_BACKEND_LIBS PkgConfig::WLROOTS)
+elseif(SDL3_FOUND)
   message(STATUS "SDL3 found — building SDL3 OS backend")
   list(APPEND SWELL2_SOURCES swell-backend-sdl3.cpp)
   set(SWELL2_BACKEND_DEFINE SWELL_TARGET_SDL3)

@@ -1530,6 +1530,7 @@ void SWELL_Register_Cursor_Resource(const char *idx, const char *name,
   g_cursor_list = e;
 }
 
+#ifdef SWELL_TARGET_SDL3
 static SDL_SystemCursor idcname_to_sdl(const char *idx)
 {
   if (!idx) return SDL_SYSTEM_CURSOR_DEFAULT;
@@ -1556,6 +1557,7 @@ static SDL_SystemCursor idcname_to_sdl(const char *idx)
   }
   return SDL_SYSTEM_CURSOR_DEFAULT;
 }
+#endif
 
 HCURSOR SWELL_LoadCursor(const char *idx)
 {
