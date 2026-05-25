@@ -42,23 +42,6 @@
 #include <codec/SkGifDecoder.h>
 #include <codec/SkWebpDecoder.h>
 
-static bool swell_listview_log_enabled()
-{
-  static int s_enabled = -1;
-  if (s_enabled < 0) {
-    const char *v = getenv("SWELL2_LISTVIEW_LOG");
-    s_enabled = (v && *v && strcmp(v, "0")) ? 1 : 0;
-  }
-  return s_enabled != 0;
-}
-
-#define SWELL_LV_LOG(...) do { \
-  if (swell_listview_log_enabled()) { \
-    fprintf(stderr, "[swell2:listview] " __VA_ARGS__); \
-    fprintf(stderr, "\n"); \
-  } \
-} while (0)
-
 // ---------------------------------------------------------------------------
 // Global state
 // ---------------------------------------------------------------------------
@@ -742,19 +725,10 @@ HBITMAP CreateBitmap(int width, int height, int numplanes, int bitsperpixel,
 HICON CreateIconIndirect(const ICONINFO *iconinfo)
 {
   SGDI_PROF(CreateIconIndirect);
-  if (!iconinfo) {
-    SWELL_LV_LOG("CreateIconIndirect iconinfo=NULL -> NULL");
-    return nullptr;
-  }
-  SWELL_LV_LOG("CreateIconIndirect fIcon=%d color=%p mask=%p",
-               iconinfo->fIcon ? 1 : 0, (void *)iconinfo->hbmColor,
-               (void *)iconinfo->hbmMask);
+  if (!iconinfo) return nullptr;
 
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
-  if (!obj) {
-    SWELL_LV_LOG("CreateIconIndirect alloc object failed -> NULL");
-    return nullptr;
-  }
+  if (!obj) return nullptr;
   obj->type = TYPE_BITMAP;
 
   int w = 0, h = 0;
@@ -776,7 +750,6 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
   if (!bm->tryAllocN32Pixels(w, h)) {
     delete bm;
     GDP_OBJECT_DELETE(obj);
-    SWELL_LV_LOG("CreateIconIndirect bitmap alloc failed w=%d h=%d -> NULL", w, h);
     return nullptr;
   }
 
@@ -791,7 +764,6 @@ HICON CreateIconIndirect(const ICONINFO *iconinfo)
 
   obj->typedata = bm;
   obj->additional_refcnt = 0;
-  SWELL_LV_LOG("CreateIconIndirect -> icon=%p size=%dx%d", (void *)obj, w, h);
   return obj;
 }
 
@@ -799,17 +771,11 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
 {
   SGDI_PROF(LoadNamedImage);
   (void)alphaFromMask;
-  if (!name || !name[0]) {
-    SWELL_LV_LOG("LoadNamedImage name=%p empty -> NULL", (const void *)name);
-    return nullptr;
-  }
-  SWELL_LV_LOG("LoadNamedImage name='%s' alphaFromMask=%d", name, alphaFromMask ? 1 : 0);
+  if (!name || !name[0]) return nullptr;
 
   sk_sp<SkData> data;
-  std::string loaded_path;
   if (strchr(name, '/')) {
-    loaded_path = name;
-    data = SkData::MakeFromFileName(loaded_path.c_str());
+    data = SkData::MakeFromFileName(name);
   } else {
     char module_path[4096];
     if (GetModuleFileName(NULL, module_path, sizeof(module_path)) > 0) {
@@ -817,18 +783,15 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
       if (slash) *slash = 0;
       const char *exts[] = { ".png", ".ico", ".bmp" };
       for (int i = 0; i < 3 && (!data || data->size() == 0); i++) {
-        loaded_path = module_path;
-        loaded_path += "/Resources/";
-        loaded_path += name;
-        loaded_path += exts[i];
-        data = SkData::MakeFromFileName(loaded_path.c_str());
+        std::string path = module_path;
+        path += "/Resources/";
+        path += name;
+        path += exts[i];
+        data = SkData::MakeFromFileName(path.c_str());
       }
     }
   }
-  if (!data || data->size() == 0) {
-    SWELL_LV_LOG("LoadNamedImage name='%s' file read failed -> NULL", name);
-    return nullptr;
-  }
+  if (!data || data->size() == 0) return nullptr;
 
   // Try decoders in order of popularity for REAPER assets
   using DecodeFn = std::unique_ptr<SkCodec> (*)(sk_sp<const SkData>,
@@ -851,11 +814,7 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
       codec.reset();
     }
   }
-  if (!codec) {
-    SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' no decoder -> NULL",
-                 name, loaded_path.c_str());
-    return nullptr;
-  }
+  if (!codec) return nullptr;
 
   SkImageInfo info = codec->getInfo()
                           .makeColorType(kBGRA_8888_SkColorType)
@@ -863,30 +822,22 @@ HICON LoadNamedImage(const char *name, bool alphaFromMask)
   SkBitmap *bm = new SkBitmap();
   if (!bm->tryAllocPixels(info)) {
     delete bm;
-    SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' bitmap alloc failed -> NULL",
-                 name, loaded_path.c_str());
     return nullptr;
   }
 
   SkCodec::Result res = codec->getPixels(bm->info(), bm->getPixels(), bm->rowBytes());
   if (res != SkCodec::kSuccess && res != SkCodec::kIncompleteInput) {
     delete bm;
-    SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' decode failed res=%d -> NULL",
-                 name, loaded_path.c_str(), (int)res);
     return nullptr;
   }
 
   HGDIOBJ__ *obj = GDP_OBJECT_NEW();
   if (!obj) {
     delete bm;
-    SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' object alloc failed -> NULL",
-                 name, loaded_path.c_str());
     return nullptr;
   }
   obj->type     = TYPE_BITMAP;
   obj->typedata = bm;
-  SWELL_LV_LOG("LoadNamedImage name='%s' path='%s' -> icon=%p size=%dx%d",
-               name, loaded_path.c_str(), (void *)obj, bm->width(), bm->height());
   return (HICON)obj;
 }
 

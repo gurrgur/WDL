@@ -13,24 +13,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
-#include <cstdio>
-
-static bool swell_listview_log_enabled()
-{
-  static int s_enabled = -1;
-  if (s_enabled < 0) {
-    const char *v = getenv("SWELL2_LISTVIEW_LOG");
-    s_enabled = (v && *v && strcmp(v, "0")) ? 1 : 0;
-  }
-  return s_enabled != 0;
-}
-
-#define SWELL_LV_LOG(...) do { \
-  if (swell_listview_log_enabled()) { \
-    fprintf(stderr, "[swell2:listview] " __VA_ARGS__); \
-    fprintf(stderr, "\n"); \
-  } \
-} while (0)
 
 // ---------------------------------------------------------------------------
 // Missing Win32 message/style constants not in swell-types.h
@@ -1995,10 +1977,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         ? ((hwnd->m_style & (LBS_EXTENDEDSEL | LBS_MULTIPLESEL)) != 0)
         : ((hwnd->m_style & LVS_SINGLESEL) == 0);
       if (hwnd->m_style & LVS_OWNERDATA) st->m_owner_data_size = 0;
-      SWELL_LV_LOG("WM_CREATE hwnd=%p id=%d style=0x%08x listbox=%d multisel=%d ownerdata=%d",
-                   (void *)hwnd, hwnd->m_id, (unsigned int)hwnd->m_style,
-                   st->m_is_listbox ? 1 : 0, st->m_is_multisel ? 1 : 0,
-                   st->IsOwnerData() ? 1 : 0);
       hwnd->m_wantfocus = true;
       return 0;
     }
@@ -2017,11 +1995,7 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (st) {
         int mask = (int)wParam;
         if (!mask) mask = 0xFFFFFF;
-        int old_style = st->m_extended_style;
         st->m_extended_style = (st->m_extended_style & ~mask) | ((int)lParam & mask);
-        SWELL_LV_LOG("LVM_SETEXTENDEDLISTVIEWSTYLE hwnd=%p mask=0x%08x style=0x%08x old=0x%08x new=0x%08x",
-                     (void *)hwnd, (unsigned int)mask, (unsigned int)lParam,
-                     (unsigned int)old_style, (unsigned int)st->m_extended_style);
       }
       return 0;
 
@@ -2154,10 +2128,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (item->stateMask & LVIS_SELECTED)
           st->set_sel(pos, (item->state & LVIS_SELECTED) != 0);
       }
-      SWELL_LV_LOG("LVM_INSERTITEM hwnd=%p row=%d mask=0x%08x state=0x%08x stateMask=0x%08x iImage=%d stored_img0=%d sel=%d",
-                   (void *)hwnd, pos, (unsigned int)item->mask,
-                   (unsigned int)item->state, (unsigned int)item->stateMask,
-                   item->iImage, row->get_img_idx(0), st->get_sel(pos) ? 1 : 0);
       InvalidateRect(hwnd, NULL, FALSE);
       return pos;
     }
@@ -2168,10 +2138,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int row = item->iItem;
       int nitems = st->GetNumItems();
       if (row < 0 || row >= nitems) return FALSE;
-      SWELL_LV_LOG("LVM_SETITEM hwnd=%p row=%d sub=%d mask=0x%08x state=0x%08x stateMask=0x%08x iImage=%d owner=%d",
-                   (void *)hwnd, row, item->iSubItem, (unsigned int)item->mask,
-                   (unsigned int)item->state, (unsigned int)item->stateMask,
-                   item->iImage, st->IsOwnerData() ? 1 : 0);
       if (st->IsOwnerData()) {
         if (item->mask & LVIF_STATE) {
           if (item->stateMask & LVIS_SELECTED) st->set_sel(row, (item->state & LVIS_SELECTED) != 0);
@@ -2215,9 +2181,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         free(r->m_cols.Get()[col].txt);
         r->m_cols.Get()[col].txt = strdup(item->pszText);
       }
-      SWELL_LV_LOG("LVM_SETITEM result hwnd=%p row=%d img0=%d sel=%d focus=%d",
-                   (void *)hwnd, row, r->get_img_idx(0), st->get_sel(row) ? 1 : 0,
-                   st->m_selitem == row ? 1 : 0);
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
     }
@@ -2228,9 +2191,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       int row = item->iItem;
       int nitems = st->m_owner_data_size >= 0 ? st->m_owner_data_size : st->m_data.GetSize();
       if (row < 0 || row >= nitems) return FALSE;
-      SWELL_LV_LOG("LVM_GETITEM hwnd=%p row=%d sub=%d mask=0x%08x stateMask=0x%08x owner=%d",
-                   (void *)hwnd, row, item->iSubItem, (unsigned int)item->mask,
-                   (unsigned int)item->stateMask, st->IsOwnerData() ? 1 : 0);
       if (st->m_owner_data_size >= 0) {
         int mask = item->mask & (LVIF_PARAM | LVIF_TEXT | LVIF_IMAGE);
         if ((mask & LVIF_TEXT) && (!item->pszText || item->cchTextMax <= 0))
@@ -2272,9 +2232,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           int idx = r->get_img_idx(0);
           if (idx > 0) item->state |= INDEXTOSTATEIMAGEMASK(idx);
         }
-        SWELL_LV_LOG("LVM_GETITEM state result hwnd=%p row=%d state=0x%08x img0=%d has_state_list=%d",
-                     (void *)hwnd, row, (unsigned int)item->state, r->get_img_idx(0),
-                     st->hasStatusImage() ? 1 : 0);
       }
       if (item->mask & LVIF_IMAGE) {
         int col = item->iSubItem;
@@ -2369,10 +2326,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int idx = st->m_data.Get(row)->get_img_idx(0);
         if (idx > 0) state |= INDEXTOSTATEIMAGEMASK(idx);
       }
-      SWELL_LV_LOG("LVM_GETITEMSTATE hwnd=%p row=%d mask=0x%08x -> state=0x%08x has_state_list=%d img0=%d",
-                   (void *)hwnd, row, (unsigned int)mask, (unsigned int)state,
-                   st->hasStatusImage() ? 1 : 0,
-                   row < st->m_data.GetSize() ? st->m_data.Get(row)->get_img_idx(0) : -1);
       return state;
     }
 
@@ -2381,10 +2334,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       const LVITEM *item = (const LVITEM *)lParam;
       int row = (int)wParam;
       int nitems = st->GetNumItems();
-      SWELL_LV_LOG("LVM_SETITEMSTATE hwnd=%p row=%d n=%d state=0x%08x stateMask=0x%08x has_state_list=%d owner=%d",
-                   (void *)hwnd, row, nitems, (unsigned int)item->state,
-                   (unsigned int)item->stateMask, st->hasStatusImage() ? 1 : 0,
-                   st->IsOwnerData() ? 1 : 0);
       if (row == -1) {
         if (!st->m_is_multisel && (item->stateMask & LVIS_SELECTED) && (item->state & LVIS_SELECTED))
           return TRUE;
@@ -2405,11 +2354,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           st->m_selitem = row;
         if ((item->stateMask & LVIS_STATEIMAGEMASK) && row < st->m_data.GetSize())
           st->m_data.Get(row)->set_img_idx(0, STATEIMAGEMASKTOINDEX(item->state));
-      }
-      if (row >= 0 && row < st->m_data.GetSize()) {
-        SWELL_LV_LOG("LVM_SETITEMSTATE result hwnd=%p row=%d img0=%d sel=%d focus=%d",
-                     (void *)hwnd, row, st->m_data.Get(row)->get_img_idx(0),
-                     st->get_sel(row) ? 1 : 0, st->m_selitem == row ? 1 : 0);
       }
       InvalidateRect(hwnd, NULL, FALSE);
       return TRUE;
@@ -2503,10 +2447,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (st) {
         st->m_status_imagelist = (HIMAGELIST)lParam;
         st->m_status_imagelist_type = (int)wParam;
-        int entries = st->m_status_imagelist ? st->m_status_imagelist->m_entries.GetSize() : 0;
-        SWELL_LV_LOG("LVM_SETIMAGELIST hwnd=%p which=%d list=%p entries=%d has_state=%d has_any=%d",
-                     (void *)hwnd, (int)wParam, (void *)st->m_status_imagelist,
-                     entries, st->hasStatusImage() ? 1 : 0, st->hasAnyImage() ? 1 : 0);
       }
       return 0;
 
@@ -3185,7 +3125,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       const bool has_image = st->hasAnyImage();
       const bool has_status_image = st->hasStatusImage();
       const bool has_subitem_image = (st->m_extended_style & LVS_EX_SUBITEMIMAGES) != 0;
-      static int s_state_paint_log_count;
 
       for (int i = top_row; i < n; i++) {
         int ry = cr.top + hdr + i * rh - st->m_scroll_y;
@@ -3247,16 +3186,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             RECT tr = { cr.left+2, ry, cr.right-2, ry+rh };
             if (has_image) {
               tr.left += rh/4;
-              if (swell_listview_log_enabled() && s_state_paint_log_count < 400) {
-                HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
-                HIMAGELIST__::Entry *ent = himl && image_idx > 0 ? himl->m_entries.Get(image_idx - 1) : NULL;
-                SWELL_LV_LOG("PAINT owner row=%d no-cols type=%d state=0x%08x imgidx=%d entries=%d ent=%p image=%p rect=%d,%d,%d,%d",
-                             i, st->m_status_imagelist_type, (unsigned int)di.item.state,
-                             image_idx, himl ? himl->m_entries.GetSize() : 0,
-                             (void *)ent, ent ? (void *)ent->image : NULL,
-                             tr.left, tr.top, tr.right, tr.bottom);
-                s_state_paint_log_count++;
-              }
               if (image_idx > 0 && st->m_status_imagelist) {
                 HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
                 HIMAGELIST__::Entry *ent = himl->m_entries.Get(image_idx - 1);
@@ -3299,17 +3228,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
               RECT ar = { xpos, ry, cr.right, ry+rh };
               if ((!c || has_subitem_image) && has_image) {
                 ar.left += rh/4;
-                if (swell_listview_log_enabled() && s_state_paint_log_count < 400) {
-                  HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
-                  HIMAGELIST__::Entry *ent = himl && image_idx > 0 ? himl->m_entries.Get(image_idx - 1) : NULL;
-                  SWELL_LV_LOG("PAINT owner row=%d col=%d logcol=%d type=%d state=0x%08x imgidx=%d entries=%d ent=%p image=%p rect=%d,%d,%d,%d",
-                               i, c, st->m_cols.Get()[c].col_index, st->m_status_imagelist_type,
-                               (unsigned int)di.item.state, image_idx,
-                               himl ? himl->m_entries.GetSize() : 0,
-                               (void *)ent, ent ? (void *)ent->image : NULL,
-                               ar.left, ar.top, ar.right, ar.bottom);
-                  s_state_paint_log_count++;
-                }
                 if (image_idx > 0 && st->m_status_imagelist) {
                   HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
                   HIMAGELIST__::Entry *ent = himl->m_entries.Get(image_idx - 1);
@@ -3341,16 +3259,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             RECT tr = { cr.left+2, ry, cr.right-2, ry+rh };
             if (has_image) {
               tr.left += rh/4;
-              if (swell_listview_log_enabled() && s_state_paint_log_count < 400) {
-                HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
-                HIMAGELIST__::Entry *ent = himl && image_idx > 0 ? himl->m_entries.Get(image_idx - 1) : NULL;
-                SWELL_LV_LOG("PAINT row=%d no-cols type=%d imgidx=%d entries=%d ent=%p image=%p rect=%d,%d,%d,%d",
-                             i, st->m_status_imagelist_type, image_idx,
-                             himl ? himl->m_entries.GetSize() : 0,
-                             (void *)ent, ent ? (void *)ent->image : NULL,
-                             tr.left, tr.top, tr.right, tr.bottom);
-                s_state_paint_log_count++;
-              }
               if (image_idx > 0 && st->m_status_imagelist) {
                 HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
                 HIMAGELIST__::Entry *ent = himl->m_entries.Get(image_idx - 1);
@@ -3379,16 +3287,6 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
               RECT ar = { xpos, ry, cr.right, ry+rh };
               if ((!c || has_subitem_image) && has_image) {
                 ar.left += rh/4;
-                if (swell_listview_log_enabled() && s_state_paint_log_count < 400) {
-                  HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
-                  HIMAGELIST__::Entry *ent = himl && image_idx > 0 ? himl->m_entries.Get(image_idx - 1) : NULL;
-                  SWELL_LV_LOG("PAINT row=%d col=%d logcol=%d type=%d imgidx=%d entries=%d ent=%p image=%p rect=%d,%d,%d,%d",
-                               i, c, logcol, st->m_status_imagelist_type, image_idx,
-                               himl ? himl->m_entries.GetSize() : 0,
-                               (void *)ent, ent ? (void *)ent->image : NULL,
-                               ar.left, ar.top, ar.right, ar.bottom);
-                  s_state_paint_log_count++;
-                }
                 if (image_idx > 0 && st->m_status_imagelist) {
                   HIMAGELIST__ *himl = (HIMAGELIST__ *)st->m_status_imagelist;
                   HIMAGELIST__::Entry *ent = himl->m_entries.Get(image_idx - 1);
