@@ -2526,7 +2526,9 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (row >= 0 && row < n) {
         hti->iItem = row;
         hti->flags = LVHT_ONITEM;
-        if (st->m_status_imagelist && hti->pt.x + st->m_scroll_x < rh)
+        int state_x = hti->pt.x + st->m_scroll_x;
+        int state_left = rh / 4;
+        if (st->hasStatusImage() && state_x >= state_left && state_x < state_left + rh)
           hti->flags |= LVHT_ONITEMSTATEICON;
         return row;
       }
@@ -2855,7 +2857,8 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           xpos += xwid;
         }
 
-        bool state_image_click = st->m_status_imagelist && xpt < rh;
+        int state_left = rh / 4;
+        bool state_image_click = st->hasStatusImage() && xpt >= state_left && xpt < state_left + rh;
         bool fast_click = subitem_col >= 0 && subitem_col < 32 &&
                           (st->m_fastclick_mask & (1u << subitem_col));
         if (!st->m_is_listbox && (state_image_click || fast_click)) {
@@ -2896,17 +2899,18 @@ LRESULT listViewWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
           if (changed || msg == WM_LBUTTONDBLCLK)
             notify_parent(hwnd, msg == WM_LBUTTONDBLCLK ? LBN_DBLCLK : LBN_SELCHANGE);
         } else {
-          // send NM_CLICK or NM_DBLCLK
+          HWND par = GetParent(hwnd);
           NMLISTVIEW nm = {};
           nm.hdr.hwndFrom = hwnd;
           nm.hdr.idFrom = hwnd->m_id;
-          nm.hdr.code = (msg == WM_LBUTTONDBLCLK) ? NM_DBLCLK : NM_CLICK;
           nm.iItem = row;
-          nm.iSubItem = 0;
-          nm.ptAction.x = GET_X_LPARAM(lParam);
-          nm.ptAction.y = my;
-          HWND par = GetParent(hwnd);
-          if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
+          if (!st->hasStatusImage()) {
+            nm.hdr.code = (msg == WM_LBUTTONDBLCLK) ? NM_DBLCLK : NM_CLICK;
+            nm.iSubItem = 0;
+            nm.ptAction.x = GET_X_LPARAM(lParam);
+            nm.ptAction.y = my;
+            if (par) SendMessage(par, WM_NOTIFY, hwnd->m_id, (LPARAM)&nm);
+          }
 
           // LVN_ITEMCHANGED
           if (changed || oldsel != row) {
