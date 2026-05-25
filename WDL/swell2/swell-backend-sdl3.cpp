@@ -403,8 +403,7 @@ static void swell_sdl_render_worker(SDL_WindowEntry *e)
     e->cv_idle.notify_all();
     return;
   }
-  const char *novsync = getenv("SWELL_NO_VSYNC");
-  SDL_SetRenderVSync(e->renderer, (novsync && *novsync == '1') ? 0 : SDL_RENDERER_VSYNC_ADAPTIVE);
+  SDL_SetRenderVSync(e->renderer, 0);
 
   for (;;) {
     SDL_Rect rect;
