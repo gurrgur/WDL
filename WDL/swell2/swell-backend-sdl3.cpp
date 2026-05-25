@@ -394,6 +394,8 @@ static void swell_sdl_configure_renderer_for_pixels(SDL_Renderer *renderer)
   if (!renderer) return;
   SDL_SetRenderLogicalPresentation(renderer, 0, 0,
                                    SDL_LOGICAL_PRESENTATION_DISABLED);
+  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+  SDL_SetRenderViewport(renderer, NULL);
 }
 
 static void swell_sdl_configure_present_texture(SDL_Texture *texture)
@@ -401,6 +403,17 @@ static void swell_sdl_configure_present_texture(SDL_Texture *texture)
   if (!texture) return;
   SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE);
   SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+}
+
+static bool swell_sdl_get_render_output_size(SDL_Renderer *renderer, int *w, int *h)
+{
+  if (!renderer || !w || !h) return false;
+  int ow = 0, oh = 0;
+  if (!SDL_GetRenderOutputSize(renderer, &ow, &oh)) return false;
+  if (ow < 1 || oh < 1) return false;
+  *w = ow;
+  *h = oh;
+  return true;
 }
 
 static void swell_sdl_render_worker(SDL_WindowEntry *e)
@@ -451,7 +464,9 @@ static void swell_sdl_render_worker(SDL_WindowEntry *e)
 
     if (e->texture) {
       SDL_UpdateTexture(e->texture, &rect, e->staging.data(), rowbytes);
-      SDL_FRect full = {0, 0, (float)pw, (float)ph};
+      int ow = pw, oh = ph;
+      swell_sdl_get_render_output_size(e->renderer, &ow, &oh);
+      SDL_FRect full = {0, 0, (float)ow, (float)oh};
       SDL_RenderTexture(e->renderer, e->texture, &full, &full);
       SDL_RenderPresent(e->renderer);
     }
@@ -611,7 +626,8 @@ void swell_oswindow_manage(HWND hwnd, bool wantFocus)
 
   // create backing Skia surface (pixel dimensions for HiDPI)
   int surf_w = 0, surf_h = 0;
-  SDL_GetWindowSizeInPixels(sdlwin, &surf_w, &surf_h);
+  if (!swell_sdl_get_render_output_size(rend, &surf_w, &surf_h))
+    SDL_GetWindowSizeInPixels(sdlwin, &surf_w, &surf_h);
   if (surf_w < 1) surf_w = pw;
   if (surf_h < 1) surf_h = ph;
   hwnd->m_backingstore = SkSurfaces::Raster(
@@ -684,7 +700,8 @@ void swell_oswindow_resize(HWND hwnd, int reposflag, RECT *r)
 
     // resize backing store to match new pixel dimensions, preserve old content
     int surf_w = 0, surf_h = 0;
-    SDL_GetWindowSizeInPixels(e->window, &surf_w, &surf_h);
+    if (!swell_sdl_get_render_output_size(e->renderer, &surf_w, &surf_h))
+      SDL_GetWindowSizeInPixels(e->window, &surf_w, &surf_h);
     if (surf_w > 0 && surf_h > 0) {
       sk_sp<SkImage> oldImage;
       if (hwnd->m_backingstore)
@@ -916,7 +933,9 @@ void swell_oswindow_updatetoscreen(HWND hwnd, const RECT *r)
   // the texture retains old content elsewhere. No clear needed:
   // full-texture overwrite covers entire render target, and
   // clearing with opaque black destroys window transparency.
-  SDL_FRect full = { 0, 0, (float)pw, (float)ph };
+  int ow = pw, oh = ph;
+  swell_sdl_get_render_output_size(e->renderer, &ow, &oh);
+  SDL_FRect full = { 0, 0, (float)ow, (float)oh };
   SDL_RenderTexture(e->renderer, e->texture, &full, &full);
   SDL_RenderPresent(e->renderer);
 
@@ -1251,7 +1270,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
 
           // resize backing store, preserve old content
           int pw = 0, ph = 0;
-          SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
+          if (!swell_sdl_get_render_output_size(e->renderer, &pw, &ph))
+            SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
           if (pw > 0 && ph > 0) {
             sk_sp<SkImage> oldImage;
             if (e->hwnd->m_backingstore)
@@ -1302,7 +1322,8 @@ static void swell_sdlEventHandler(SDL_Event *evt)
         // Resize backing store to physical pixel dimensions (SDL may not fire
         // SDL_EVENT_WINDOW_RESIZED for maximize/restore on all compositors).
         int pw = 0, ph = 0;
-        SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
+        if (!swell_sdl_get_render_output_size(e->renderer, &pw, &ph))
+          SDL_GetWindowSizeInPixels(e->window, &pw, &ph);
         if (pw > 0 && ph > 0) {
           sk_sp<SkImage> oldImage;
           if (e->hwnd->m_backingstore)

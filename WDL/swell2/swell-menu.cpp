@@ -981,6 +981,26 @@ static void menu_draw(MenuWindow *mw)
   c->restore();
 }
 
+static void menu_configure_renderer_for_pixels(SDL_Renderer *renderer)
+{
+  if (!renderer) return;
+  SDL_SetRenderLogicalPresentation(renderer, 0, 0,
+                                   SDL_LOGICAL_PRESENTATION_DISABLED);
+  SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+  SDL_SetRenderViewport(renderer, NULL);
+}
+
+static bool menu_get_render_output_size(SDL_Renderer *renderer, int *w, int *h)
+{
+  if (!renderer || !w || !h) return false;
+  int ow = 0, oh = 0;
+  if (!SDL_GetRenderOutputSize(renderer, &ow, &oh)) return false;
+  if (ow < 1 || oh < 1) return false;
+  *w = ow;
+  *h = oh;
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Flush Skia surface to SDL texture/renderer
 // ---------------------------------------------------------------------------
@@ -999,6 +1019,7 @@ static void menu_present(MenuWindow *mw)
         SDL_PIXELFORMAT_BGRA32, SDL_TEXTUREACCESS_STREAMING, pw, ph);
     if (!mw->texture) return;
     SDL_SetTextureBlendMode(mw->texture, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
+    SDL_SetTextureScaleMode(mw->texture, SDL_SCALEMODE_NEAREST);
   }
 
   SDL_SetRenderDrawColor(mw->renderer, 0, 0, 0, 0);
@@ -1006,7 +1027,9 @@ static void menu_present(MenuWindow *mw)
 
   SDL_Rect r = { 0, 0, pw, ph };
   SDL_UpdateTexture(mw->texture, &r, pm.addr(), (int)pm.rowBytes());
-  SDL_FRect fr = { 0, 0, (float)pw, (float)ph };
+  int ow = pw, oh = ph;
+  menu_get_render_output_size(mw->renderer, &ow, &oh);
+  SDL_FRect fr = { 0, 0, (float)ow, (float)oh };
   SDL_RenderTexture(mw->renderer, mw->texture, &fr, &fr);
   SDL_RenderPresent(mw->renderer);
 }
@@ -1369,9 +1392,11 @@ static MenuWindow *menu_create_window(HMENU hMenu, int sx, int sy,
     delete mw;
     return NULL;
   }
+  menu_configure_renderer_for_pixels(mw->renderer);
 
   int pix_w = mw->w, pix_h = mw->h;
-  SDL_GetWindowSizeInPixels(mw->sdlwin, &pix_w, &pix_h);
+  if (!menu_get_render_output_size(mw->renderer, &pix_w, &pix_h))
+    SDL_GetWindowSizeInPixels(mw->sdlwin, &pix_w, &pix_h);
   if (pix_w < 1) pix_w = mw->w;
   if (pix_h < 1) pix_h = mw->h;
   mw->w = pix_w;
